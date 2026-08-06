@@ -29,7 +29,10 @@ export function resolveCwd(projectId: string, input: { cwdPathId?: string; cwd?:
 }
 
 /** Shared by the terminal routes and the "Work with Claude" entry points. */
-export function createTerminal(projectId: string, input: TerminalInput & { useWorktree?: boolean }) {
+export function createTerminal(
+  projectId: string,
+  input: TerminalInput & { useWorktree?: boolean; command?: string },
+) {
   const kind: TerminalKind = input.kind ?? "shell";
   const id = newId();
   const base = resolveCwd(projectId, input);
@@ -40,7 +43,8 @@ export function createTerminal(projectId: string, input: TerminalInput & { useWo
     id,
     cwd,
     env,
-    command: kind === "claude" ? claudeCommand(false) : undefined,
+    // App agents pass their start command; a claude tab runs the CLI; else plain shell.
+    command: input.command ?? (kind === "claude" ? claudeCommand(false) : undefined),
   });
 
   const count = db
@@ -58,6 +62,7 @@ export function createTerminal(projectId: string, input: TerminalInput & { useWo
     envSetId: input.envSetId ?? null,
     pid,
     kind,
+    command: input.command ?? null,
     status: "running" as const,
     createdAt: nowIso(),
     closedAt: null,

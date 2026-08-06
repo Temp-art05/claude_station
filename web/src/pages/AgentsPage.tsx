@@ -1,9 +1,15 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Upload } from "lucide-react";
+import { FolderUp, Plus, Upload } from "lucide-react";
 import { AGENT_PRESETS, type Agent, type AgentInput } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  directoryInputProps,
+  filesFromDirectoryInput,
+  uploadFiles,
+  type PickedFile,
+} from "@/lib/folder-upload";
 import { uploadFile } from "@/lib/upload";
 import { AgentEditor } from "@/features/agents/AgentEditor";
 import { AgentList } from "@/features/agents/AgentList";
@@ -14,10 +20,17 @@ export function AgentsPage() {
   const { data: agents = [] } = useAgents();
   const [creating, setCreating] = useState<AgentInput | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const dirRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const importAgent = useMutation({
     mutationFn: (file: File) => uploadFile<Agent>("/api/agents/import", file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
+    onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+  });
+
+  const importAgentFolder = useMutation({
+    mutationFn: (files: PickedFile[]) => uploadFiles<Agent>("/api/agents/import-folder", files),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
     onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
   });
@@ -36,6 +49,14 @@ export function AgentsPage() {
           <Button variant="ghost" onClick={() => fileRef.current?.click()}>
             <Upload size={14} /> Import .md
           </Button>
+          <Button
+            variant="ghost"
+            onClick={() => dirRef.current?.click()}
+            disabled={importAgentFolder.isPending}
+            title="A folder with one agent .md plus companion files the agent can read"
+          >
+            <FolderUp size={14} /> {importAgentFolder.isPending ? "Importing…" : "Import folder"}
+          </Button>
           <Button variant="primary" onClick={() => setCreating({} as AgentInput)}>
             <Plus size={15} /> New agent
           </Button>
@@ -50,6 +71,20 @@ export function AgentsPage() {
             if (file) {
               setError(null);
               importAgent.mutate(file);
+            }
+            e.target.value = "";
+          }}
+        />
+        <input
+          ref={dirRef}
+          type="file"
+          className="hidden"
+          {...directoryInputProps}
+          onChange={(e) => {
+            if (e.target.files?.length) {
+              setError(null);
+              const files = filesFromDirectoryInput(e.target.files);
+              if (files.length) importAgentFolder.mutate(files);
             }
             e.target.value = "";
           }}

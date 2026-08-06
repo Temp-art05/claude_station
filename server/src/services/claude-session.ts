@@ -7,9 +7,10 @@ import { db, schema } from "../db";
 import { stationMcpServer } from "../mcp/server";
 import { setting } from "../lib/config";
 import { ATTACHMENTS_DIR, projectKnowledgeDir } from "../lib/data-dir";
+import { childBaseEnv } from "../lib/child-env";
 import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
-import { agentDefinition, agentsForProject } from "./agents";
+import { agentBundleDirs, agentDefinition, agentsForProject } from "./agents";
 import { envVarsFor } from "./env-sets";
 import { attachedAssetDirs } from "./library";
 import { notify } from "./notify";
@@ -163,8 +164,7 @@ function buildOptions(session: ReturnType<typeof loadSession>): Options {
     join(ATTACHMENTS_DIR, session.id),
   ];
 
-  const baseEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) baseEnv[k] = v;
+  const baseEnv = childBaseEnv();
 
   const abort = new AbortController();
   state(session.id).abort = abort;
@@ -180,6 +180,9 @@ function buildOptions(session: ReturnType<typeof loadSession>): Options {
     const definition = agentDefinition(mainAgent);
     if (definition) agents[mainAgent] = definition;
   }
+
+  // Folder-imported agents carry companion files the session must be able to Read.
+  extraDirs.push(...agentBundleDirs(Object.keys(agents)));
 
   return {
     cwd,

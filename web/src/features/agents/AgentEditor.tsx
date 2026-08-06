@@ -26,6 +26,8 @@ function blank(): AgentInput {
     maxTurns: null,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   };
 }
@@ -42,6 +44,8 @@ function toInput(agent: Agent): AgentInput {
     maxTurns: agent.maxTurns,
     background: agent.background,
     viewPath: agent.viewPath,
+    viewUrl: agent.viewUrl,
+    startCommand: agent.startCommand,
     enabledGlobally: agent.enabledGlobally,
   };
 }
@@ -224,6 +228,33 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
             Point this at your own .html and the agent's tab renders it instead of the chat view.
             Leave empty for the default.
           </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>App UI URL (optional)</Label>
+            <Input
+              className="font-mono text-xs"
+              value={draft.viewUrl ?? ""}
+              onChange={(e) => patch({ viewUrl: e.target.value || null })}
+              placeholder="http://127.0.0.1:4747/?token=…"
+            />
+            <p className="mt-1 text-[10.5px] text-ink-faint">
+              For app agents: the running app's own web UI, embedded in the workspace tab.
+            </p>
+          </div>
+          <div>
+            <Label>Start command (optional)</Label>
+            <Input
+              className="font-mono text-xs"
+              value={draft.startCommand ?? ""}
+              onChange={(e) => patch({ startCommand: e.target.value || null })}
+              placeholder="./start.sh"
+            />
+            <p className="mt-1 text-[10.5px] text-ink-faint">
+              Runs in a Station terminal at the agent's bundle folder when you press Start.
+            </p>
+          </div>
         </div>
 
         <label className="flex cursor-pointer items-start gap-2 rounded-md border border-hairline bg-white/4 px-3 py-2 text-sm">

@@ -1,9 +1,13 @@
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, isAbsolute } from "node:path";
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { and, asc, eq } from "drizzle-orm";
 import matter from "gray-matter";
 import type { Agent, AgentInput } from "@claude-station/shared";
 import { db, schema } from "../db";
+import { AGENTS_DIR } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
+import type { UploadedFile } from "../lib/multipart";
 import { badRequest } from "../lib/path-safety";
 
 type Row = typeof schema.agents.$inferSelect;
@@ -31,6 +35,9 @@ function toAgent(row: Row): Agent {
     maxTurns: row.maxTurns,
     background: row.background,
     viewPath: row.viewPath,
+    viewUrl: row.viewUrl,
+    startCommand: row.startCommand,
+    bundleDir: row.bundleDir,
     enabledGlobally: row.enabledGlobally,
     source: row.source === "imported" ? "imported" : "manual",
     createdAt: row.createdAt,
@@ -63,7 +70,11 @@ export function getAgent(id: string): Agent | null {
   return row ? toAgent(row) : null;
 }
 
-export function createAgent(input: AgentInput, source: "manual" | "imported" = "manual"): Agent {
+export function createAgent(
+  input: AgentInput,
+  source: "manual" | "imported" = "manual",
+  bundleDir: string | null = null,
+): Agent {
   const clash = db.select().from(schema.agents).where(eq(schema.agents.name, input.name)).get();
   if (clash) throw badRequest(`An agent named "${input.name}" already exists`);
 
@@ -82,6 +93,9 @@ export function createAgent(input: AgentInput, source: "manual" | "imported" = "
       maxTurns: input.maxTurns,
       background: input.background,
       viewPath: input.viewPath,
+      viewUrl: input.viewUrl,
+      startCommand: input.startCommand,
+      bundleDir,
       enabledGlobally: input.enabledGlobally,
       source,
       createdAt: now,
@@ -120,6 +134,9 @@ export function updateAgent(id: string, patch: Partial<AgentInput>): Agent {
       maxTurns: patch.maxTurns === undefined ? existing.maxTurns : patch.maxTurns,
       background: patch.background ?? existing.background,
       viewPath: patch.viewPath === undefined ? existing.viewPath : patch.viewPath,
+      viewUrl: patch.viewUrl === undefined ? existing.viewUrl : patch.viewUrl,
+      startCommand:
+        patch.startCommand === undefined ? existing.startCommand : patch.startCommand,
       enabledGlobally: patch.enabledGlobally ?? existing.enabledGlobally,
       updatedAt: nowIso(),
     })
@@ -129,7 +146,17 @@ export function updateAgent(id: string, patch: Partial<AgentInput>): Agent {
 }
 
 export function deleteAgent(id: string): void {
+  const row = db.select().from(schema.agents).where(eq(schema.agents.id, id)).get();
+  // Companion files belong to the agent — but only remove what lives in our store.
+  if (row?.bundleDir && isInsideAgentsDir(row.bundleDir)) {
+    rmSync(row.bundleDir, { recursive: true, force: true });
+  }
   db.delete(schema.agents).where(eq(schema.agents.id, id)).run();
+}
+
+function isInsideAgentsDir(path: string): boolean {
+  const rel = relative(AGENTS_DIR, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 export function setProjectAgent(projectId: string, agentId: string, enabled: boolean): void {
@@ -189,8 +216,8 @@ export function agentsForProject(projectId: string): Record<string, AgentDefinit
   return out;
 }
 
-/** Import a Claude Code style agent file: frontmatter + prompt body. */
-export function importAgentMarkdown(filename: string, contents: string): Agent {
+/** Parse a Claude Code style agent file (frontmatter + prompt body) — pure. */
+export function parseAgentMarkdown(filename: string, contents: string): AgentInput {
   const parsed = matter(contents);
   const data = parsed.data as Record<string, unknown>;
 
@@ -215,25 +242,110 @@ export function importAgentMarkdown(filename: string, contents: string): Agent {
 
   if (!parsed.content.trim()) throw badRequest("The file has no prompt body below the frontmatter");
 
-  return createAgent(
-    {
-      name,
-      description:
-        typeof data.description === "string" && data.description.trim()
-          ? data.description.trim()
-          : `Imported from ${filename}`,
-      prompt: parsed.content.trim(),
-      tools: asList(data.tools),
-      disallowedTools: asList(data.disallowedTools ?? data["disallowed-tools"]),
-      skills: asList(data.skills),
-      model: typeof data.model === "string" ? data.model : null,
-      maxTurns: typeof data.maxTurns === "number" ? data.maxTurns : null,
-      background: data.background === true,
-      viewPath: typeof data.viewPath === "string" ? data.viewPath : null,
-      enabledGlobally: false,
-    },
-    "imported",
-  );
+  return {
+    name,
+    description:
+      typeof data.description === "string" && data.description.trim()
+        ? data.description.trim()
+        : `Imported from ${filename}`,
+    prompt: parsed.content.trim(),
+    tools: asList(data.tools),
+    disallowedTools: asList(data.disallowedTools ?? data["disallowed-tools"]),
+    skills: asList(data.skills),
+    model: typeof data.model === "string" ? data.model : null,
+    maxTurns: typeof data.maxTurns === "number" ? data.maxTurns : null,
+    background: data.background === true,
+    viewPath: typeof data.viewPath === "string" ? data.viewPath : null,
+    viewUrl: typeof data.viewUrl === "string" && data.viewUrl.trim() ? data.viewUrl.trim() : null,
+    startCommand:
+      typeof data.startCommand === "string" && data.startCommand.trim()
+        ? data.startCommand.trim()
+        : null,
+    enabledGlobally: false,
+  };
+}
+
+/** Imports never fail on a name clash — they get a -2/-3 suffix instead. */
+export function uniqueAgentName(base: string): string {
+  const taken = new Set(db.select().from(schema.agents).all().map((r) => r.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/** Import a Claude Code style agent file: frontmatter + prompt body. */
+export function importAgentMarkdown(filename: string, contents: string): Agent {
+  const input = parseAgentMarkdown(filename, contents);
+  return createAgent({ ...input, name: uniqueAgentName(input.name) }, "imported");
+}
+
+/**
+ * A packaged agent: one definition .md at the folder root plus companion files
+ * (templates, references, scripts). The companions land in data/agents/<name>
+ * and the agent's sessions get Read access to that directory.
+ */
+export function importAgentFolder(rootName: string, files: UploadedFile[]): Agent {
+  const isDefinition = (f: UploadedFile): boolean => {
+    if (f.relPath.includes("/") || !/\.md$/i.test(f.relPath)) return false;
+    try {
+      const parsed = matter(f.data.toString("utf8"));
+      const data = parsed.data as Record<string, unknown>;
+      return (
+        parsed.content.trim().length > 0 &&
+        (typeof data.name === "string" || typeof data.description === "string")
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  const candidates = files.filter(isDefinition);
+  const preferred =
+    candidates.find((f) => f.relPath.toLowerCase() === "agent.md") ??
+    candidates.find((f) => f.relPath.toLowerCase() === `${rootName.toLowerCase()}.md`) ??
+    (candidates.length === 1 ? candidates[0] : undefined);
+  if (!preferred) {
+    throw badRequest(
+      candidates.length === 0
+        ? "No agent definition found — the folder root needs a .md with frontmatter (name/description) and a prompt body"
+        : "Multiple agent definition .md files at the folder root — keep exactly one, or name the right one agent.md",
+    );
+  }
+
+  const input = parseAgentMarkdown(preferred.relPath, preferred.data.toString("utf8"));
+  const name = uniqueAgentName(input.name);
+  const companions = files.filter((f) => f !== preferred);
+
+  let bundleDir: string | null = null;
+  let prompt = input.prompt;
+  if (companions.length > 0) {
+    bundleDir = join(AGENTS_DIR, name);
+    rmSync(bundleDir, { recursive: true, force: true }); // name is unique; dir is ours
+    for (const file of companions) {
+      const target = join(bundleDir, file.relPath);
+      mkdirSync(dirname(target), { recursive: true });
+      // Multipart drops file modes — scripts must stay runnable (start.sh & co).
+      writeFileSync(target, file.data, { mode: /\.(sh|command)$/i.test(file.relPath) ? 0o755 : 0o644 });
+    }
+    // Read access alone isn't enough — the agent has to know where to look.
+    prompt += `\n\n## Companion files\nThis agent's companion files are at: ${bundleDir}`;
+  }
+
+  return createAgent({ ...input, name, prompt }, "imported", bundleDir);
+}
+
+/** Bundle directories for the agents present in a session's options.agents. */
+export function agentBundleDirs(names: string[]): string[] {
+  if (names.length === 0) return [];
+  const wanted = new Set(names);
+  return db
+    .select()
+    .from(schema.agents)
+    .all()
+    .filter((r) => wanted.has(r.name) && r.bundleDir && existsSync(r.bundleDir))
+    .map((r) => r.bundleDir!);
 }
 
 /** Round-trips back to the same format, so agents stay portable. */
@@ -245,5 +357,7 @@ export function exportAgentMarkdown(agent: Agent): string {
   if (agent.model) front.push(`model: ${agent.model}`);
   if (agent.maxTurns) front.push(`maxTurns: ${agent.maxTurns}`);
   if (agent.background) front.push("background: true");
+  if (agent.viewUrl) front.push(`viewUrl: ${agent.viewUrl}`);
+  if (agent.startCommand) front.push(`startCommand: ${JSON.stringify(agent.startCommand)}`);
   return `---\n${front.join("\n")}\n---\n\n${agent.prompt}\n`;
 }

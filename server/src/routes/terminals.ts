@@ -1,38 +1,30 @@
 import type { FastifyInstance } from "fastify";
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { terminalInputSchema } from "@claude-station/shared";
+import { terminalInputSchema, terminalKindSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
-import { assertPathAllowed, badRequest } from "../lib/path-safety";
+import { assertPathAllowed } from "../lib/path-safety";
 import { envVarsFor } from "../services/env-sets";
 import * as pty from "../services/pty-manager";
+import { claudeCommand, createTerminal } from "../services/terminals";
 
 const idParam = z.object({ id: z.string() });
-
-function resolveCwd(projectId: string, input: { cwdPathId?: string; cwd?: string }): string {
-  if (input.cwd) return assertPathAllowed(input.cwd, projectId);
-  const paths = db
-    .select()
-    .from(schema.projectPaths)
-    .where(eq(schema.projectPaths.projectId, projectId))
-    .orderBy(asc(schema.projectPaths.sortOrder))
-    .all();
-  if (paths.length === 0) throw badRequest("Project has no paths configured");
-  const chosen = input.cwdPathId
-    ? paths.find((p) => p.id === input.cwdPathId)
-    : (paths.find((p) => p.isDefault) ?? paths[0]);
-  if (!chosen) throw badRequest("cwdPathId not found in this project");
-  return chosen.path;
-}
 
 export function terminalRoutes(app: FastifyInstance): void {
   app.get<{ Params: { id: string } }>("/api/projects/:id/terminals", async (req) => {
     const { id } = idParam.parse(req.params);
+    const { kind } = z
+      .object({ kind: terminalKindSchema.optional() })
+      .parse(req.query ?? {});
     const rows = db
       .select()
       .from(schema.terminals)
-      .where(eq(schema.terminals.projectId, id))
+      .where(
+        kind
+          ? and(eq(schema.terminals.projectId, id), eq(schema.terminals.kind, kind))
+          : eq(schema.terminals.projectId, id),
+      )
       .orderBy(asc(schema.terminals.createdAt))
       .all();
     // Reconcile with reality: a row marked running whose PTY is gone is orphaned.
@@ -51,39 +43,7 @@ export function terminalRoutes(app: FastifyInstance): void {
       .get();
     if (!project) return reply.code(404).send({ error: "Project not found" });
 
-    const cwd = resolveCwd(projectId, input);
-    const id = newId();
-    const env = input.envSetId ? envVarsFor(input.envSetId) : {};
-    const { pid } = pty.start({ id, cwd, env });
-
-    const count = db
-      .select()
-      .from(schema.terminals)
-      .where(eq(schema.terminals.projectId, projectId))
-      .all().length;
-
-    const row = {
-      id,
-      projectId,
-      title: input.title ?? `Terminal ${count + 1}`,
-      cwd,
-      envSetId: input.envSetId ?? null,
-      pid,
-      status: "running" as const,
-      createdAt: nowIso(),
-      closedAt: null,
-    };
-    db.insert(schema.terminals).values(row).run();
-    db.insert(schema.workHistory)
-      .values({
-        id: newId(),
-        projectId,
-        kind: "terminal_opened",
-        refId: id,
-        summary: `Opened ${row.title} in ${cwd}`,
-        createdAt: row.createdAt,
-      })
-      .run();
+    const row = createTerminal(projectId, input);
     reply.code(201);
     return row;
   });
@@ -128,7 +88,14 @@ export function terminalRoutes(app: FastifyInstance): void {
     if (pty.isRunning(id)) return existing;
     const env = existing.envSetId ? envVarsFor(existing.envSetId) : {};
     const cwd = assertPathAllowed(existing.cwd, existing.projectId);
-    const { pid } = pty.start({ id, cwd, env });
+    const { pid } = pty.start({
+      id,
+      cwd,
+      env,
+      // App-agent terminals re-run their start command; claude tabs resume the CLI.
+      command:
+        existing.command ?? (existing.kind === "claude" ? claudeCommand(true) : undefined),
+    });
     db.update(schema.terminals)
       .set({ status: "running", pid, closedAt: null })
       .where(eq(schema.terminals.id, id))
