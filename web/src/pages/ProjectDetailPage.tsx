@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Pencil } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronRight, ExternalLink, Pencil } from "lucide-react";
 import type { ChatSession, EnvSet } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
@@ -11,7 +11,6 @@ import { useProject } from "@/features/projects/hooks";
 import { ProjectFormDialog } from "@/features/projects/ProjectFormDialog";
 import { TerminalsTab } from "@/features/terminals/TerminalsTab";
 import { CommandsTab } from "@/features/commands/CommandsTab";
-import { ChatTab } from "@/features/chat/ChatTab";
 import { DiffTab } from "@/features/git/DiffTab";
 import { HistoryTab } from "@/features/history/HistoryTab";
 import { KnowledgePanel } from "@/features/knowledge/KnowledgePanel";
@@ -21,8 +20,9 @@ import { AgentWorkspace } from "@/features/agents/AgentWorkspace";
 import { MemoryTab } from "@/features/memory/MemoryTab";
 import { WorkflowsTab } from "@/features/workflows/WorkflowsTab";
 
+// "chat" keeps its value so old ?tab=chat deep links still land on the Claude tab.
 const TABS = [
-  { value: "chat", label: "Chat" },
+  { value: "chat", label: "Claude" },
   { value: "terminals", label: "Terminals" },
   { value: "commands", label: "Commands" },
   { value: "diff", label: "Diff" },
@@ -48,9 +48,21 @@ export function ProjectDetailPage() {
     queryFn: () => api.get<ChatSession[]>(`/api/projects/${id}/sessions`),
     enabled: !!id,
   });
+  // GitHub web URL per repo path (from each repo's git remote) — shortcut links.
+  const { data: githubLinks = [] } = useQuery({
+    queryKey: ["project-github", id],
+    queryFn: () =>
+      api.get<{ pathId: string; label: string; url: string | null }[]>(
+        `/api/projects/${id}/github`,
+      ),
+    enabled: !!id,
+    staleTime: 5 * 60 * 1000,
+  });
   const [params] = useSearchParams();
   const [picked, setTab] = useState<Tab | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [descOpen, setDescOpen] = useState(false);
+  const qc = useQueryClient();
 
   // "Work with Claude" deep-links via ?tab=chat; an explicit click wins after that.
   // Every open agent workspace is an extra tab; the route carries which one.
@@ -58,8 +70,16 @@ export function ProjectDetailPage() {
   const workspaceTabs = workspaces.map((s) => ({
     value: `agent:${s.id}`,
     label: s.agentName ?? s.title,
+    closable: true,
   }));
   const allTabs = [...TABS, ...workspaceTabs];
+
+  // Closing a workspace tab archives its session — history stays, tab goes.
+  const closeWorkspace = useMutation({
+    mutationFn: (sessionId: string) =>
+      api.patch(`/api/sessions/${sessionId}`, { archived: true }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["sessions", id] }),
+  });
 
   const requested = params.get("tab");
   const fromUrl = allTabs.find((t) => t.value === requested)?.value;
@@ -85,25 +105,63 @@ export function ProjectDetailPage() {
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">{project.name}</h1>
             {project.description && (
-              <p className="mt-0.5 text-sm text-ink-muted">{project.description}</p>
+              // The description is context for Claude, not for the human every
+              // visit — one clamped line, click to unfold when actually needed.
+              <p
+                onClick={() => setDescOpen((v) => !v)}
+                title={descOpen ? "Click to collapse" : "Click to expand"}
+                className={
+                  descOpen
+                    ? "mt-0.5 cursor-pointer text-sm text-ink-muted"
+                    : "mt-0.5 line-clamp-1 max-w-3xl cursor-pointer text-xs text-ink-faint"
+                }
+              >
+                {project.description}
+              </p>
             )}
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {project.paths.map((p) => (
-                <Badge key={p.id} tone={p.isDefault ? "accent" : "default"} title={p.path}>
-                  {p.label}
-                </Badge>
-              ))}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {project.paths.map((p) => {
+                const gh = githubLinks.find((g) => g.pathId === p.id)?.url;
+                return (
+                  <span key={p.id} className="flex items-center gap-1">
+                    <Badge tone={p.isDefault ? "accent" : "default"} title={p.path}>
+                      {p.label}
+                    </Badge>
+                    {gh && (
+                      <a
+                        href={gh}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`Open ${p.label} on GitHub`}
+                        className="text-ink-faint hover:text-ink"
+                      >
+                        <ExternalLink size={11} />
+                      </a>
+                    )}
+                  </span>
+                );
+              })}
             </div>
           </div>
           <Button size="sm" variant="ghost" onClick={() => setEditOpen(true)}>
             <Pencil size={13} /> Edit
           </Button>
         </div>
-        <Tabs tabs={allTabs} value={tab} onChange={setTab} className="border-b-0" />
+        <Tabs
+          tabs={allTabs}
+          value={tab}
+          onChange={setTab}
+          onClose={(value) => {
+            const sessionId = value.slice("agent:".length);
+            closeWorkspace.mutate(sessionId);
+            if (tab === value) setTab("agents");
+          }}
+          className="border-b-0"
+        />
       </div>
 
       <div className="min-h-0 flex-1">
-        {tab === "chat" && <ChatTab project={project} envSets={envSets} />}
+        {tab === "chat" && <TerminalsTab kind="claude" project={project} envSets={envSets} />}
         {tab === "terminals" && <TerminalsTab project={project} envSets={envSets} />}
         {tab === "commands" && <CommandsTab project={project} envSets={envSets} />}
         {tab === "diff" && <DiffTab project={project} />}

@@ -31,6 +31,13 @@ export function AgentsTab({ projectId }: { projectId: string }) {
     },
   });
 
+  /** One tab per agent: an already-open workspace is focused, not duplicated. */
+  const openWorkspace = (agentName: string) => {
+    const existing = workspaces.find((w) => w.agentName === agentName);
+    if (existing) navigate(`/projects/${projectId}?tab=agent:${existing.id}`);
+    else start.mutate(agentName);
+  };
+
   if (isLoading) return <p className="p-6 text-sm text-ink-muted">Loading…</p>;
 
   return (
@@ -83,7 +90,7 @@ export function AgentsTab({ projectId }: { projectId: string }) {
               <Button
                 key={a.id}
                 size="sm"
-                onClick={() => start.mutate(a.name)}
+                onClick={() => openWorkspace(a.name)}
                 disabled={start.isPending}
                 title={a.description}
               >
