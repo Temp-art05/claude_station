@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 type VarDraft = { key: string; value: string; isSecret: boolean };
 
@@ -60,6 +61,7 @@ export function EnvPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [projectId, setProjectId] = useState<string>("");
+  const [sharedWith, setSharedWith] = useState<string[]>([]);
   const [vars, setVars] = useState<VarDraft[]>([{ key: "", value: "", isSecret: false }]);
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
   const envFileRef = useRef<HTMLInputElement | null>(null);
@@ -69,6 +71,7 @@ export function EnvPage() {
     setName("");
     setDescription("");
     setProjectId("");
+    setSharedWith([]);
     setVars([{ key: "", value: "", isSecret: false }]);
   };
 
@@ -77,6 +80,7 @@ export function EnvPage() {
     setName(set.name);
     setDescription(set.description ?? "");
     setProjectId(set.projectId ?? "");
+    setSharedWith(set.sharedWith ?? []);
     setVars(
       set.vars.length
         ? set.vars.map((v) => ({ key: v.key, value: v.value, isSecret: v.isSecret }))
@@ -112,6 +116,9 @@ export function EnvPage() {
       description: description.trim(),
       projectId: projectId || null,
       vars: vars.filter((v) => v.key.trim()),
+      // A global set is already everywhere; keeping stale shares would just
+      // resurrect them if the scope is narrowed again later.
+      sharedWith: projectId ? sharedWith.filter((id) => id !== projectId) : [],
     };
     save.mutate(
       { id: editing === "new" ? undefined : (editing ?? undefined), input },
@@ -145,6 +152,11 @@ export function EnvPage() {
                     ? (projects.find((p) => p.id === set.projectId)?.name ?? "project")
                     : "global"}
                 </Badge>
+                {set.sharedWith.map((pid) => (
+                  <Badge key={pid} tone="accent" title="Shared into this project">
+                    +{projects.find((p) => p.id === pid)?.name ?? "project"}
+                  </Badge>
+                ))}
                 <Badge>{set.vars.length} vars</Badge>
               </div>
               {set.description && (
@@ -212,6 +224,45 @@ export function EnvPage() {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div>
+            <Label>Also available in</Label>
+            {projectId ? (
+              <div className="flex flex-wrap gap-1.5">
+                {projects
+                  .filter((p) => p.id !== projectId)
+                  .map((p) => {
+                    const on = sharedWith.includes(p.id);
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() =>
+                          setSharedWith((prev) =>
+                            on ? prev.filter((x) => x !== p.id) : [...prev, p.id],
+                          )
+                        }
+                        className={cn(
+                          "cursor-pointer rounded-pill border px-2.5 py-1 text-xs transition-colors",
+                          on
+                            ? "border-accent/30 bg-accent/12 text-accent"
+                            : "border-hairline bg-white/6 text-ink-muted hover:text-ink",
+                        )}
+                      >
+                        {p.name}
+                      </button>
+                    );
+                  })}
+                {projects.length < 2 && (
+                  <p className="text-xs text-ink-faint">No other project to share with yet.</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-ink-faint">
+                A global set already reaches every project — pick an owner above to share it
+                selectively instead.
+              </p>
+            )}
           </div>
 
           <div>

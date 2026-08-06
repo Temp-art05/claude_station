@@ -78,6 +78,13 @@
       "when": 1786006839325,
       "tag": "0010_workflow-terminal-mode",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786027996327,
+      "tag": "0011_project-env-set-sharing",
+      "breakpoints": true
     }
   ]
 }

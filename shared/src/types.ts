@@ -247,6 +247,8 @@ export const envSetSchema = z.object({
   description: z.string().default(""),
   createdAt: z.string(),
   vars: z.array(envVarSchema).default([]),
+  /** Extra projects this set is shared into, beyond its owner. */
+  sharedWith: z.array(z.string()).default([]),
 });
 export type EnvSet = z.infer<typeof envSetSchema>;
 
@@ -260,6 +262,8 @@ export const envSetInputSchema = z.object({
   name: z.string().min(1),
   description: z.string().default(""),
   vars: z.array(envVarInputSchema).default([]),
+  /** Replaced wholesale on save, the same way vars are. */
+  sharedWith: z.array(z.string()).default([]),
 });
 export type EnvSetInput = z.infer<typeof envSetInputSchema>;
 
