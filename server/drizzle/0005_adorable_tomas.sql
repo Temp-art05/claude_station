@@ -1,0 +1,1 @@
+ALTER TABLE `terminals` ADD `kind` text DEFAULT 'shell' NOT NULL;

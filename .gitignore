@@ -11,3 +11,6 @@ data/
 
 # IDE
 .idea/
+
+# Accidental tsc emit (shared is consumed as .ts source)
+shared/src/*.js

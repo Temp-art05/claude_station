@@ -1,0 +1,1 @@
+ALTER TABLE `agents` ADD `bundle_dir` text;
