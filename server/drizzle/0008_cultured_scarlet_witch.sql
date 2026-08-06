@@ -1,0 +1,1 @@
+ALTER TABLE `project_paths` ADD `env_set_id` text;

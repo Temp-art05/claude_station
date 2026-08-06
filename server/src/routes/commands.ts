@@ -1,9 +1,11 @@
+import { rmSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { pathCommandInputSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { newId } from "../lib/id";
+import { parsePatch } from "../lib/patch";
 import { badRequest } from "../lib/path-safety";
 import { isRunActive, killRun, readLogSlice, startRun } from "../services/commands";
 
@@ -55,7 +57,7 @@ export function commandRoutes(app: FastifyInstance): void {
     "/api/paths/:pathId/commands/:commandId",
     async (req, reply) => {
       const { pathId, commandId } = cmdIdParam.parse(req.params);
-      const input = pathCommandInputSchema.partial().parse(req.body);
+      const input = parsePatch(pathCommandInputSchema, req.body);
       const existing = db
         .select()
         .from(schema.pathCommands)
@@ -150,5 +152,16 @@ export function commandRoutes(app: FastifyInstance): void {
     if (!killRun(id)) throw badRequest("Run is not active");
     reply.code(202);
     return { ok: true };
+  });
+
+  /** Remove a run from history — an active one is stopped first (UI confirms). */
+  app.delete<{ Params: { id: string } }>("/api/command-runs/:id", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const row = db.select().from(schema.commandRuns).where(eq(schema.commandRuns.id, id)).get();
+    if (!row) return reply.code(404).send({ error: "Run not found" });
+    if (isRunActive(id)) killRun(id);
+    rmSync(row.logPath, { force: true });
+    db.delete(schema.commandRuns).where(eq(schema.commandRuns.id, id)).run();
+    reply.code(204);
   });
 }

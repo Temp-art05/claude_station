@@ -30,6 +30,15 @@ export function useKillRun(projectId: string) {
   });
 }
 
+/** Remove a run from history — the server stops it first if still active. */
+export function useDeleteRun(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => api.delete(`/api/command-runs/${runId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["command-runs", projectId] }),
+  });
+}
+
 export function useCreateCommand(pathId: string) {
   const qc = useQueryClient();
   return useMutation({

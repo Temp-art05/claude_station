@@ -19,6 +19,7 @@ const emptyPath: ProjectPathInput = {
   label: "",
   description: "",
   isDefault: false,
+  envSetId: null,
   commands: [],
 };
 
@@ -33,6 +34,7 @@ export function ProjectFormDialog({ open, onClose, project }: Props) {
           label: p.label,
           description: p.description,
           isDefault: p.isDefault,
+          envSetId: p.envSetId,
           // Commands are managed in the Commands tab — keep them on save.
           commands: p.commands.map((c) => ({
             name: c.name,

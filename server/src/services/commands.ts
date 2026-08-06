@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "../db";
 import { setting } from "../lib/config";
 import { LOGS_DIR } from "../lib/data-dir";
+import { childBaseEnv } from "../lib/child-env";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import { envVarsFor } from "./env-sets";
@@ -96,9 +97,8 @@ export function startRun(input: StartRunInput): StartRunResult {
     })
     .run();
 
-  const baseEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) baseEnv[k] = v;
-  const env = { ...baseEnv, ...envVarsFor(input.envSetId), CI: "1" };
+  // No explicit set → the repo's own default, so Claude's runs get it too.
+  const env = { ...childBaseEnv(), ...envVarsFor(input.envSetId ?? path.envSetId), CI: "1" };
 
   const logStream = createWriteStream(logPath, { flags: "a" });
   logStream.write(`$ ${fullCommand}\n(cwd: ${cwd})\n\n`);

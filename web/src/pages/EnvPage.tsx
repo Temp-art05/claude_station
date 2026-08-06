@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, FileUp, Plus, Trash2 } from "lucide-react";
 import type { EnvSet, EnvSetInput, Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
@@ -8,6 +8,32 @@ import { Input, Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
 
 type VarDraft = { key: string; value: string; isSecret: boolean };
+
+/** Keys that smell like credentials get the secret flag on import. */
+const SECRET_KEY = /TOKEN|SECRET|PASSWORD|PASSWD|_PAT\b|_KEY\b|APIKEY|AUTH|CREDENTIAL/i;
+
+/** Parse .env text: KEY=VALUE lines, quotes stripped, comments skipped. */
+function parseDotEnv(text: string): VarDraft[] {
+  const out: VarDraft[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    let value = m[2] ?? "";
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+    ) {
+      value = value.slice(1, -1);
+    } else {
+      const hash = value.indexOf(" #");
+      if (hash !== -1) value = value.slice(0, hash).trimEnd();
+    }
+    out.push({ key: m[1]!, value, isSecret: SECRET_KEY.test(m[1]!) });
+  }
+  return out;
+}
 
 export function EnvPage() {
   const qc = useQueryClient();
@@ -32,13 +58,16 @@ export function EnvPage() {
 
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [projectId, setProjectId] = useState<string>("");
   const [vars, setVars] = useState<VarDraft[]>([{ key: "", value: "", isSecret: false }]);
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const envFileRef = useRef<HTMLInputElement | null>(null);
 
   const startNew = () => {
     setEditing("new");
     setName("");
+    setDescription("");
     setProjectId("");
     setVars([{ key: "", value: "", isSecret: false }]);
   };
@@ -46,6 +75,7 @@ export function EnvPage() {
   const startEdit = (set: EnvSet) => {
     setEditing(set.id);
     setName(set.name);
+    setDescription(set.description ?? "");
     setProjectId(set.projectId ?? "");
     setVars(
       set.vars.length
@@ -54,10 +84,32 @@ export function EnvPage() {
     );
   };
 
+  /** Merge an imported .env into the draft: same key updates, new keys append. */
+  const importEnvFile = async (file: File) => {
+    const parsed = parseDotEnv(await file.text());
+    if (parsed.length === 0) return;
+    setVars((prev) => {
+      const existing = prev.filter((v) => v.key.trim());
+      const byKey = new Map(existing.map((v) => [v.key, v] as const));
+      for (const v of parsed) {
+        const current = byKey.get(v.key);
+        if (current) {
+          current.value = v.value;
+        } else {
+          const row = { ...v };
+          existing.push(row);
+          byKey.set(v.key, row);
+        }
+      }
+      return [...existing];
+    });
+    if (!name.trim()) setName(file.name === ".env" ? "imported .env" : file.name);
+  };
+
   const submit = () => {
     const input: EnvSetInput = {
       name: name.trim(),
-      description: "",
+      description: description.trim(),
       projectId: projectId || null,
       vars: vars.filter((v) => v.key.trim()),
     };
@@ -95,6 +147,9 @@ export function EnvPage() {
                 </Badge>
                 <Badge>{set.vars.length} vars</Badge>
               </div>
+              {set.description && (
+                <p className="mt-0.5 text-xs text-ink-muted">{set.description}</p>
+              )}
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-ink-faint">
                 {set.vars.map((v) => (
                   <span key={v.id} className="inline-flex items-center gap-1">
@@ -160,15 +215,44 @@ export function EnvPage() {
           </div>
 
           <div>
+            <Label>Description (what is this set for?)</Label>
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="jira-ai-fixer config cho project WIS555 — đè JIRA_PROJECT_KEY, CODE_REPO"
+            />
+          </div>
+
+          <div>
             <div className="mb-1.5 flex items-center justify-between">
               <Label className="mb-0">Variables</Label>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setVars((v) => [...v, { key: "", value: "", isSecret: false }])}
-              >
-                <Plus size={13} /> Add
-              </Button>
+              <div className="flex gap-1.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => envFileRef.current?.click()}
+                  title="Parse a .env file — existing keys get updated, new keys appended"
+                >
+                  <FileUp size={13} /> Import .env
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setVars((v) => [...v, { key: "", value: "", isSecret: false }])}
+                >
+                  <Plus size={13} /> Add
+                </Button>
+              </div>
+              <input
+                ref={envFileRef}
+                type="file"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void importEnvFile(file);
+                  e.target.value = "";
+                }}
+              />
             </div>
             <div className="space-y-2">
               {vars.map((v, i) => (

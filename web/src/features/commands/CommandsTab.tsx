@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Hammer, Play, Square, Trash2, Plus } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Hammer, Play, Square, Trash2, Plus, X } from "lucide-react";
 import {
   COMMAND_PRESETS,
   commandKindSchema,
@@ -11,12 +12,14 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { LogPane } from "./LogPane";
 import {
   useCommandRuns,
   useCreateCommand,
   useDeleteCommand,
+  useDeleteRun,
   useKillRun,
   useRunCommand,
 } from "./hooks";
@@ -29,42 +32,51 @@ interface Props {
 }
 
 export function CommandsTab({ project, envSets }: Props) {
+  const qc = useQueryClient();
   const { data: runs = [] } = useCommandRuns(project.id);
   const run = useRunCommand(project.id);
   const kill = useKillRun(project.id);
+  const removeRun = useDeleteRun(project.id);
 
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
-  const [envSetId, setEnvSetId] = useState("");
   const [addFor, setAddFor] = useState<string | null>(null);
+
+  // Each repo remembers its own default env set — Claude's runs use it too.
+  const setPathEnv = useMutation({
+    mutationFn: ({ pathId, envSetId }: { pathId: string; envSetId: string | null }) =>
+      api.patch(`/api/projects/${project.id}/paths/${pathId}`, { envSetId }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+  });
 
   const activeRun = selectedRun ?? runs.find((r) => r.active)?.id ?? runs[0]?.id ?? null;
 
   return (
     <div className="flex h-full min-h-0">
       <div className="w-[420px] shrink-0 overflow-y-auto border-r border-edge p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium">Commands</h2>
-          <select
-            value={envSetId}
-            onChange={(e) => setEnvSetId(e.target.value)}
-            className="h-7 rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-          >
-            <option value="">No env set</option>
-            {envSets.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        <h2 className="mb-3 text-sm font-medium">Commands</h2>
 
         {project.paths.map((path) => (
           <div key={path.id} className="mb-5">
-            <div className="mb-1.5 flex items-center justify-between">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <p className="truncate text-xs font-medium">{path.label}</p>
                 <p className="truncate font-mono text-[10.5px] text-ink-faint">{path.path}</p>
               </div>
+              <select
+                value={path.envSetId ?? ""}
+                onChange={(e) =>
+                  setPathEnv.mutate({ pathId: path.id, envSetId: e.target.value || null })
+                }
+                title="Default env set for this repo's commands (also used when Claude runs them)"
+                className="h-7 max-w-36 shrink-0 rounded-md border border-edge bg-surface px-2 text-[11px] text-ink"
+              >
+                <option value="">no env</option>
+                {envSets.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
               <Button size="sm" variant="ghost" onClick={() => setAddFor(path.id)}>
                 <Plus size={13} />
               </Button>
@@ -86,7 +98,7 @@ export function CommandsTab({ project, envSets }: Props) {
                   pending={run.isPending}
                   onRun={() =>
                     run.mutate(
-                      { commandId: cmd.id, envSetId: envSetId || null },
+                      { commandId: cmd.id },
                       { onSuccess: (r) => setSelectedRun(r.runId) },
                     )
                   }
@@ -104,7 +116,7 @@ export function CommandsTab({ project, envSets }: Props) {
               key={r.id}
               onClick={() => setSelectedRun(r.id)}
               className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors cursor-pointer",
+                "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors cursor-pointer",
                 activeRun === r.id ? "bg-surface-3" : "hover:bg-surface-2",
               )}
             >
@@ -132,6 +144,19 @@ export function CommandsTab({ project, envSets }: Props) {
                   }}
                 />
               )}
+              <X
+                size={12}
+                aria-label="Delete run"
+                className="shrink-0 text-ink-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-err"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (r.active && !confirm(`"${r.name}" is still running — stop it and delete the run?`)) {
+                    return;
+                  }
+                  if (selectedRun === r.id) setSelectedRun(null);
+                  removeRun.mutate(r.id);
+                }}
+              />
             </button>
           ))}
         </div>

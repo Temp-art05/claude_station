@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -8,6 +10,7 @@ import {
 } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
+import { parsePatch } from "../lib/patch";
 import { prettyPath, resolveDirectory } from "../lib/path-safety";
 
 const idParam = z.object({ id: z.string() });
@@ -46,10 +49,22 @@ function insertPath(
       description: input.description,
       isDefault,
       sortOrder,
+      envSetId: input.envSetId,
     })
     .run();
   insertCommands(id, input.commands);
   return id;
+}
+
+const execFileAsync = promisify(execFile);
+
+/** "git@github.com:o/r.git" / "https://github.com/o/r.git" → "https://github.com/o/r". */
+function remoteToWebUrl(remote: string): string | null {
+  const ssh = /^git@([^:]+):(.+?)(?:\.git)?$/.exec(remote);
+  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
+  const http = /^https?:\/\/.+$/.exec(remote);
+  if (http) return remote.replace(/\.git$/, "");
+  return null;
 }
 
 function loadProject(id: string) {
@@ -124,9 +139,30 @@ export function projectRoutes(app: FastifyInstance): void {
     return project;
   });
 
+  /** Web URL of each path's git remote, so the UI can deep-link to GitHub. */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/github", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const project = loadProject(id);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    return Promise.all(
+      project.paths.map(async (p) => {
+        try {
+          const { stdout } = await execFileAsync(
+            "git",
+            ["-C", p.path, "remote", "get-url", "origin"],
+            { timeout: 5_000 },
+          );
+          return { pathId: p.id, label: p.label, url: remoteToWebUrl(stdout.trim()) };
+        } catch {
+          return { pathId: p.id, label: p.label, url: null };
+        }
+      }),
+    );
+  });
+
   app.patch<{ Params: { id: string } }>("/api/projects/:id", async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const input = projectInputSchema.partial().parse(req.body);
+    const input = parsePatch(projectInputSchema, req.body);
     const existing = loadProject(id);
     if (!existing) return reply.code(404).send({ error: "Project not found" });
 
@@ -174,7 +210,7 @@ export function projectRoutes(app: FastifyInstance): void {
     "/api/projects/:id/paths/:pathId",
     async (req, reply) => {
       const { id, pathId } = pathIdParam.parse(req.params);
-      const input = projectPathInputSchema.partial().parse(req.body);
+      const input = parsePatch(projectPathInputSchema, req.body);
       const existing = db
         .select()
         .from(schema.projectPaths)
@@ -187,6 +223,7 @@ export function projectRoutes(app: FastifyInstance): void {
           label: input.label ?? existing.label,
           description: input.description ?? existing.description,
           isDefault: input.isDefault ?? existing.isDefault,
+          envSetId: input.envSetId === undefined ? existing.envSetId : input.envSetId,
         })
         .where(eq(schema.projectPaths.id, pathId))
         .run();

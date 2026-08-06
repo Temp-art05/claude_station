@@ -1,4 +1,5 @@
 import { spawn, type IPty } from "node-pty";
+import { childBaseEnv } from "../lib/child-env";
 import { setting } from "../lib/config";
 
 export interface PtyListener {
@@ -31,6 +32,8 @@ export interface StartOptions {
   cwd: string;
   env?: Record<string, string>;
   shell?: string;
+  /** Run this instead of an interactive shell; the PTY exits when it does. */
+  command?: string;
   cols?: number;
   rows?: number;
 }
@@ -39,11 +42,12 @@ export function start(opts: StartOptions): { pid: number } {
   if (sessions.has(opts.id)) throw new Error(`Terminal ${opts.id} already running`);
 
   const shell = opts.shell ?? process.env.SHELL ?? "/bin/zsh";
-  // node-pty needs a plain string map; drop undefined values from process.env.
-  const baseEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) baseEnv[k] = v;
+  // Station-internal vars are stripped; node-pty needs a plain string map.
+  const baseEnv = childBaseEnv();
 
-  const pty = spawn(shell, ["-l"], {
+  // Login + interactive so PATH shims (nvm/asdf/…) resolve the command.
+  const args = opts.command ? ["-l", "-i", "-c", opts.command] : ["-l"];
+  const pty = spawn(shell, args, {
     name: "xterm-256color",
     cwd: opts.cwd,
     cols: opts.cols ?? 80,
