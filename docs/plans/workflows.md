@@ -124,7 +124,9 @@ GET    /api/workflows/:id
 PATCH  /api/workflows/:id                      sửa meta + full-replace steps
 DELETE /api/workflows/:id
 PUT    /api/workflows/:id/folder
-POST   /api/workflows/import                   multipart .workflow.yaml (hoặc .json)
+POST   /api/workflows/import                   multipart .workflow.yaml (hoặc .json); trùng tên → auto suffix -2
+POST   /api/workflows/import-folder            multipart nhiều part (part filename = relative path);
+                                               mỗi .yaml/.yml/.json = 1 workflow → { results: [{file, status: imported|renamed|skipped|error, name?, id?, error?}] }
 GET    /api/workflows/:id/export                → .workflow.yaml
 
 GET    /api/projects/:id/workflows             đã import + có thể import

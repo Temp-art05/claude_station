@@ -9,7 +9,7 @@ Người dùng cần 1 dashboard chạy local trên macOS để điều phối C
 
 **Quyết định đã chốt với user:**
 - **Platform:** Web app local (React + Node), KHÔNG phải Electron/Tauri (có thể wrap sau). Browser chỉ render xterm.js; PTY thật chạy trong Node server → không có vấn đề xin quyền browser/macOS.
-- **Claude:** Hybrid — chat UI có cấu trúc qua `@anthropic-ai/claude-agent-sdk` (dùng login Claude Code sẵn có, không cần API key) + terminal thật qua node-pty.
+- **Claude:** Hybrid — terminal thật qua node-pty là bề mặt chính (tab Claude nhúng `claude` CLI, xem rev9 trong `docs/plans/chat-claude-terminal.md`); Agent SDK (`@anthropic-ai/claude-agent-sdk`, dùng login Claude Code sẵn có, không cần API key) phục vụ agent workspace + workflow.
 - **Claude phải *tác động* được, không chỉ đọc:** expose in-process MCP server (Jira write-back, Excel read/write, knowledge search, chạy build/test command). Đây là seam kiến trúc — làm sau sẽ phải đập lại `claude-session.ts`.
 - **Mobile là first-class:** mỗi project path có bộ command (build/test/lint/run) dùng chung cho UI button + Claude tool → phục vụ `xcodebuild`, `gradlew`, KMP.
 - **Phase 1 gồm cả:** Projects + Chat + Terminals, Knowledge store, Env manager, Jira UI + write-back, GitHub UI, Excel import/export, commands runner, git diff panel, search, notifications. Phase 2 (để seam): quản lý agent riêng.
@@ -185,17 +185,22 @@ chat_messages(id pk, session_id fk, seq /*monotonic*/, role, type /*SDKMessage.t
 chat_attachments(id pk, session_id fk, kind /*image|file*/, mime, stored_path,
                  original_filename, created_at)
 terminals(id pk, project_id fk, title, cwd, env_set_id NULL, pid NULL,
+          kind /*shell|claude — claude chạy `claude` CLI, PTY chết theo nó*/,
+          command NULL /*app agent: lệnh PTY đã chạy — restart chạy lại đúng lệnh*/,
           status /*running|exited|orphaned*/, created_at, closed_at)   -- metadata only
 env_sets(id pk, project_id NULL /*NULL = global, dùng được mọi project*/, name,
          description, created_at)
 env_vars(id pk, env_set_id fk, key, value, is_secret)                 -- plaintext local
-knowledge_items(id pk, project_id NULL /*NULL=global*/, kind /*doc|excel|skill*/, folder,
-                name, description, original_filename, stored_path, parsed_path NULL,
-                size_bytes, created_at)
+knowledge_items(id pk, project_id NULL /*NULL=global*/, kind /*doc|excel|skill|folder*/, folder,
+                name, description, original_filename, stored_path /*kind=folder|skill: directory*/,
+                parsed_path NULL, size_bytes, created_at)
 integrations(id pk, kind UNIQUE /*jira|github*/, config JSON)
 app_settings(key pk, value JSON)                                      -- xem § Config tầng 2
 agents(id pk, name UNIQUE, description, prompt, tools JSON NULL, disallowed_tools JSON NULL,
        skills JSON NULL, model NULL, max_turns NULL, background, view_path NULL,
+       view_url NULL /*app agent: URL web UI của app, iframe trong workspace tab*/,
+       start_command NULL /*app agent: lệnh chạy trong terminal Station tại bundle_dir*/,
+       bundle_dir NULL /*folder import: companion files, thêm vào additionalDirectories*/,
        enabled_globally, source /*manual|imported*/, created_at, updated_at)
 project_agents(id pk, project_id fk, agent_id fk)                     -- UNIQUE(project_id, agent_id)
 project_knowledge(id pk, project_id fk, knowledge_item_id fk)         -- attach asset library vào project
@@ -274,7 +279,7 @@ Ràng buộc: tool có side-effect (`jira_comment/transition/worklog`, `excel_wr
 - `projects/:id/terminals`, `terminals/:id`
 - `projects/:id/commands/run` (`{commandId, args?}`) → `{runId}`; `command-runs/:id` + `/log?offset=`
 - `projects/:id/git/status|diff?pathId=`, `projects/:id/git/revert` (`{files[]}` — confirm 2 bước ở UI)
-- knowledge per-project + global (multipart) + `knowledge/skills/import`
+- knowledge per-project + global (multipart) + `knowledge/skills/import` + `knowledge/folder` (import cả thư mục = 1 item `kind=folder`; part filename mang relative path — cần `preservePath: true` khi register `@fastify/multipart`; root có `SKILL.md` → skill bundle nguyên cây). Tương tự: `agents/import-folder` (1 file .md định nghĩa + companion files vào `data/agents/<name>` = `bundle_dir`), `workflows/import-folder` (batch: mỗi yaml/json = 1 workflow, trả `{results[]}` imported/renamed/skipped/error). Trùng tên khi import → auto suffix `-2`, `-3`; sanitize relative path server-side (`lib/multipart.ts`)
 - `env-sets` CRUD (`?projectId=` filter, `null` = global) + nested vars
 - `jira/issues?jql=`, `jira/issues/:key`, `jira/issues/:key/comment|transition|worklog`, `jira/issues/:key/transitions`
 - `github/:owner/:repo/pulls|issues`
@@ -293,14 +298,14 @@ Sidebar: Projects · Jira · GitHub · Knowledge · Env · Search · Settings. D
 
 - `/projects` — grid ProjectCard + dialog tạo/sửa (name, desc, bảng paths: path+label+description+commands preset)
 - `/projects/:id` — tabs:
-  - **Chat**: SessionList | MessageList (renderer theo type: markdown, ToolUseCard collapse, ThinkingBlock, ResultFooter cost), StreamingMessage, PermissionPrompt modal (kèm countdown 120s), ChatInput (chọn cwd/envSet/permissionMode/model, **paste hoặc drop ảnh → attachment**), click file path → mở IDE (`xed`/`idea`/`code` theo config)
+  - **Claude** (value `chat`, rev9 — xem `docs/plans/chat-claude-terminal.md`): `TerminalsTab kind="claude"` — nhiều PTY nhúng `claude` CLI (spawn `$SHELL -l -i -c "claude"`, restart orphaned → `claude --continue || claude`). Approve tool/resume/permission dùng TUI của chính CLI; hội thoại KHÔNG persist per-message vào DB (không vào search FTS). UI chat SDK cũ (`ChatTab`: MessageView, PermissionPrompt modal countdown, ChatInput + paste ảnh) chỉ còn dùng cho agent workspace.
   - **Terminals**: tabs tạo/kill/rename, TerminalPane (xterm + fit qua ResizeObserver + webgl fallback), popover chọn repo path + env set. Bắt phím trong xterm trước browser + `beforeunload` warning khi còn terminal chạy (mitigate Cmd+W)
   - **Commands**: bảng command per path + Run + log panel + history
-  - **Diff**: git status/diff theo path, group theo session (dùng `worktree_path` nếu có), nút revert file (confirm)
-  - **Knowledge**: bảng + dropzone import; xlsx có nút xem bản parse
+  - **Diff**: panel git kiểu Android Studio — cây file project, changes + checkbox, diff side-by-side/unified, commit & push, branch info, revert file (confirm); group theo session (dùng `worktree_path` nếu có). Chi tiết: `git-panel.md`
+  - **Knowledge**: bảng + dropzone import (nhận cả kéo-thả **folder** từ Finder, hoặc nút Import folder qua `webkitdirectory`); xlsx có nút xem bản parse
   - **History**: feed work_history (filter theo kind) + session archived
   - **Settings**: paths + commands CRUD, env set mặc định, repos GitHub, worktree on/off, delete
-- `/jira` — bảng my-issues (REST v3, email+token từ Settings), drawer detail (ADF→markdown) + action **Comment / Transition / Log work** ngay trên UI, nút **"Work on this with Claude"** → chọn project → tạo session seeded context issue → nhảy vào chat
+- `/jira` — bảng my-issues (REST v3, email+token từ Settings), drawer detail (ADF→markdown) + action **Comment / Transition / Log work** ngay trên UI, nút **"Work on this with Claude"** → chọn project → tạo terminal `kind='claude'` → nhảy vào tab Claude, context issue được gõ sẵn vào composer của CLI qua bracketed paste (không auto-gửi)
 - `/github` — chọn repo (từ integrations), tabs PRs/Issues (gh CLI `--json` server-side), drawer detail, cùng action "Work with Claude"
 - `/knowledge` — docs global + section Skills (trạng thái symlink) + section Agents
 - `/env` — list env set (global + per-project), editor var (mask value, toggle reveal)
@@ -321,12 +326,12 @@ Sidebar: Projects · Jira · GitHub · Knowledge · Env · Search · Settings. D
 
 - Docs/Excel: copy vào store; xlsx parse server-side (SheetJS → CSV per sheet + meta.json) đặt cạnh bản gốc. Inject qua `additionalDirectories` (quyền Read) + `systemPrompt.append` (index có mô tả, **cap 8KB**) + tool `knowledge_search` cho phần còn lại.
 - Skills: file thật nằm trong `data/skills/<name>/`, rồi **symlink `$CLAUDE_SKILLS_DIR/<name>` → `data/skills/<name>`**. Đây là chỗ duy nhất app ghi ra ngoài repo, vì Claude Code chỉ đọc skill user-level ở `~/.claude/skills`; gỡ = xóa link, nội dung vẫn nằm trong repo. Session chạy `settingSources: ['user','project']`.
-- Agent definitions (**Phase 2 — đã impl**): bảng `agents` là nguồn thật (không phải file rời), `project_agents` giữ opt-in theo project. `agentsForProject(projectId)` = agent global ∪ opt-in của project → `options.agents`. Editor cho phép set `tools`/`disallowedTools` (3 trạng thái per tool: allow/deny/inherit), `model` alias, `maxTurns`, `background`, `skills`. Import/export `.agent.md` (frontmatter + prompt) nên agent vẫn portable sang Claude Code thường. Kho file `knowledge_items` không còn giữ kind `agent`.
+- Agent definitions (**Phase 2 — đã impl**): bảng `agents` là nguồn thật (không phải file rời), `project_agents` giữ opt-in theo project. `agentsForProject(projectId)` = agent global ∪ opt-in của project → `options.agents`. Editor cho phép set `tools`/`disallowedTools` (3 trạng thái per tool: allow/deny/inherit), `model` alias, `maxTurns`, `background`, `skills`. Import/export `.agent.md` (frontmatter + prompt) nên agent vẫn portable sang Claude Code thường. Import được cả **folder agent** (1 file .md định nghĩa — ưu tiên `agent.md` — + companion files): companion vào `data/agents/<name>` (`bundle_dir`), session nào có agent đó sẽ nhận dir này trong `additionalDirectories` và prompt được append mục "Companion files" trỏ path; delete agent xoá luôn bundle dir. Kho file `knowledge_items` không còn giữ kind `agent`.
 - Env set: merge vào `options.env` (chat), spawn env (PTY), và env của command runner.
 
 ## Agent workspace · Memory · Asset folders (rev8)
 
-**Agent workspace = 1 route, không phải cơ chế mới.** Bấm Start ở tab Agents của project → tạo một `chat_sessions` với `kind='agent'` + `agent_name`, rồi điều hướng tới `/projects/:id?tab=agent:<sessionId>`. Tab đó xuất hiện trong thanh tab của project cạnh Chat/Terminals/… và **giữ context** vì bản chất vẫn là session bình thường: message persist theo row, resume qua `sdkSessionId`, duyệt tool y hệt. Khác biệt duy nhất là `options.agent = <tên agent>` — SDK cho agent đó chạy làm **main thread** (prompt/tools/model/maxTurns của agent áp cho luồng chính, không phải subagent). Agent được start luôn được nhồi vào `options.agents` dù chưa bật cho project, vì user đã chủ động start.
+**Agent workspace = 1 route, không phải cơ chế mới.** Bấm Start ở tab Agents của project → tạo một `chat_sessions` với `kind='agent'` + `agent_name`, rồi điều hướng tới `/projects/:id?tab=agent:<sessionId>`. Tab đó xuất hiện trong thanh tab của project cạnh Claude/Terminals/… và **giữ context** vì bản chất vẫn là session bình thường: message persist theo row, resume qua `sdkSessionId`, duyệt tool y hệt. Khác biệt duy nhất là `options.agent = <tên agent>` — SDK cho agent đó chạy làm **main thread** (prompt/tools/model/maxTurns của agent áp cho luồng chính, không phải subagent). Agent được start luôn được nhồi vào `options.agents` dù chưa bật cho project, vì user đã chủ động start.
 - **Agent thường** không cần workspace: nó là subagent, main session tự gọi qua tool `Agent` ngay trong tab Chat/Terminal của project.
 - **Agent "to" có UI riêng:** `agents.view_path` trỏ tới file `.html` trong data dir. Có view thì tab render iframe `/api/agents/:id/view` (path-guarded, cùng origin nên HTML tự gọi được API bằng token); không có thì dùng chat view mặc định.
 
@@ -389,6 +394,11 @@ Ba điểm chốt để nhớ: step `agent` **là** một `chat_sessions` (nên 
 
 ## Changelog
 
+- **rev14 (2026-08-06)** — Git panel phase 2 (plan: `git-panel.md` §Phase 2): **Branch menu** kiểu AS (search, Fetch/Pull/Pull--rebase/Push/New branch; click checkout — remote tự `switch -c --track`; hover có Merge/Rebase/Delete; banner + Abort khi merge/rebase dở), **History** (log 100 commit, refs badge, click xem file list + diff từng file của commit qua `git show`), **Rollback từng hunk** (nút ⤺ trên hunk header, client gửi nguyên văn patch của hunk → `git apply -R` qua stdin — file đổi tiếp thì fail có báo). Endpoint: GET `git/branches|log|commit-files|show`, POST `git/op` (11 verb, ghi work_history `git_op`), POST `git/revert-hunk`. Lưu ý: 2 thay đổi cách nhau <7 dòng bị git gộp 1 hunk (context 3 dòng mỗi bên) — rollback là rollback cả cụm.
+- **rev13 (2026-08-06)** — Env mặc định theo từng repo path: cột `project_paths.env_set_id` (migration 0008), dropdown env per-path trong tab Commands (thay dropdown chung cả tab), `startRun` fallback `input.envSetId ?? path.envSetId` — nhờ đó `run_project_command` của Claude (trước giờ KHÔNG truyền env nào) cũng tự nhận env của repo. Phát sinh: (a) rolldown (vite 8) báo MISSING_EXPORT sai cho `normalizeGithubRepo` trong `types.ts` (~1150 dòng) dù tsc/esbuild/tsx đều thấy export — đổi function↔arrow không ăn thua, phải tách hàm sang `shared/src/github.ts`; (b) mô tả project trên header thu về 1 dòng click-to-expand (nó là context cho Claude, không cần phô đầy màn hình).
+- **rev12 (2026-08-06)** — Git panel kiểu Android Studio (plan: `git-panel.md`). Tab Diff giờ có: cây file project (`git ls-files --cached --others --exclude-standard`, lazy expand, dot cảnh báo dir chứa thay đổi), diff **side-by-side** (parse unified patch client-side thành 2 cột — không thêm dependency; toggle unified), commit UI (checkbox từng file mặc định chọn hết, Amend, Commit / Commit & Push — push tự `-u origin HEAD` khi thiếu upstream), branch + ahead/behind (`git status -sb`), viewer file bất kỳ (cap 1MB, detect binary). Endpoint mới: `GET git/tree`, `GET git/file?rev=worktree|head`, `POST git/commit` (work_history `git_committed`). Gotcha: `git diff HEAD` không thấy file untracked → fallback `git diff --no-index /dev/null <file>` (exit 1 vẫn có patch trên stdout, phải bắt từ err.stdout).
+- **rev11 (2026-08-06)** — App agents (plan: `app-agents.md`): agent dạng ứng dụng chạy độc lập (vd `jira-ai-fixer`). Cột mới `agents.view_url`/`start_command` + `terminals.command`; `POST /api/agents/:id/start {projectId, envSetId?}` idempotent (terminal title `agent:<tên>`); workspace tab render iframe app UI + TerminalPane cùng lúc, dropdown env set per-project (env set ĐÈ `.env` bundle — verified `node --env-file` không overwrite parent env). Phát sinh: (a) **bug zod v4 `.partial().parse()` vẫn áp `.default()`** → PATCH partial reset các cột có default về default; fix bằng `lib/patch.ts parsePatch()` áp cho cả 6 route PATCH (agents/projects/paths/commands/memory/env) — bug tiềm ẩn từ trước, lộ ra khi PATCH viewUrl xoá mất startCommand; (b) multipart không giữ execute bit → chmod 755 cho `*.sh` khi ghi bundle; (c) `sanitizeRelPath` đổi sang GIỮ dotfiles (`.env` từng bị strip thành `env` làm app hỏng), vẫn chặn `.`/`..`/absolute.
+- **rev10 (2026-08-06)** — Folder import cho Knowledge/Agents/Workflows (plan: `folder-import.md`). Knowledge: kéo-thả/chọn cả thư mục → 1 item `kind=folder` (root có `SKILL.md` → skill bundle nguyên cây, `linkSkillTree`); Agents: folder = 1 định nghĩa .md + companion files → `bundle_dir` + `additionalDirectories`; Workflows: batch import mỗi yaml = 1 workflow. Trùng tên → auto suffix `-2`. Ghi chú phát sinh: (a) **busboy mặc định strip path khỏi filename** (`preservePath: false`) — phải bật `preservePath: true` khi register `@fastify/multipart`, không thì relative path của folder upload thành basename hết (bắt được nhờ smoke test curl); (b) default `parts: 1000` của multipart chặn folder >1000 file → nâng limits khi register; (c) fix bug sẵn có `attachedAssetDirs` slice string theo `/` cuối — sai với `storedPath` là directory (skill/folder), giờ check `statSync().isDirectory()`; (d) skill đổi tên khi trùng phải rewrite `name:` trong frontmatter SKILL.md, không thì Claude Code thấy 2 skill trùng tên.
 - **rev9 (2026-08-06)** — Impl xong Workflows (W1→W5): bảng `workflows`/`workflow_steps`/`project_workflows`/`workflow_runs`/`workflow_run_steps`/`workflow_questions`/`workflow_artifacts`, engine `workflow-runner.ts`, 3 MCP tool `workflow_ask/emit_artifact/note`, library UI + editor + project tab + run view stepper, 3 workflow preset + 3 agent preset mới (`docs-planner`, `docs-writer`, `impl`). Bốn thứ phát sinh (chi tiết trong `workflows.md` § Phát sinh khi impl): `workflow_*` phải bypass `canUseTool`, reconcile phải quét cả run `awaiting_input`, `interrupted` phải chặn run, retry phải xoá câu hỏi treo + mở session mới.
 - **rev8 (2026-08-06)** — Agent workspace + project memory + asset folders (xem § trên). Ghi chú: (a) `options.agent` là cách SDK chọn main-thread agent — không phải chỉ `options.agents`; (b) memory chia pinned/on-demand để không ăn context, thêm `memory_write` cho Claude tự nhớ; (c) attach thay vì copy asset, nên sửa skill một chỗ là mọi project thấy; (d) tab của project giờ là danh sách động (fixed tabs + 1 tab mỗi agent workspace đang mở) nên type `Tab` thành `string`; (e) bỏ `kind='agent'` khỏi `knowledge_items` (agent đã có bảng riêng từ rev6).
 - **rev7 (2026-08-06)** — UI restyle + token cố định. (a) Font đổi sang Outfit/Plus Jakarta/JetBrains self-host, shape lên pill + radius lớn hơn, thêm 3 utility glass và ambient glow — giữ nguyên palette; (b) `.env` giờ thực sự được đọc: server chưa bao giờ load `.env` (tsx không tự load) nên `CLAUDE_STATION_TOKEN` bị bỏ qua im lặng → thêm `lib/env-file.ts` dùng `process.loadEnvFile`, **phải là import đầu tiên** trong `index.ts`; (c) bỏ auto-inject token ở dev theo yêu cầu — dev cũng nhập token như prod; (d) **bug bắt được nhờ screenshot**: `POST /api/projects` insert project rồi mới validate path → path sai để lại project mồ côi 0 repo; đã bọc create/update trong `db.transaction`.
