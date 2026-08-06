@@ -9,14 +9,14 @@ import { Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
 
 interface Props {
-  /** Endpoint that creates a seeded session, e.g. /api/jira/issues/ABC-1/work-with-claude */
+  /** Endpoint that creates a seeded claude terminal, e.g. /api/jira/issues/ABC-1/work-with-claude */
   endpoint: string;
   label?: string;
 }
 
 /**
- * Creates the session server-side (so the seed context is built there) and drops
- * the user into the chat with the prompt pre-filled — never auto-sent.
+ * Creates a claude terminal server-side (so the seed context is built there) and
+ * drops the user into it with the prompt typed into the CLI — never auto-sent.
  */
 export function WorkWithClaude({ endpoint, label = "Work on this with Claude" }: Props) {
   const navigate = useNavigate();
@@ -34,15 +34,15 @@ export function WorkWithClaude({ endpoint, label = "Work on this with Claude" }:
 
   const start = useMutation({
     mutationFn: () =>
-      api.post<{ sessionId: string; seed: string }>(endpoint, {
+      api.post<{ terminalId: string; seed: string }>(endpoint, {
         projectId,
         cwdPathId: pathId || undefined,
         useWorktree,
       }),
-    onSuccess: ({ sessionId, seed }) => {
+    onSuccess: ({ terminalId, seed }) => {
       setOpen(false);
       navigate(
-        `/projects/${projectId}?tab=chat&session=${sessionId}&seed=${encodeURIComponent(seed)}`,
+        `/projects/${projectId}?tab=chat&terminal=${terminalId}&seed=${encodeURIComponent(seed)}`,
       );
     },
   });
@@ -52,7 +52,7 @@ export function WorkWithClaude({ endpoint, label = "Work on this with Claude" }:
       <Button size="sm" variant="primary" onClick={() => setOpen(true)}>
         <Sparkles size={13} /> {label}
       </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Start a Claude session">
+      <Dialog open={open} onClose={() => setOpen(false)} title="Open a Claude terminal">
         <div className="space-y-3">
           <div>
             <Label>Project</Label>
@@ -112,7 +112,7 @@ export function WorkWithClaude({ endpoint, label = "Work on this with Claude" }:
               disabled={!projectId || start.isPending}
               onClick={() => start.mutate()}
             >
-              {start.isPending ? "Creating…" : "Start session"}
+              {start.isPending ? "Creating…" : "Open terminal"}
             </Button>
           </div>
         </div>

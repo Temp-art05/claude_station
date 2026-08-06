@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CircleAlert, CircleCheck } from "lucide-react";
-import type { AppSettings } from "@claude-station/shared";
+import { normalizeGithubRepo, type AppSettings } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
@@ -186,6 +186,7 @@ interface JiraStatus {
   configured: boolean;
   baseUrl?: string;
   email?: string;
+  deployment?: "cloud" | "server";
 }
 
 function JiraSettings() {
@@ -196,17 +197,30 @@ function JiraSettings() {
   if (!status) return null;
   // Keyed on the loaded config, so the form initialises from it instead of
   // syncing through an effect.
-  return <JiraForm key={`${status.baseUrl ?? ""}|${status.email ?? ""}`} status={status} />;
+  return (
+    <JiraForm
+      key={`${status.baseUrl ?? ""}|${status.email ?? ""}|${status.deployment ?? ""}`}
+      status={status}
+    />
+  );
 }
 
 function JiraForm({ status }: { status: JiraStatus }) {
   const qc = useQueryClient();
   const [baseUrl, setBaseUrl] = useState(status.baseUrl ?? "");
+  const [deployment, setDeployment] = useState<"cloud" | "server">(status.deployment ?? "cloud");
   const [email, setEmail] = useState(status.email ?? "");
   const [apiToken, setApiToken] = useState("");
+  const isServer = deployment === "server";
 
   const save = useMutation({
-    mutationFn: () => api.put("/api/integrations/jira", { baseUrl, email, apiToken }),
+    mutationFn: () =>
+      api.put("/api/integrations/jira", {
+        baseUrl,
+        deployment,
+        email: isServer ? "" : email,
+        apiToken,
+      }),
     onSuccess: () => {
       setApiToken("");
       void qc.invalidateQueries({ queryKey: ["jira-status"] });
@@ -217,25 +231,43 @@ function JiraForm({ status }: { status: JiraStatus }) {
     <Card className="mt-4 space-y-3">
       <h2 className="text-sm font-medium">Jira</h2>
       <p className="text-xs text-ink-muted">
-        API token from id.atlassian.com. Stored in the local DB in plain text and never sent
-        anywhere but your Jira instance.
+        {isServer
+          ? "Personal Access Token from your Jira profile (Profile → Personal Access Tokens)."
+          : "API token from id.atlassian.com."}{" "}
+        Stored in the local DB in plain text and never sent anywhere but your Jira instance.
       </p>
       <div className="grid grid-cols-2 gap-3">
-        <div className="col-span-2">
+        <div>
+          <Label>Deployment</Label>
+          <select
+            value={deployment}
+            onChange={(e) => setDeployment(e.target.value as "cloud" | "server")}
+            className="h-9 w-full rounded-md border border-edge bg-surface px-2 text-sm text-ink"
+          >
+            <option value="cloud">Jira Cloud (*.atlassian.net)</option>
+            <option value="server">Self-hosted (Server / Data Center)</option>
+          </select>
+        </div>
+        <div>
           <Label>Base URL</Label>
           <Input
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://yourteam.atlassian.net"
+            placeholder={isServer ? "https://jira.yourcompany.com" : "https://yourteam.atlassian.net"}
             className="font-mono text-xs"
           />
         </div>
+        {!isServer && (
+          <div>
+            <Label>Email</Label>
+            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
+          </div>
+        )}
         <div>
-          <Label>Email</Label>
-          <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
-        </div>
-        <div>
-          <Label>API token {status.configured && <span className="text-ok">(stored)</span>}</Label>
+          <Label>
+            {isServer ? "Personal Access Token" : "API token"}{" "}
+            {status.configured && <span className="text-ok">(stored)</span>}
+          </Label>
           <Input
             type="password"
             value={apiToken}
@@ -253,7 +285,7 @@ function JiraForm({ status }: { status: JiraStatus }) {
         <Button
           size="sm"
           variant="primary"
-          disabled={!baseUrl || !email || !apiToken || save.isPending}
+          disabled={!baseUrl || (!isServer && !email) || !apiToken || save.isPending}
           onClick={() => save.mutate()}
         >
           Save Jira config
@@ -280,9 +312,10 @@ function GitHubForm({ initial }: { initial: string }) {
   const save = useMutation({
     mutationFn: () =>
       api.put("/api/integrations/github", {
+        // Full URLs / ssh remotes are fine — store the normalized owner/name.
         repos: text
           .split("\n")
-          .map((l) => l.trim())
+          .map((l) => normalizeGithubRepo(l) ?? l.trim())
           .filter(Boolean),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["github-repos"] }),
@@ -292,8 +325,8 @@ function GitHubForm({ initial }: { initial: string }) {
     <Card className="mt-4 space-y-3">
       <h2 className="text-sm font-medium">GitHub</h2>
       <p className="text-xs text-ink-muted">
-        One <code className="font-mono">owner/name</code> per line. Auth comes from the{" "}
-        <code className="font-mono">gh</code> CLI — no token stored here.
+        One repo per line — <code className="font-mono">owner/name</code> or a full GitHub URL.
+        Auth comes from the <code className="font-mono">gh</code> CLI — no token stored here.
       </p>
       <textarea
         value={text}

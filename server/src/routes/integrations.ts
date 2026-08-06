@@ -15,14 +15,23 @@ import {
   transitionIssue,
 } from "../services/jira";
 import {
+  commentPull,
+  deleteBranch,
+  getContents,
   githubConfig,
   githubContext,
   issueDetail,
+  listBranches,
   listIssues,
   listPulls,
+  listReleases,
+  mergePull,
   pullDetail,
+  pullDetailFull,
+  pullDiff,
+  reviewPull,
 } from "../services/gh";
-import { createChatSession } from "../services/sessions";
+import { createTerminal } from "../services/terminals";
 
 const keyParam = z.object({ key: z.string().min(1) });
 
@@ -135,7 +144,7 @@ export function integrationRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  /** "Work on this with Claude": new session seeded with the issue as context. */
+  /** "Work on this with Claude": new claude terminal, issue context typed into its composer. */
   app.post("/api/jira/issues/:key/work-with-claude", async (req, reply) => {
     const { key } = keyParam.parse(req.params);
     const { projectId, cwdPathId, useWorktree } = z
@@ -146,21 +155,21 @@ export function integrationRoutes(app: FastifyInstance): void {
       })
       .parse(req.body);
     const seed = await issueContext(key);
-    const session = createChatSession(projectId, {
-      title: `${key}`,
+    const terminal = createTerminal(projectId, {
+      kind: "claude",
+      title: key,
       cwdPathId,
-      permissionMode: "default",
-      origin: `jira:${key}`,
       useWorktree,
     });
+    audit(projectId, "jira_linked", `Claude terminal from ${key}`, terminal.id);
     reply.code(201);
-    return { sessionId: session.id, seed };
+    return { terminalId: terminal.id, seed };
   });
 
   app.get("/api/jira/status", async () => {
     try {
       const cfg = jiraConfig();
-      return { configured: true, baseUrl: cfg.baseUrl, email: cfg.email };
+      return { configured: true, baseUrl: cfg.baseUrl, email: cfg.email, deployment: cfg.deployment };
     } catch {
       return { configured: false };
     }
@@ -177,6 +186,79 @@ export function integrationRoutes(app: FastifyInstance): void {
   app.get("/api/github/:owner/:repo/issues", async (req) => {
     const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
     return listIssues(`${owner}/${repo}`);
+  });
+
+  const prParams = z.object({
+    owner: z.string(),
+    repo: z.string(),
+    number: z.coerce.number().int(),
+  });
+
+  app.get("/api/github/:owner/:repo/pulls/:number/detail", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    return pullDetailFull(`${owner}/${repo}`, number);
+  });
+
+  app.get("/api/github/:owner/:repo/pulls/:number/diff", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    return pullDiff(`${owner}/${repo}`, number);
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/comment", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    const { body } = z.object({ body: z.string().min(1) }).parse(req.body);
+    await commentPull(`${owner}/${repo}`, number, body);
+    return { ok: true };
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/review", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    const { event, body } = z
+      .object({
+        event: z.enum(["approve", "request-changes", "comment"]),
+        body: z.string().optional(),
+      })
+      .parse(req.body);
+    await reviewPull(`${owner}/${repo}`, number, event, body);
+    return { ok: true };
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/merge", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    const { method, deleteBranch: del } = z
+      .object({
+        method: z.enum(["merge", "squash", "rebase"]),
+        deleteBranch: z.boolean().default(false),
+      })
+      .parse(req.body);
+    await mergePull(`${owner}/${repo}`, number, method, del);
+    return { ok: true };
+  });
+
+  app.get("/api/github/:owner/:repo/branches", async (req) => {
+    const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
+    return listBranches(`${owner}/${repo}`);
+  });
+
+  // Branch names contain "/" (feature/x), so the branch rides in the query string.
+  app.delete("/api/github/:owner/:repo/branch", async (req) => {
+    const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
+    const { name } = z.object({ name: z.string().min(1) }).parse(req.query);
+    await deleteBranch(`${owner}/${repo}`, name);
+    return { deleted: name };
+  });
+
+  app.get("/api/github/:owner/:repo/releases", async (req) => {
+    const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
+    return listReleases(`${owner}/${repo}`);
+  });
+
+  app.get("/api/github/:owner/:repo/contents", async (req) => {
+    const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
+    const { path, ref } = z
+      .object({ path: z.string().optional(), ref: z.string().optional() })
+      .parse(req.query);
+    return getContents(`${owner}/${repo}`, path ?? "", ref ?? "");
   });
 
   app.get("/api/github/:owner/:repo/pulls/:number", async (req) => {
@@ -211,11 +293,10 @@ export function integrationRoutes(app: FastifyInstance): void {
       .parse(req.body);
     const slug = `${owner}/${repo}`;
     const seed = await githubContext(slug, kind, number);
-    const session = createChatSession(projectId, {
+    const terminal = createTerminal(projectId, {
+      kind: "claude",
       title: `${repo}#${number}`,
       cwdPathId,
-      permissionMode: "default",
-      origin: `github:${kind}:${number}`,
       useWorktree,
     });
     db.insert(schema.workHistory)
@@ -223,12 +304,12 @@ export function integrationRoutes(app: FastifyInstance): void {
         id: newId(),
         projectId,
         kind: "github_linked",
-        refId: session.id,
-        summary: `Session from ${slug} ${kind} #${number}`,
+        refId: terminal.id,
+        summary: `Claude terminal from ${slug} ${kind} #${number}`,
         createdAt: nowIso(),
       })
       .run();
     reply.code(201);
-    return { sessionId: session.id, seed };
+    return { terminalId: terminal.id, seed };
   });
 }
