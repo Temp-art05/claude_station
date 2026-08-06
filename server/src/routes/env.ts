@@ -4,6 +4,7 @@ import { z } from "zod";
 import { envSetInputSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
+import { parsePatch } from "../lib/patch";
 import { listEnvSets, loadEnvSet } from "../services/env-sets";
 
 const idParam = z.object({ id: z.string() });
@@ -37,7 +38,7 @@ export function envRoutes(app: FastifyInstance): void {
 
   app.patch<{ Params: { id: string } }>("/api/env-sets/:id", async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const input = envSetInputSchema.partial().parse(req.body);
+    const input = parsePatch(envSetInputSchema, req.body);
     const existing = loadEnvSet(id);
     if (!existing) return reply.code(404).send({ error: "Env set not found" });
     db.update(schema.envSets)

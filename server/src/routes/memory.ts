@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { projectMemoryInputSchema } from "@claude-station/shared";
 import { badRequest } from "../lib/path-safety";
+import { parsePatch } from "../lib/patch";
 import {
   createMemory,
   deleteMemory,
@@ -44,7 +45,7 @@ export function memoryRoutes(app: FastifyInstance): void {
 
   app.patch<{ Params: { id: string } }>("/api/memory/:id", async (req) => {
     const { id } = idParam.parse(req.params);
-    return updateMemory(id, projectMemoryInputSchema.partial().parse(req.body));
+    return updateMemory(id, parsePatch(projectMemoryInputSchema, req.body));
   });
 
   app.delete<{ Params: { id: string } }>("/api/memory/:id", async (req, reply) => {
