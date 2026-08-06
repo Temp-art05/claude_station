@@ -1,13 +1,22 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, extname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import matter from "gray-matter";
 import { db, schema } from "../db";
 import { GLOBAL_KNOWLEDGE_DIR, projectKnowledgeDir } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
+import type { UploadedFile } from "../lib/multipart";
 import { badRequest } from "../lib/path-safety";
 import { parseWorkbook } from "./excel";
-import { linkSkill, unlinkSkill } from "./skills";
+import { linkSkill, linkSkillTree, unlinkSkill } from "./skills";
 
 const SPREADSHEET = new Set([".xlsx", ".xls", ".xlsm", ".csv"]);
 const TEXTUAL = new Set([
@@ -89,6 +98,103 @@ export function importFile(input: ImportInput) {
   return row;
 }
 
+export interface FolderImportInput {
+  projectId: string | null;
+  /** Name of the dropped folder — becomes the item name and the dir on disk. */
+  rootName: string;
+  /** Paths already sanitised and relative to the folder root. */
+  files: UploadedFile[];
+  description?: string;
+  folder?: string;
+}
+
+/**
+ * A whole directory as ONE knowledge item: storedPath is the directory, the
+ * internal structure is preserved. A global folder whose root holds a SKILL.md
+ * is a packaged skill and goes through the skill pipeline instead.
+ */
+export function importFolder(input: FolderImportInput) {
+  if (input.files.length === 0) throw badRequest("The folder is empty");
+
+  if (input.projectId === null && input.files.some((f) => f.relPath === "SKILL.md")) {
+    return importSkillBundle(input);
+  }
+
+  const base = safeName(input.rootName);
+  const store = storeDirFor(input.projectId);
+  let dirName = base;
+  for (let n = 2; existsSync(join(store, dirName)); n += 1) dirName = `${base}-${n}`;
+  const storedPath = join(store, dirName);
+
+  let sizeBytes = 0;
+  for (const file of input.files) {
+    const target = join(storedPath, file.relPath);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, file.data);
+    sizeBytes += file.data.byteLength;
+  }
+
+  const row = {
+    id: newId(),
+    projectId: input.projectId,
+    kind: "folder" as const,
+    name: dirName,
+    description: input.description || `Folder — ${input.files.length} files`,
+    folder: input.folder ?? "",
+    originalFilename: dirName,
+    storedPath,
+    parsedPath: null,
+    sizeBytes,
+    createdAt: nowIso(),
+  };
+  db.insert(schema.knowledgeItems).values(row).run();
+
+  if (input.projectId) {
+    db.insert(schema.workHistory)
+      .values({
+        id: newId(),
+        projectId: input.projectId,
+        kind: "knowledge_imported",
+        refId: row.id,
+        summary: `Imported folder ${dirName} (${input.files.length} files)`,
+        createdAt: row.createdAt,
+      })
+      .run();
+  }
+  return row;
+}
+
+/** A folder with a root SKILL.md — the whole tree becomes one linked skill. */
+function importSkillBundle(input: FolderImportInput) {
+  const skillMd = input.files.find((f) => f.relPath === "SKILL.md")!;
+  const parsed = matter(skillMd.data.toString("utf8"));
+  const requestedName =
+    typeof parsed.data.name === "string" && parsed.data.name.trim()
+      ? parsed.data.name.trim()
+      : input.rootName;
+
+  const { dir, linked, finalName } = linkSkillTree(requestedName, input.files);
+
+  const row = {
+    id: newId(),
+    projectId: null,
+    kind: "skill" as const,
+    name: finalName,
+    folder: input.folder ?? "",
+    description:
+      input.description ||
+      (typeof parsed.data.description === "string" ? parsed.data.description : "") ||
+      "Skill",
+    originalFilename: `${finalName}/`,
+    storedPath: dir,
+    parsedPath: linked,
+    sizeBytes: input.files.reduce((sum, f) => sum + f.data.byteLength, 0),
+    createdAt: nowIso(),
+  };
+  db.insert(schema.knowledgeItems).values(row).run();
+  return { ...row, linked };
+}
+
 /** Skills live in the app store and are symlinked into the user-level skills dir. */
 export function importSkill(input: {
   filename: string;
@@ -161,6 +267,7 @@ export function deleteKnowledge(id: string): void {
 /** Body text used for full-text search — only for reasonably small text files. */
 export function textBodyOf(storedPath: string, kind: string): string {
   if (kind === "skill" || kind === "excel") return "";
+  if (kind === "folder") return folderTextBody(storedPath);
   const ext = extname(storedPath).toLowerCase();
   if (!TEXTUAL.has(ext)) return "";
   try {
@@ -169,4 +276,38 @@ export function textBodyOf(storedPath: string, kind: string): string {
   } catch {
     return "";
   }
+}
+
+/** Concatenate the textual files inside a folder item, capped so FTS stays sane. */
+function folderTextBody(dir: string, budget = { bytes: 2_000_000 }): string {
+  const parts: string[] = [];
+  const walk = (current: string, rel: string) => {
+    if (budget.bytes <= 0) return;
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (budget.bytes <= 0) return;
+      const abs = join(current, entry.name);
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs, relPath);
+        continue;
+      }
+      if (!entry.isFile() || !TEXTUAL.has(extname(entry.name).toLowerCase())) continue;
+      try {
+        const size = statSync(abs).size;
+        if (size > 1_000_000) continue;
+        parts.push(`\n--- ${relPath} ---\n${readFileSync(abs, "utf8")}`);
+        budget.bytes -= size;
+      } catch {
+        /* unreadable file — skip */
+      }
+    }
+  };
+  walk(dir, "");
+  return parts.join("");
 }

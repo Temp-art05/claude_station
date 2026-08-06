@@ -1,9 +1,26 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileSpreadsheet, FileText, FolderInput, Sparkles, Trash2, Upload } from "lucide-react";
+import {
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Folder,
+  FolderInput,
+  FolderUp,
+  Sparkles,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import {
+  collectDropped,
+  directoryInputProps,
+  filesFromDirectoryInput,
+  uploadFiles,
+  type PickedFile,
+} from "@/lib/folder-upload";
 import { fileUrl, uploadFile } from "@/lib/upload";
 import { cn } from "@/lib/utils";
 import { KNOWLEDGE_FOLDER_SUGGESTIONS } from "@claude-station/shared";
@@ -11,7 +28,7 @@ import { KNOWLEDGE_FOLDER_SUGGESTIONS } from "@claude-station/shared";
 export interface KnowledgeRow {
   id: string;
   projectId: string | null;
-  kind: "doc" | "excel" | "skill";
+  kind: "doc" | "excel" | "skill" | "folder";
   name: string;
   description: string;
   folder: string;
@@ -30,6 +47,7 @@ const ICONS = {
   doc: FileText,
   excel: FileSpreadsheet,
   skill: Sparkles,
+  folder: Folder,
 } as const;
 
 function humanSize(bytes: number): string {
@@ -48,6 +66,7 @@ export function KnowledgePanel({ projectId }: Props) {
   const queryKey = ["knowledge", projectId ?? "global"];
   const fileRef = useRef<HTMLInputElement | null>(null);
   const skillRef = useRef<HTMLInputElement | null>(null);
+  const dirRef = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sheets, setSheets] = useState<{ id: string; names: string[] } | null>(null);
@@ -75,6 +94,21 @@ export function KnowledgePanel({ projectId }: Props) {
       else if (folder) params.set("folder", folder);
       const suffix = params.toString() ? `?${params}` : "";
       return uploadFile<KnowledgeRow>(`/api/knowledge${suffix}`, file);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey });
+      void qc.invalidateQueries({ queryKey: ["knowledge-folders"] });
+    },
+    onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+  });
+
+  const uploadFolder = useMutation({
+    mutationFn: async (files: PickedFile[]) => {
+      const params = new URLSearchParams();
+      if (projectId) params.set("projectId", projectId);
+      else if (folder) params.set("folder", folder);
+      const suffix = params.toString() ? `?${params}` : "";
+      return uploadFiles<KnowledgeRow>(`/api/knowledge/folder${suffix}`, files);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey });
@@ -170,7 +204,14 @@ export function KnowledgePanel({ projectId }: Props) {
           e.preventDefault();
           setDragging(false);
           setError(null);
-          for (const file of Array.from(e.dataTransfer.files)) upload.mutate({ file });
+          // Folders go to the folder endpoint as one item; files keep the old path.
+          void collectDropped(e.dataTransfer.items).then(({ folders, looseFiles }) => {
+            for (const dropped of folders) {
+              if (dropped.files.length === 0) continue;
+              uploadFolder.mutate(dropped.files);
+            }
+            for (const file of looseFiles) upload.mutate({ file });
+          });
         }}
         className={`rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
           dragging ? "border-accent bg-accent/5" : "border-edge"
@@ -178,7 +219,7 @@ export function KnowledgePanel({ projectId }: Props) {
       >
         <Upload size={20} className="mx-auto mb-2 text-ink-faint" />
         <p className="text-sm text-ink-muted">
-          Drop docs or spreadsheets here — Claude gets them as read-only context.
+          Drop docs, spreadsheets or whole folders here — Claude gets them as read-only context.
         </p>
         <p className="mb-3 text-[11px] text-ink-faint">
           .xlsx is also flattened to CSV per sheet so Claude can read it reliably.
@@ -201,6 +242,14 @@ export function KnowledgePanel({ projectId }: Props) {
           )}
           <Button size="sm" onClick={() => fileRef.current?.click()} disabled={upload.isPending}>
             <Upload size={13} /> {upload.isPending ? "Uploading…" : "Choose file"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => dirRef.current?.click()}
+            disabled={uploadFolder.isPending}
+          >
+            <FolderUp size={13} /> {uploadFolder.isPending ? "Importing…" : "Import folder"}
           </Button>
           {!projectId && (
             <Button size="sm" variant="ghost" onClick={() => skillRef.current?.click()}>
@@ -226,6 +275,20 @@ export function KnowledgePanel({ projectId }: Props) {
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) uploadSkill.mutate(file);
+            e.target.value = "";
+          }}
+        />
+        <input
+          ref={dirRef}
+          type="file"
+          className="hidden"
+          {...directoryInputProps}
+          onChange={(e) => {
+            if (e.target.files?.length) {
+              setError(null);
+              const files = filesFromDirectoryInput(e.target.files);
+              if (files.length) uploadFolder.mutate(files);
+            }
             e.target.value = "";
           }}
         />
@@ -291,13 +354,15 @@ export function KnowledgePanel({ projectId }: Props) {
                 ))}
               </select>
             )}
-            <a
-              href={fileUrl(`/api/knowledge/${row.id}/file`)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink"
-              title="Download"
-            >
-              <Download size={14} />
-            </a>
+            {row.kind !== "folder" && (
+              <a
+                href={fileUrl(`/api/knowledge/${row.id}/file`)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink"
+                title="Download"
+              >
+                <Download size={14} />
+              </a>
+            )}
             {row.attached ? (
               <Button
                 size="icon"

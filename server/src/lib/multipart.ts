@@ -49,8 +49,10 @@ export function sanitizeRelPath(input: string): string {
   if (segments.length === 0 || segments.length > 32) throw badRequest(`Invalid path: ${input}`);
   const clean = segments.map((seg) => {
     if (seg === "." || seg === "..") throw badRequest(`Path may not contain "${seg}": ${input}`);
-    const safe = seg.replace(/^\.+/, "").trim().slice(0, 180);
-    if (!safe) throw badRequest(`Invalid path segment in: ${input}`);
+    // Dotfiles stay (an app bundle needs its .env / .gitignore) — only the
+    // navigation segments above are dangerous.
+    const safe = seg.trim().slice(0, 180);
+    if (!safe || /^\.+$/.test(safe)) throw badRequest(`Invalid path segment in: ${input}`);
     return safe;
   });
   const joined = clean.join("/");

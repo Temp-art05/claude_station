@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
@@ -151,8 +151,19 @@ export function attachedAssetDirs(projectId: string): string[] {
   const dirs = new Set<string>();
   for (const item of listProjectKnowledge(projectId)) {
     if (!item.attached) continue;
-    const dir = item.storedPath.slice(0, item.storedPath.lastIndexOf("/"));
+    // Folder items (and skills) store the directory itself; files need their parent.
+    const dir = isDirectory(item.storedPath)
+      ? item.storedPath
+      : item.storedPath.slice(0, item.storedPath.lastIndexOf("/"));
     if (dir) dirs.add(dir);
   }
   return [...dirs];
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }

@@ -91,6 +91,8 @@ export const projectPathSchema = z.object({
   description: z.string().default(""),
   isDefault: z.boolean().default(false),
   sortOrder: z.number().int().default(0),
+  /** Default env set for this repo's command runs (UI and Claude's tool). */
+  envSetId: z.string().nullable().default(null),
   commands: z.array(pathCommandSchema).default([]),
 });
 export type ProjectPath = z.infer<typeof projectPathSchema>;
@@ -111,6 +113,7 @@ export const projectPathInputSchema = z.object({
   label: z.string().min(1),
   description: z.string().default(""),
   isDefault: z.boolean().default(false),
+  envSetId: z.string().nullable().default(null),
   commands: z.array(pathCommandInputSchema).default([]),
 });
 export type ProjectPathInput = z.infer<typeof projectPathInputSchema>;
@@ -197,6 +200,9 @@ export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
 // ── Terminals ─────────────────────────────────────────────────────────────────
 
+export const terminalKindSchema = z.enum(["shell", "claude"]);
+export type TerminalKind = z.infer<typeof terminalKindSchema>;
+
 export const terminalSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -204,6 +210,10 @@ export const terminalSchema = z.object({
   cwd: z.string(),
   envSetId: z.string().nullable(),
   pid: z.number().nullable(),
+  /** shell = plain login shell; claude = runs the `claude` CLI, dies with it. */
+  kind: terminalKindSchema.default("shell"),
+  /** Command the PTY was started with (app agents) — restart re-runs it. */
+  command: z.string().nullable().default(null),
   status: z.enum(["running", "exited", "orphaned"]),
   createdAt: z.string(),
   closedAt: z.string().nullable(),
@@ -215,6 +225,7 @@ export const terminalInputSchema = z.object({
   cwdPathId: z.string().optional(),
   cwd: z.string().optional(),
   envSetId: z.string().nullable().optional(),
+  kind: terminalKindSchema.optional(),
 });
 export type TerminalInput = z.infer<typeof terminalInputSchema>;
 
@@ -270,6 +281,12 @@ export const agentSchema = z.object({
   maxTurns: z.number().int().nullable(),
   background: z.boolean(),
   viewPath: z.string().nullable(),
+  /** App agents: URL of the running app's own web UI, iframed in the workspace tab. */
+  viewUrl: z.string().nullable(),
+  /** App agents: command run in a Station terminal at bundleDir (e.g. "./start.sh"). */
+  startCommand: z.string().nullable(),
+  /** Companion files from a folder import — readable by the agent's sessions. */
+  bundleDir: z.string().nullable(),
   enabledGlobally: z.boolean(),
   source: z.enum(["manual", "imported"]),
   createdAt: z.string(),
@@ -295,9 +312,28 @@ export const agentInputSchema = z.object({
   background: z.boolean().default(false),
   /** Path (under the data dir) to a custom .html view for this agent's tab. */
   viewPath: z.string().nullable().default(null),
+  /** App agents: URL of the running app's UI (iframed); takes priority over viewPath. */
+  viewUrl: z.string().nullable().default(null),
+  /** App agents: command run in a Station terminal at the bundle dir. */
+  startCommand: z.string().nullable().default(null),
   enabledGlobally: z.boolean().default(false),
 });
 export type AgentInput = z.infer<typeof agentInputSchema>;
+
+/** Per-file outcome of a folder (batch) import — e.g. a directory of workflows. */
+export const folderImportResultSchema = z.object({
+  file: z.string(),
+  status: z.enum(["imported", "renamed", "skipped", "error"]),
+  name: z.string().optional(),
+  id: z.string().optional(),
+  error: z.string().optional(),
+});
+export type FolderImportResult = z.infer<typeof folderImportResultSchema>;
+
+export const folderImportSummarySchema = z.object({
+  results: z.array(folderImportResultSchema),
+});
+export type FolderImportSummary = z.infer<typeof folderImportSummarySchema>;
 
 /** Tool names offered in the agent editor — built-ins plus our own MCP server. */
 export const AGENT_TOOL_CHOICES = [
@@ -357,6 +393,8 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
     maxTurns: 40,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   },
   {
@@ -384,6 +422,8 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
     maxTurns: 40,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   },
   {
@@ -414,6 +454,8 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
     maxTurns: 30,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   },
   {
@@ -440,6 +482,8 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
     maxTurns: 80,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   },
   {
@@ -456,6 +500,8 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
     maxTurns: null,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   },
   {
@@ -478,6 +524,8 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
     maxTurns: 20,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   },
   {
@@ -506,6 +554,8 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
     maxTurns: null,
     background: false,
     viewPath: null,
+    viewUrl: null,
+    startCommand: null,
     enabledGlobally: false,
   },
 ];
@@ -664,6 +714,8 @@ export const workflowRunSchema = z.object({
   projectId: z.string(),
   workflowId: z.string(),
   title: z.string(),
+  /** What the user asked this run to do — shown to every step's agent. */
+  goal: z.string().nullable().default(null),
   status: workflowRunStatusSchema,
   currentStepKey: z.string().nullable(),
   cwd: z.string(),
@@ -684,6 +736,8 @@ export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 export const workflowRunInputSchema = z.object({
   workflowId: z.string(),
   title: z.string().optional(),
+  /** Free-text goal for this run (e.g. "impl feature v1.5.0 trong spec"). */
+  goal: z.string().max(4000).optional(),
   cwdPathId: z.string().optional(),
   envSetId: z.string().nullable().optional(),
   useWorktree: z.boolean().optional(),
@@ -1047,17 +1101,31 @@ export type KnowledgeItem = z.infer<typeof knowledgeItemSchema>;
 
 // ── Integrations ──────────────────────────────────────────────────────────────
 
-export const jiraConfigSchema = z.object({
-  baseUrl: z.string().url(),
-  email: z.string().email(),
-  apiToken: z.string().min(1),
-});
+export const jiraConfigSchema = z
+  .object({
+    baseUrl: z.string().url(),
+    /** "cloud" = *.atlassian.net (Basic email+token, API v3, ADF).
+     *  "server" = self-hosted Server/DC (Bearer PAT, API v2, plain-text bodies). */
+    deployment: z.enum(["cloud", "server"]).default("cloud"),
+    email: z.string().email().optional().or(z.literal("")),
+    apiToken: z.string().min(1),
+  })
+  .superRefine((cfg, ctx) => {
+    if (cfg.deployment === "cloud" && !cfg.email) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["email"],
+        message: "Email is required for Jira Cloud",
+      });
+    }
+  });
 export type JiraConfig = z.infer<typeof jiraConfigSchema>;
 
 export const githubConfigSchema = z.object({
   repos: z.array(z.string()).default([]), // "owner/repo"
 });
 export type GithubConfig = z.infer<typeof githubConfigSchema>;
+
 
 // ── Work history ──────────────────────────────────────────────────────────────
 

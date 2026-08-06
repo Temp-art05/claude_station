@@ -20,6 +20,8 @@ export const projectPaths = sqliteTable(
     description: text("description").notNull().default(""),
     isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
     sortOrder: integer("sort_order").notNull().default(0),
+    /** Default env set for THIS repo — used by command runs (UI and Claude's tool). */
+    envSetId: text("env_set_id"),
   },
   (t) => [index("idx_project_paths_project").on(t.projectId)],
 );
@@ -138,6 +140,9 @@ export const terminals = sqliteTable(
     cwd: text("cwd").notNull(),
     envSetId: text("env_set_id"),
     pid: integer("pid"),
+    kind: text("kind").notNull().default("shell"), // shell|claude
+    /** Command the PTY was started with (app agents) — restart re-runs it. */
+    command: text("command"),
     status: text("status").notNull().default("running"), // running|exited|orphaned
     createdAt: text("created_at").notNull(),
     closedAt: text("closed_at"),
@@ -177,7 +182,7 @@ export const knowledgeItems = sqliteTable(
   {
     id: text("id").primaryKey(),
     projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }), // NULL = global
-    kind: text("kind").notNull(), // doc|excel|skill
+    kind: text("kind").notNull(), // doc|excel|skill|folder
     name: text("name").notNull(),
     description: text("description").notNull().default(""),
     /** Library folder, e.g. "android" or "fe/react". Empty = unfiled. */
@@ -272,6 +277,19 @@ export const agents = sqliteTable(
      * dir to an .html file. Empty = the default chat view.
      */
     viewPath: text("view_path"),
+    /**
+     * App agents (a runnable app packaged as a folder): URL of the app's own
+     * web UI (iframed in the workspace tab, wins over viewPath) and the command
+     * that starts it — run in a Station terminal at bundleDir so stdin confirm
+     * prompts keep working.
+     */
+    viewUrl: text("view_url"),
+    startCommand: text("start_command"),
+    /**
+     * Companion files from a folder import, stored under data/agents/<name>.
+     * Added to additionalDirectories whenever this agent is in a session.
+     */
+    bundleDir: text("bundle_dir"),
     /** Available to every project without an explicit opt-in. */
     enabledGlobally: integer("enabled_globally", { mode: "boolean" }).notNull().default(false),
     source: text("source").notNull().default("manual"), // manual|imported
@@ -352,6 +370,8 @@ export const workflowRuns = sqliteTable(
       .references(() => projects.id, { onDelete: "cascade" }),
     workflowId: text("workflow_id").notNull(),
     title: text("title").notNull(),
+    /** What the user asked this run to do — injected into every step's context. */
+    goal: text("goal"),
     /**
      * Snapshot of the steps as they were at start. Editing the workflow later
      * must not rewrite a finished run or change one that's mid-flight.

@@ -17,8 +17,10 @@ describe("sanitizeRelPath", () => {
     expect(() => sanitizeRelPath("a\0b")).toThrow();
   });
 
-  it("strips leading dots per segment so nothing hides", () => {
-    expect(sanitizeRelPath("folder/.hidden.md")).toBe("folder/hidden.md");
+  it("keeps dotfiles — app bundles need their .env", () => {
+    expect(sanitizeRelPath("folder/.env")).toBe("folder/.env");
+    expect(sanitizeRelPath("folder/.hidden.md")).toBe("folder/.hidden.md");
+    expect(() => sanitizeRelPath("folder/...")).toThrow();
   });
 });
 

@@ -49,7 +49,14 @@ app.setErrorHandler((err: unknown, _req, reply) => {
 });
 
 await app.register(fastifyWebsocket);
-await app.register(fastifyMultipart);
+// Folder imports send one part per file — the default parts cap (1000) is too
+// small for a real directory; per-route fileSize limits stay the byte guard.
+// preservePath keeps the relative path in part.filename (busboy strips it by
+// default); every consumer sanitises the name before touching the filesystem.
+await app.register(fastifyMultipart, {
+  preservePath: true,
+  limits: { fileSize: 64 * 1024 * 1024, files: 2000, parts: 2100, fields: 20 },
+});
 registerAuth(app);
 
 // FTS5 tables + triggers live outside drizzle's schema.

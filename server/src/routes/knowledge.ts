@@ -5,8 +5,9 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { knowledgeFolderSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
+import { readSinglePart, readUploadParts, splitFolderRoot } from "../lib/multipart";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
-import { deleteKnowledge, importFile, importSkill } from "../services/knowledge";
+import { deleteKnowledge, importFile, importFolder, importSkill } from "../services/knowledge";
 import {
   attachFolder,
   attachItems,
@@ -21,20 +22,6 @@ import { skillLinkState } from "../services/skills";
 
 const idParam = z.object({ id: z.string() });
 const MAX_UPLOAD = 64 * 1024 * 1024;
-
-/** Read a multipart upload into memory — imports are documents, not videos. */
-async function readUpload(req: {
-  file: (opts?: { limits?: { fileSize?: number } }) => Promise<
-    { filename: string; toBuffer(): Promise<Buffer>; fields: Record<string, unknown> } | undefined
-  >;
-}) {
-  const part = await req.file({ limits: { fileSize: MAX_UPLOAD } });
-  if (!part) throw badRequest("No file in request");
-  const data = await part.toBuffer();
-  const field = part.fields.description as { value?: unknown } | undefined;
-  const description = typeof field?.value === "string" ? field.value : "";
-  return { filename: part.filename, data, description };
-}
 
 export function knowledgeRoutes(app: FastifyInstance): void {
   app.get("/api/knowledge", async (req) => {
@@ -88,7 +75,7 @@ export function knowledgeRoutes(app: FastifyInstance): void {
         folder: knowledgeFolderSchema.optional(),
       })
       .parse(req.query ?? {});
-    const upload = await readUpload(req as never);
+    const upload = await readSinglePart(req, MAX_UPLOAD);
     const row = importFile({
       projectId: projectId ?? null,
       filename: upload.filename,
@@ -102,9 +89,33 @@ export function knowledgeRoutes(app: FastifyInstance): void {
     return row;
   });
 
+  /**
+   * A whole dropped directory as one knowledge item. Each part's filename is
+   * the file's path relative to the folder root. A global folder with a root
+   * SKILL.md imports as a packaged skill instead.
+   */
+  app.post("/api/knowledge/folder", async (req, reply) => {
+    const { projectId, folder } = z
+      .object({ projectId: z.string().optional(), folder: knowledgeFolderSchema.optional() })
+      .parse(req.query ?? {});
+    const { files, fields } = await readUploadParts(req, { maxFileSize: MAX_UPLOAD });
+    const split = splitFolderRoot(files);
+    const rootName = fields.rootName || split.rootName;
+    const row = importFolder({
+      projectId: projectId ?? null,
+      rootName,
+      files: split.files,
+      description: fields.description,
+      folder,
+    });
+    reindexKnowledge(row.id);
+    reply.code(201);
+    return row.kind === "skill" ? { ...row, linkState: skillLinkState(row.name) } : row;
+  });
+
   app.post("/api/knowledge/skills/import", async (req, reply) => {
     const { folder } = z.object({ folder: knowledgeFolderSchema.optional() }).parse(req.query ?? {});
-    const upload = await readUpload(req as never);
+    const upload = await readSinglePart(req, MAX_UPLOAD);
     if (extname(upload.filename).toLowerCase() !== ".md") {
       throw badRequest("A skill is a SKILL.md markdown file");
     }
@@ -139,8 +150,13 @@ export function knowledgeRoutes(app: FastifyInstance): void {
     // A parsed sheet is served from the .parsed dir next to the original.
     const target = sheet && row.parsedPath ? join(row.parsedPath, `${sheet}.csv`) : row.storedPath;
     const safe = assertPathAllowed(target);
-    if (!existsSync(safe) || statSync(safe).isDirectory()) {
+    if (!existsSync(safe)) {
       return reply.code(404).send({ error: "File missing on disk" });
+    }
+    if (statSync(safe).isDirectory()) {
+      return reply
+        .code(400)
+        .send({ error: "This item is a folder — browse it in the data directory" });
     }
     reply.header("Content-Type", "application/octet-stream");
     reply.header("Content-Disposition", `inline; filename="${row.originalFilename}"`);
