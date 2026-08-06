@@ -92,11 +92,20 @@ export function useRuns(projectId: string) {
   });
 }
 
+export function useDeleteRun(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => api.delete(`/api/workflow-runs/${runId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["workflow-runs", projectId] }),
+  });
+}
+
 export function useStartRun(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: {
       workflowId: string;
+      goal?: string;
       cwdPathId?: string;
       envSetId?: string | null;
       useWorktree?: boolean;

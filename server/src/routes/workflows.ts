@@ -1,11 +1,14 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
+import { basename } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   knowledgeFolderSchema,
   workflowInputSchema,
   workflowRunInputSchema,
+  type FolderImportResult,
 } from "@claude-station/shared";
+import { readSinglePart, readUploadParts } from "../lib/multipart";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import {
   createWorkflow,
@@ -14,13 +17,16 @@ import {
   getWorkflow,
   importWorkflowsToProject,
   importWorkflowYaml,
+  importWorkflowYamlDetailed,
   listProjectWorkflows,
   listWorkflowFolders,
   listWorkflows,
   removeWorkflowFromProject,
+  renderWorkflowRunbook,
   setWorkflowFolder,
   updateWorkflow,
 } from "../services/workflows";
+import { createTerminal } from "../services/terminals";
 import {
   advanceRun,
   answerQuestions,
@@ -76,16 +82,43 @@ export function workflowRoutes(app: FastifyInstance): void {
   });
 
   app.post("/api/workflows/import", async (req, reply) => {
-    const part = await (
-      req as unknown as {
-        file: (o?: { limits?: { fileSize?: number } }) => Promise<
-          { filename: string; toBuffer(): Promise<Buffer> } | undefined
-        >;
-      }
-    ).file({ limits: { fileSize: 2 * 1024 * 1024 } });
-    if (!part) throw badRequest("No file in request");
+    const upload = await readSinglePart(req, 2 * 1024 * 1024);
     reply.code(201);
-    return importWorkflowYaml((await part.toBuffer()).toString("utf8"), part.filename);
+    return importWorkflowYaml(upload.data.toString("utf8"), upload.filename);
+  });
+
+  /** Batch import: every .yaml/.yml/.json in a dropped folder, one workflow each. */
+  app.post("/api/workflows/import-folder", async (req, reply) => {
+    const { files } = await readUploadParts(req, { maxFileSize: 2 * 1024 * 1024 });
+    const results: FolderImportResult[] = [];
+    for (const file of files) {
+      if (!/\.(ya?ml|json)$/i.test(file.relPath)) {
+        results.push({ file: file.relPath, status: "skipped" });
+        continue;
+      }
+      try {
+        const { workflow, renamedFrom } = importWorkflowYamlDetailed(
+          file.data.toString("utf8"),
+          basename(file.relPath),
+        );
+        results.push({
+          file: file.relPath,
+          status: renamedFrom ? "renamed" : "imported",
+          name: workflow.name,
+          id: workflow.id,
+        });
+      } catch (err) {
+        results.push({
+          file: file.relPath,
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    // Always 201: the per-file statuses carry the outcome (incl. all-errors),
+    // and the client renders them — a 400 would drop the detail on the floor.
+    reply.code(201);
+    return { results };
   });
 
   app.get<{ Params: { id: string } }>("/api/workflows/:id/export", async (req, reply) => {
@@ -131,6 +164,38 @@ export function workflowRoutes(app: FastifyInstance): void {
     const { id } = idParam.parse(req.params);
     return listRuns(id);
   });
+
+  /**
+   * Dynamic mode: run the workflow INSIDE an interactive claude terminal.
+   * Returns a seeded terminal — the runbook prompt is typed into the CLI,
+   * never auto-sent; the user steers step-by-step by chatting.
+   */
+  app.post<{ Params: { id: string; workflowId: string } }>(
+    "/api/projects/:id/workflows/:workflowId/claude-run",
+    async (req, reply) => {
+      const { id, workflowId } = z.object({ id: z.string(), workflowId: z.string() }).parse(req.params);
+      const { goal, cwdPathId, envSetId, useWorktree } = z
+        .object({
+          goal: z.string().max(4000).optional(),
+          cwdPathId: z.string().optional(),
+          envSetId: z.string().nullable().optional(),
+          useWorktree: z.boolean().optional(),
+        })
+        .parse(req.body ?? {});
+      const workflow = getWorkflow(workflowId);
+      if (!workflow) return reply.code(404).send({ error: "Workflow not found" });
+      const seed = renderWorkflowRunbook(workflow, goal);
+      const terminal = createTerminal(id, {
+        kind: "claude",
+        title: `wf:${workflow.name}`,
+        cwdPathId,
+        envSetId: envSetId ?? null,
+        useWorktree,
+      });
+      reply.code(201);
+      return { terminalId: terminal.id, seed };
+    },
+  );
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/workflow-runs", async (req, reply) => {
     const { id } = idParam.parse(req.params);

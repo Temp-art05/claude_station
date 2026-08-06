@@ -1,14 +1,30 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Download, Pencil, Plus, Trash2, Upload, Workflow as WorkflowIcon } from "lucide-react";
+import {
+  Download,
+  FolderUp,
+  Pencil,
+  Plus,
+  Trash2,
+  Upload,
+  Workflow as WorkflowIcon,
+  X,
+} from "lucide-react";
 import {
   KNOWLEDGE_FOLDER_SUGGESTIONS,
   WORKFLOW_PRESETS,
+  type FolderImportResult,
   type Workflow,
   type WorkflowInput,
 } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
+import {
+  directoryInputProps,
+  filesFromDirectoryInput,
+  uploadFiles,
+  type PickedFile,
+} from "@/lib/folder-upload";
 import { fileUrl, uploadFile } from "@/lib/upload";
 import { cn } from "@/lib/utils";
 import { WorkflowEditor } from "@/features/workflows/WorkflowEditor";
@@ -26,15 +42,28 @@ export function WorkflowsPage() {
   const del = useDeleteWorkflow();
   const move = useMoveWorkflow();
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const dirRef = useRef<HTMLInputElement | null>(null);
 
   const [folder, setFolder] = useState<string>("");
   const [editing, setEditing] = useState<Workflow | null>(null);
   const [creating, setCreating] = useState<WorkflowInput | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [importResults, setImportResults] = useState<FolderImportResult[] | null>(null);
 
   const importFile = useMutation({
     mutationFn: (file: File) => uploadFile<Workflow>("/api/workflows/import", file),
     onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["workflows"] });
+      void qc.invalidateQueries({ queryKey: ["workflow-folders"] });
+    },
+    onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+  });
+
+  const importFolder = useMutation({
+    mutationFn: (files: PickedFile[]) =>
+      uploadFiles<{ results: FolderImportResult[] }>("/api/workflows/import-folder", files),
+    onSuccess: (data) => {
+      setImportResults(data.results);
       void qc.invalidateQueries({ queryKey: ["workflows"] });
       void qc.invalidateQueries({ queryKey: ["workflow-folders"] });
     },
@@ -66,6 +95,14 @@ export function WorkflowsPage() {
             <Upload size={14} /> Import .yaml
           </Button>
           <Button
+            variant="ghost"
+            onClick={() => dirRef.current?.click()}
+            disabled={importFolder.isPending}
+            title="Import every .yaml/.yml/.json in a folder — one workflow each"
+          >
+            <FolderUp size={14} /> {importFolder.isPending ? "Importing…" : "Import folder"}
+          </Button>
+          <Button
             variant="primary"
             onClick={() => setCreating({ name: "", description: "", folder, steps: [] })}
           >
@@ -86,7 +123,50 @@ export function WorkflowsPage() {
             e.target.value = "";
           }}
         />
+        <input
+          ref={dirRef}
+          type="file"
+          className="hidden"
+          {...directoryInputProps}
+          onChange={(e) => {
+            if (e.target.files?.length) {
+              setError(null);
+              setImportResults(null);
+              const files = filesFromDirectoryInput(e.target.files);
+              if (files.length) importFolder.mutate(files);
+            }
+            e.target.value = "";
+          }}
+        />
       </div>
+
+      {importResults && (
+        <Card className="mb-3 p-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <p className="text-xs font-medium">
+              Folder import — {importResults.filter((r) => r.status === "imported").length}{" "}
+              imported, {importResults.filter((r) => r.status === "renamed").length} renamed,{" "}
+              {importResults.filter((r) => r.status === "error").length} failed,{" "}
+              {importResults.filter((r) => r.status === "skipped").length} skipped
+            </p>
+            <Button size="icon" variant="ghost" onClick={() => setImportResults(null)} aria-label="Dismiss">
+              <X size={13} />
+            </Button>
+          </div>
+          <div className="space-y-0.5">
+            {importResults
+              .filter((r) => r.status !== "skipped")
+              .map((r) => (
+                <p key={r.file} className="font-mono text-[11px] text-ink-muted">
+                  {r.file}
+                  {r.status === "imported" && ` → ${r.name}`}
+                  {r.status === "renamed" && ` → renamed to ${r.name}`}
+                  {r.status === "error" && <span className="text-err"> — {r.error}</span>}
+                </p>
+              ))}
+          </div>
+        </Card>
+      )}
 
       {folders.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-1.5">

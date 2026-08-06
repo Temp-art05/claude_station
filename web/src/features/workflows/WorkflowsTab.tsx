@@ -1,14 +1,17 @@
 import { useState } from "react";
-import { Link } from "react-router";
-import { ChevronLeft, Import, Play, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import { Link, useNavigate } from "react-router";
+import { useMutation } from "@tanstack/react-query";
+import { ChevronLeft, Import, Play, Terminal, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import type { EnvSet, Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/input";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { RunView } from "./RunView";
 import {
+  useDeleteRun,
   useImportToProject,
   useRemoveFromProject,
   useRuns,
@@ -25,6 +28,7 @@ interface Props {
 export function WorkflowsTab({ project, envSets }: Props) {
   const { data: workflows = [] } = useWorkflows(project.id);
   const { data: runs = [] } = useRuns(project.id);
+  const deleteRun = useDeleteRun(project.id);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [startFor, setStartFor] = useState<string | null>(null);
@@ -118,9 +122,12 @@ export function WorkflowsTab({ project, envSets }: Props) {
           <p className="mb-1.5 text-xs font-bold tracking-wide text-ink-faint uppercase">Runs</p>
           <div className="space-y-1.5">
             {runs.map((r) => (
-              <button
+              <div
                 key={r.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => setOpenRun(r.id)}
+                onKeyDown={(e) => e.key === "Enter" && setOpenRun(r.id)}
                 className="glass flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-xs hover:border-hairline-strong"
               >
                 <span
@@ -150,7 +157,22 @@ export function WorkflowsTab({ project, envSets }: Props) {
                 <span className="shrink-0 font-mono text-[10.5px] text-ink-faint">
                   {r.completedSteps}/{r.totalSteps}
                 </span>
-              </button>
+                {["done", "failed", "cancelled"].includes(r.status) && (
+                  <button
+                    title="Delete run"
+                    disabled={deleteRun.isPending}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`Delete run "${r.title}"? Its artifacts go too.`)) {
+                        deleteRun.mutate(r.id);
+                      }
+                    }}
+                    className="shrink-0 text-ink-faint hover:text-err disabled:opacity-50"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         </>
@@ -294,13 +316,47 @@ function StartDialog({
   onStarted: (runId: string) => void;
 }) {
   const start = useStartRun(project.id);
+  const navigate = useNavigate();
+  const [goal, setGoal] = useState("");
   const [pathId, setPathId] = useState(project.paths[0]?.id ?? "");
   const [envSetId, setEnvSetId] = useState("");
   const [useWorktree, setUseWorktree] = useState(false);
 
+  // Dynamic mode: the workflow runs inside an interactive claude terminal —
+  // the runbook is typed into the CLI and the user steers it by chatting.
+  const claudeRun = useMutation({
+    mutationFn: () =>
+      api.post<{ terminalId: string; seed: string }>(
+        `/api/projects/${project.id}/workflows/${workflowId}/claude-run`,
+        {
+          goal: goal.trim() || undefined,
+          cwdPathId: pathId || undefined,
+          envSetId: envSetId || null,
+          useWorktree,
+        },
+      ),
+    onSuccess: ({ terminalId, seed }) => {
+      onClose();
+      navigate(
+        `/projects/${project.id}?tab=chat&terminal=${terminalId}&seed=${encodeURIComponent(seed)}`,
+      );
+    },
+  });
+
   return (
     <Dialog open onClose={onClose} title="Start workflow run">
       <div className="space-y-3">
+        <div>
+          <Label>Goal — what should this run do?</Label>
+          <textarea
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            rows={3}
+            autoFocus
+            placeholder={'VD: "Lên plan + impl feature v1.5.0 trong spec" — mọi step đều thấy goal này'}
+            className="w-full rounded-md border border-edge bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
+          />
+        </div>
         <div>
           <Label>Working directory</Label>
           <select
@@ -350,9 +406,22 @@ function StartDialog({
             {start.error instanceof Error ? start.error.message : "Could not start"}
           </p>
         )}
+        {claudeRun.isError && (
+          <p className="text-xs text-err">
+            {claudeRun.error instanceof Error ? claudeRun.error.message : "Could not open terminal"}
+          </p>
+        )}
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
             Cancel
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={claudeRun.isPending}
+            title="Chạy workflow trong terminal Claude — bạn điều khiển từng step bằng chat (skip / confirm / đổi hướng)"
+            onClick={() => claudeRun.mutate()}
+          >
+            <Terminal size={13} /> {claudeRun.isPending ? "Opening…" : "Run in Claude tab"}
           </Button>
           <Button
             variant="primary"
@@ -361,6 +430,7 @@ function StartDialog({
               start.mutate(
                 {
                   workflowId,
+                  goal: goal.trim() || undefined,
                   cwdPathId: pathId || undefined,
                   envSetId: envSetId || null,
                   useWorktree,

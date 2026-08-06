@@ -293,7 +293,65 @@ export function exportWorkflowYaml(workflow: Workflow): string {
   );
 }
 
+/**
+ * Render a workflow as a "runbook" prompt for an interactive claude terminal.
+ * The engine's stepper is replaced by the conversation itself: the CLI session
+ * announces each step, pauses on ⏸ steps, and the user steers by chatting
+ * (skip a step, change course, answer questions inline).
+ */
+export function renderWorkflowRunbook(workflow: Workflow, goal?: string): string {
+  const steps = workflow.steps
+    .map((s, i) => {
+      const gate = s.requiresConfirm ? " ⏸ (dừng chờ tôi duyệt xong step này rồi mới đi tiếp)" : "";
+      const head = `### Step ${i + 1}/${workflow.steps.length} — [${s.key}] ${s.title}${gate}`;
+      const meta =
+        s.type === "command" && s.commandName
+          ? `Chạy command của project: \`${s.commandName}\` (dùng run_project_command nếu có, không thì chạy trực tiếp).`
+          : s.type === "manual"
+            ? "Step thủ công: nhắc tôi làm, chờ tôi báo xong rồi mới đi tiếp."
+            : "";
+      return [head, meta, s.instruction ?? ""].filter(Boolean).join("\n");
+    })
+    .join("\n\n");
+
+  return [
+    `Chạy workflow **${workflow.name}** ngay trong phiên này, chế độ tương tác (dynamic).`,
+    ...(workflow.description ? [`> ${workflow.description}`] : []),
+    "",
+    "## Goal",
+    goal?.trim() || "(chưa nhập — hỏi tôi goal trước khi bắt đầu step 1)",
+    "",
+    "## Các step",
+    steps,
+    "",
+    "## Luật điều khiển (quan trọng)",
+    "- Trước khi BẮT ĐẦU mỗi step: in một dòng `▶ Step k/n — <title>` + 1-2 câu bạn sắp làm gì.",
+    "- Kết thúc step: tóm tắt kết quả (file đã tạo/sửa, kết luận). Step có ⏸ thì DỪNG HẲN, chờ tôi trả lời rồi mới sang step sau.",
+    "- Câu hỏi cần tôi chốt → hỏi thẳng trong chat và chờ; không tự đoán.",
+    "- Tôi có thể điều khiển bằng chat bất cứ lúc nào: \"bỏ qua step X\", \"quay lại step Y\", \"sửa yêu cầu: …\", \"đang ở step nào?\" — làm theo và xác nhận lại kế hoạch.",
+    "- Chỉ làm việc của step đang chạy; không tự ý gộp/nhảy step trừ khi tôi bảo.",
+    "- Instruction có thể nhắc các tool `workflow_ask` / `workflow_emit_artifact` / `workflow_note` (chỉ có ở chế độ engine). Trong phiên này quy đổi: workflow_ask = hỏi tôi trực tiếp trong chat; workflow_emit_artifact = ghi ra file và nói rõ đường dẫn; workflow_note = in một dòng tóm tắt.",
+  ].join("\n");
+}
+
+/** Imports never fail on a name clash — they get a -2/-3 suffix instead. */
+export function uniqueWorkflowName(base: string): string {
+  const taken = new Set(db.select().from(schema.workflows).all().map((r) => r.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 export function importWorkflowYaml(contents: string, filename?: string): Workflow {
+  return importWorkflowYamlDetailed(contents, filename).workflow;
+}
+
+export function importWorkflowYamlDetailed(
+  contents: string,
+  filename?: string,
+): { workflow: Workflow; renamedFrom: string | null } {
   let parsed: unknown;
   try {
     parsed = yaml.load(contents);
@@ -318,5 +376,8 @@ export function importWorkflowYaml(contents: string, filename?: string): Workflo
       `Invalid workflow: ${first ? `${first.path.join(".")} — ${first.message}` : "unknown field"}`,
     );
   }
-  return createWorkflow(result.data, "imported");
+  const requested = result.data.name;
+  const finalName = uniqueWorkflowName(requested);
+  const workflow = createWorkflow({ ...result.data, name: finalName }, "imported");
+  return { workflow, renamedFrom: finalName === requested ? null : requested };
 }

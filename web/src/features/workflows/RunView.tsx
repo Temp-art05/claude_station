@@ -110,6 +110,11 @@ export function RunView({ runId, projectId }: { runId: string; projectId: string
           </Button>
         )}
       </div>
+      {run.goal && (
+        <p className="rounded-md border border-edge bg-surface px-3 py-2 text-xs text-ink-muted">
+          <span className="font-medium text-ink">Goal:</span> {run.goal}
+        </p>
+      )}
 
       {open.length > 0 && (
         <Card className="border-warn/40 bg-warn/5">

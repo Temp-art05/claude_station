@@ -120,6 +120,7 @@ export function getRun(runId: string): WorkflowRun | null {
     projectId: row.projectId,
     workflowId: row.workflowId,
     title: row.title,
+    goal: row.goal,
     status: row.status as WorkflowRun["status"],
     currentStepKey: row.currentStepKey,
     cwd: row.cwd,
@@ -263,7 +264,14 @@ function upsertRunStep(
 
 export function createRun(
   projectId: string,
-  input: { workflowId: string; title?: string; cwdPathId?: string; envSetId?: string | null; useWorktree?: boolean },
+  input: {
+    workflowId: string;
+    title?: string;
+    goal?: string;
+    cwdPathId?: string;
+    envSetId?: string | null;
+    useWorktree?: boolean;
+  },
 ): WorkflowRun {
   const workflow = getWorkflow(input.workflowId);
   if (!workflow) throw badRequest("Workflow not found");
@@ -289,6 +297,7 @@ export function createRun(
       projectId,
       workflowId: workflow.id,
       title: input.title ?? `${workflow.name} · ${new Date().toLocaleString()}`,
+      goal: input.goal?.trim() || null,
       // Snapshot: later edits to the workflow must not rewrite this run.
       definition: JSON.stringify(workflow.steps),
       status: "pending",
@@ -337,6 +346,9 @@ function stepContext(run: WorkflowRun, step: WorkflowStep, index: number): strin
     `## Workflow: ${run.title}`,
     `Step ${index + 1}/${run.steps.length} — ${step.title} (key: ${step.key})`,
   ];
+
+  // The user's own words for what this run is about — every step sees them.
+  if (run.goal) lines.push("", "## Goal of this run (from the user)", run.goal);
 
   const finished = run.runSteps.filter((s) => s.status === "done" || s.status === "skipped");
   if (finished.length > 0) {
