@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import { getToken } from "./token";
+import { getToken, reportTokenRejected } from "./token";
 
 /** Multipart POST — fetch sets the boundary, so no Content-Type here. */
 export async function uploadFile<T>(
@@ -17,6 +17,7 @@ export async function uploadFile<T>(
     body: form,
   });
   if (!res.ok) {
+    if (res.status === 401) reportTokenRejected();
     let message = res.statusText;
     try {
       message = ((await res.json()) as { error?: string }).error ?? message;
