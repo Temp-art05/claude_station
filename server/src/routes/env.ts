@@ -5,7 +5,7 @@ import { envSetInputSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
 import { parsePatch } from "../lib/patch";
-import { listEnvSets, loadEnvSet } from "../services/env-sets";
+import { listEnvSets, loadEnvSet, setEnvSetShares } from "../services/env-sets";
 
 const idParam = z.object({ id: z.string() });
 
@@ -32,6 +32,7 @@ export function envRoutes(app: FastifyInstance): void {
         .values({ id: newId(), envSetId: id, key: v.key, value: v.value, isSecret: v.isSecret })
         .run();
     }
+    setEnvSetShares(id, input.sharedWith);
     reply.code(201);
     return loadEnvSet(id);
   });
@@ -58,6 +59,9 @@ export function envRoutes(app: FastifyInstance): void {
           .run();
       }
     }
+    // Re-run even when the list is unchanged: moving a set to a new owner (or
+    // to global) has to drop shares that no longer make sense.
+    setEnvSetShares(id, input.sharedWith ?? existing.sharedWith);
     return loadEnvSet(id);
   });
 

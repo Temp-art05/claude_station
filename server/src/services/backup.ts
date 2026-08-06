@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { CLAUDE_SKILLS_LINK_DIR, DATA_DIR, DB_PATH, SKILLS_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
@@ -90,7 +90,9 @@ export function importArchive(archive: Buffer): { backupDir: string; note: strin
     rewritePaths(dbFile, manifest.dataDir, DATA_DIR);
 
     // Move current data aside — reversible by hand if anything goes wrong.
-    const backupDir = join(dirname(DATA_DIR), `data-backup-${Date.now().toString(36)}`);
+    // Kept inside the data dir: next to it means the repo root, where the
+    // snapshot lands in git status and in every lint/tsc glob.
+    const backupDir = join(DATA_DIR, "backups", `data-backup-${Date.now().toString(36)}`);
     mkdirSync(backupDir, { recursive: true });
     for (const name of ["claude-station.db", ...PORTABLE_DIRS]) {
       const src = join(DATA_DIR, name);

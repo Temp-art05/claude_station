@@ -177,6 +177,28 @@ export const envVars = sqliteTable(
   (t) => [index("idx_env_vars_set").on(t.envSetId)],
 );
 
+/**
+ * Extra projects an env set is available in, on top of its owner.
+ *
+ * `env_sets.project_id` says who owns a set (NULL = global, everyone gets it).
+ * Ownership alone made a set unusable anywhere else, which is wrong for the
+ * common case: the same credentials feed several projects. This is the same
+ * shape as project_knowledge — share without duplicating.
+ */
+export const projectEnvSets = sqliteTable(
+  "project_env_sets",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    envSetId: text("env_set_id")
+      .notNull()
+      .references(() => envSets.id, { onDelete: "cascade" }),
+  },
+  (t) => [uniqueIndex("idx_project_env_sets_unique").on(t.projectId, t.envSetId)],
+);
+
 export const knowledgeItems = sqliteTable(
   "knowledge_items",
   {

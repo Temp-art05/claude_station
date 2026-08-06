@@ -33,6 +33,28 @@ export function hasToken(): boolean {
   return token.length > 0;
 }
 
+type Listener = () => void;
+const rejectedListeners = new Set<Listener>();
+
+/**
+ * A token can stop working mid-session — a server restart against a fresh data
+ * dir mints a new one. Every 401 comes from the same auth hook, so it is
+ * definitive: drop the dead token and let the gate ask again, rather than leave
+ * an app on screen where nothing loads and nothing explains why.
+ */
+export function reportTokenRejected(): void {
+  token = "";
+  localStorage.removeItem(STORAGE_KEY);
+  for (const listener of [...rejectedListeners]) listener();
+}
+
+export function onTokenRejected(listener: Listener): () => void {
+  rejectedListeners.add(listener);
+  return () => {
+    rejectedListeners.delete(listener);
+  };
+}
+
 /** WS handshakes can't send headers, so the token rides in the query string. */
 export function wsUrl(path: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

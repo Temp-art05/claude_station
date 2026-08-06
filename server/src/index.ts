@@ -71,6 +71,9 @@ if (interruptedSteps > 0) {
 }
 
 app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
+// Gated on purpose: the UI calls this to find out whether the token it holds is
+// still the one we accept, before it renders an app that would 401 everywhere.
+app.get("/api/auth/check", async () => ({ ok: true }));
 
 projectRoutes(app);
 terminalRoutes(app);
