@@ -3,7 +3,15 @@ import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
-  { ignores: ["**/dist/**", "**/node_modules/**", "data/**", "server/drizzle/**"] },
+  {
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "data/**",
+      "data-backup-*/**", // import snapshots from before they moved under data/
+      "server/drizzle/**",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

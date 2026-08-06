@@ -8,6 +8,8 @@ dist/
 
 # App-managed runtime data (db, knowledge, skills, logs, worktrees, token)
 data/
+# Pre-existing import snapshots — imports now write these under data/backups/
+data-backup-*/
 
 # IDE
 .idea/
