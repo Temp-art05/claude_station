@@ -170,6 +170,7 @@ export interface PrDetail {
   mergeable: string;
   createdAt: string;
   labels: string[];
+  assignees: string[];
   comments: { author: string; body: string; createdAt: string }[];
   reviews: { author: string; state: string; body: string; submittedAt: string }[];
   commits: { sha: string; message: string; author: string; date: string }[];
@@ -195,6 +196,7 @@ export async function pullDetailFull(repo: string, number: number): Promise<PrDe
     mergeable?: string;
     createdAt?: string;
     labels?: { name?: string }[];
+    assignees?: { login?: string }[];
     comments?: { author?: { login?: string }; body?: string; createdAt?: string }[];
     reviews?: { author?: { login?: string }; state?: string; body?: string; submittedAt?: string }[];
     commits?: {
@@ -220,8 +222,8 @@ export async function pullDetailFull(repo: string, number: number): Promise<PrDe
     assertRepo(repo),
     "--json",
     "number,title,body,state,isDraft,author,headRefName,baseRefName,url,additions," +
-      "deletions,changedFiles,reviewDecision,mergeable,createdAt,labels,comments," +
-      "reviews,commits,files,statusCheckRollup",
+      "deletions,changedFiles,reviewDecision,mergeable,createdAt,labels,assignees," +
+      "comments,reviews,commits,files,statusCheckRollup",
   ]);
   return {
     number: raw.number,
@@ -240,6 +242,7 @@ export async function pullDetailFull(repo: string, number: number): Promise<PrDe
     mergeable: raw.mergeable ?? "UNKNOWN",
     createdAt: raw.createdAt ?? "",
     labels: (raw.labels ?? []).map((l) => l.name ?? "").filter(Boolean),
+    assignees: (raw.assignees ?? []).map((a) => a.login ?? "").filter(Boolean),
     comments: (raw.comments ?? []).map((c) => ({
       author: c.author?.login ?? "unknown",
       body: c.body ?? "",
@@ -311,6 +314,116 @@ export async function reviewPull(
   await ghRaw(args);
 }
 
+export interface CreatePullInput {
+  title: string;
+  body?: string;
+  base: string;
+  head: string;
+  draft?: boolean;
+}
+
+export async function createPull(
+  repo: string,
+  input: CreatePullInput,
+): Promise<{ number: number; url: string }> {
+  assertRepo(repo);
+  assertBranch(input.base);
+  assertBranch(input.head);
+  if (input.base === input.head) throw badRequest("Base and head must be different branches");
+  const args = [
+    "pr",
+    "create",
+    "--repo",
+    repo,
+    "--title",
+    input.title,
+    "--body",
+    input.body ?? "",
+    "--base",
+    input.base,
+    "--head",
+    input.head,
+  ];
+  if (input.draft) args.push("--draft");
+  // gh prints the new PR's URL as the last line of stdout.
+  const url = (await ghRaw(args)).trim().split("\n").pop() ?? "";
+  const number = Number(/\/pull\/(\d+)/.exec(url)?.[1] ?? 0);
+  return { number, url };
+}
+
+export interface RepoViewer {
+  login: string;
+  canPush: boolean;
+  canAdmin: boolean;
+}
+
+export async function repoViewer(repo: string): Promise<RepoViewer> {
+  assertRepo(repo);
+  const [user, meta] = await Promise.all([
+    gh<{ login?: string }>(["api", "user"]),
+    gh<{ permissions?: { push?: boolean; admin?: boolean } }>(["api", `repos/${repo}`]),
+  ]);
+  return {
+    login: user.login ?? "",
+    canPush: !!meta.permissions?.push,
+    canAdmin: !!meta.permissions?.admin,
+  };
+}
+
+export async function editPullBase(repo: string, number: number, base: string): Promise<void> {
+  await ghRaw([
+    "pr",
+    "edit",
+    String(number),
+    "--repo",
+    assertRepo(repo),
+    "--base",
+    assertBranch(base),
+  ]);
+}
+
+export async function closePull(repo: string, number: number): Promise<void> {
+  await ghRaw(["pr", "close", String(number), "--repo", assertRepo(repo)]);
+}
+
+export async function reopenPull(repo: string, number: number): Promise<void> {
+  await ghRaw(["pr", "reopen", String(number), "--repo", assertRepo(repo)]);
+}
+
+export async function setPullDraft(repo: string, number: number, draft: boolean): Promise<void> {
+  const args = ["pr", "ready", String(number), "--repo", assertRepo(repo)];
+  if (draft) args.push("--undo");
+  await ghRaw(args);
+}
+
+export async function listAssignableUsers(repo: string): Promise<string[]> {
+  assertRepo(repo);
+  const raw = await gh<{ login?: string }[]>(["api", `repos/${repo}/assignees?per_page=100`]);
+  return raw.map((u) => u.login ?? "").filter(Boolean);
+}
+
+const LOGIN_RE = /^[a-zA-Z\d](?:[a-zA-Z\d-]{0,38})$/;
+
+function assertLogins(logins: string[]): string[] {
+  for (const login of logins) {
+    if (!LOGIN_RE.test(login)) throw badRequest(`Invalid GitHub login: ${login}`);
+  }
+  return logins;
+}
+
+export async function editPullAssignees(
+  repo: string,
+  number: number,
+  add: string[],
+  remove: string[],
+): Promise<void> {
+  if (!add.length && !remove.length) return;
+  const args = ["pr", "edit", String(number), "--repo", assertRepo(repo)];
+  if (add.length) args.push("--add-assignee", assertLogins(add).join(","));
+  if (remove.length) args.push("--remove-assignee", assertLogins(remove).join(","));
+  await ghRaw(args);
+}
+
 export type MergeMethod = "merge" | "squash" | "rebase";
 
 export async function mergePull(
@@ -355,11 +468,16 @@ export async function listBranches(
 // refuse a leading "-" so a name can't read as a gh flag.
 const BRANCH_RE = /^[^\s~^:?*\\[\]]+$/;
 
-export async function deleteBranch(repo: string, branch: string): Promise<void> {
-  assertRepo(repo);
+function assertBranch(branch: string): string {
   if (!branch || branch.startsWith("-") || !BRANCH_RE.test(branch)) {
     throw badRequest(`Invalid branch name: ${branch}`);
   }
+  return branch;
+}
+
+export async function deleteBranch(repo: string, branch: string): Promise<void> {
+  assertRepo(repo);
+  assertBranch(branch);
   const { defaultBranch, branches } = await listBranches(repo);
   if (branch === defaultBranch) throw badRequest("Refusing to delete the default branch");
   if (branches.find((b) => b.name === branch)?.protected) {

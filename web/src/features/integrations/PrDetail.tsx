@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   ExternalLink,
   GitCommitHorizontal,
   GitMerge,
   GitPullRequest,
+  Users,
   X,
 } from "lucide-react";
 import { Badge, Card } from "@/components/ui/card";
@@ -32,6 +34,7 @@ interface PrDetailData {
   mergeable: string;
   createdAt: string;
   labels: string[];
+  assignees: string[];
   comments: { author: string; body: string; createdAt: string }[];
   reviews: { author: string; state: string; body: string; submittedAt: string }[];
   commits: { sha: string; message: string; author: string; date: string }[];
@@ -42,6 +45,12 @@ interface PrDetailData {
 interface PrDiff {
   files: { path: string; patch: string }[];
   truncated: boolean;
+}
+
+interface RepoViewer {
+  login: string;
+  canPush: boolean;
+  canAdmin: boolean;
 }
 
 const SUB_TABS = [
@@ -120,6 +129,11 @@ export function PrDetail({
     queryFn: () => api.get<PrDiff>(`${base}/diff`),
     enabled: tab === "files",
   });
+  const { data: viewer } = useQuery({
+    queryKey: ["gh-viewer", owner, name],
+    queryFn: () => api.get<RepoViewer>(`/api/github/${owner}/${name}/viewer`),
+    staleTime: 5 * 60_000,
+  });
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["gh-pr-detail", owner, name, number] });
@@ -137,6 +151,23 @@ export function PrDetail({
   });
   const merge = useMutation({
     mutationFn: () => api.post(`${base}/merge`, { method: mergeMethod, deleteBranch }),
+    onSuccess: refresh,
+  });
+  const editBase = useMutation({
+    mutationFn: (branch: string) => api.post(`${base}/base`, { base: branch }),
+    onSuccess: refresh,
+  });
+  const closeReopen = useMutation({
+    mutationFn: (action: "close" | "reopen") => api.post(`${base}/${action}`),
+    onSuccess: refresh,
+  });
+  const draftToggle = useMutation({
+    mutationFn: (draft: boolean) => api.post(`${base}/draft`, { draft }),
+    onSuccess: refresh,
+  });
+  const assign = useMutation({
+    mutationFn: (input: { add?: string[]; remove?: string[] }) =>
+      api.post(`${base}/assignees`, input),
     onSuccess: refresh,
   });
 
@@ -158,6 +189,16 @@ export function PrDetail({
   }
 
   const badge = stateBadge(pr);
+  // GitHub requires push access to review/merge, and never lets authors approve their own PR.
+  const canReview = !!viewer && viewer.canPush && viewer.login !== pr.author;
+  const reviewHint = !viewer
+    ? "Checking permissions…"
+    : !viewer.canPush
+      ? "You don't have push access"
+      : viewer.login === pr.author
+        ? "You can't approve your own PR"
+        : undefined;
+  const pushHint = !viewer ? "Checking permissions…" : !viewer.canPush ? "You don't have push access" : undefined;
   // Review + comment events interleave on GitHub's conversation timeline.
   const timeline = [
     ...pr.comments.map((c) => ({ ...c, kind: "comment" as const, at: c.createdAt })),
@@ -185,14 +226,25 @@ export function PrDetail({
         <span>
           <span className="text-ink">{pr.author}</span> wants to merge{" "}
           {pr.commits.length} commit{pr.commits.length === 1 ? "" : "s"} into{" "}
-          <code className="font-mono">{pr.baseRefName}</code> from{" "}
-          <code className="font-mono">{pr.headRefName}</code>
+          <BaseBranchControl
+            owner={owner}
+            name={name}
+            pr={pr}
+            pending={editBase.isPending}
+            onPick={(branch) => editBase.mutate(branch)}
+          />{" "}
+          from <code className="font-mono">{pr.headRefName}</code>
         </span>
         <span className="text-ok">+{pr.additions}</span>
         <span className="text-err">−{pr.deletions}</span>
         <span>{pr.changedFiles} files</span>
         {pr.labels.map((l) => (
           <Badge key={l}>{l}</Badge>
+        ))}
+        {pr.assignees.map((a) => (
+          <Badge key={a} tone="accent">
+            @{a}
+          </Badge>
         ))}
         {pr.reviewDecision === "APPROVED" && <Badge tone="ok">approved</Badge>}
         {pr.reviewDecision === "CHANGES_REQUESTED" && <Badge tone="err">changes requested</Badge>}
@@ -270,22 +322,25 @@ export function PrDetail({
                 </p>
               )}
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={send.isPending}
-                  onClick={() => send.mutate({ kind: "approve" })}
-                >
-                  <Check size={12} /> Approve
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={!comment.trim() || send.isPending}
-                  onClick={() => send.mutate({ kind: "request-changes" })}
-                >
-                  Request changes
-                </Button>
+                {/* Tooltip lives on the span: disabled buttons have pointer-events none. */}
+                <span className="inline-flex gap-2" title={canReview ? undefined : reviewHint}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!canReview || send.isPending}
+                    onClick={() => send.mutate({ kind: "approve" })}
+                  >
+                    <Check size={12} /> Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!canReview || !comment.trim() || send.isPending}
+                    onClick={() => send.mutate({ kind: "request-changes" })}
+                  >
+                    Request changes
+                  </Button>
+                </span>
                 <Button
                   size="sm"
                   variant="primary"
@@ -294,6 +349,47 @@ export function PrDetail({
                 >
                   Comment
                 </Button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-2">
+                <AssigneeMenu
+                  owner={owner}
+                  name={name}
+                  assignees={pr.assignees}
+                  pending={assign.isPending}
+                  onToggle={(user, assigned) =>
+                    assign.mutate(assigned ? { remove: [user] } : { add: [user] })
+                  }
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={draftToggle.isPending}
+                  onClick={() => draftToggle.mutate(!pr.isDraft)}
+                >
+                  {pr.isDraft ? "Ready for review" : "Convert to draft"}
+                </Button>
+                {(assign.isError || draftToggle.isError || closeReopen.isError || editBase.isError) && (
+                  <span className="text-xs text-err">
+                    {[assign.error, draftToggle.error, closeReopen.error, editBase.error]
+                      .filter((e): e is Error => e instanceof Error)
+                      .map((e) => e.message)[0] ?? "Action failed"}
+                  </span>
+                )}
+                <div className="ml-auto">
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={closeReopen.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Close PR #${pr.number} without merging?`)) {
+                        closeReopen.mutate("close");
+                      }
+                    }}
+                  >
+                    <X size={12} /> Close pull request
+                  </Button>
+                </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-2">
@@ -323,11 +419,11 @@ export function PrDetail({
                     {merge.error instanceof Error ? merge.error.message : "Merge failed"}
                   </span>
                 )}
-                <div className="ml-auto">
+                <div className="ml-auto" title={pushHint}>
                   <Button
                     size="sm"
                     variant="primary"
-                    disabled={merge.isPending}
+                    disabled={!viewer?.canPush || merge.isPending}
                     onClick={() => {
                       if (
                         window.confirm(
@@ -342,6 +438,29 @@ export function PrDetail({
                     <GitMerge size={12} /> Merge
                   </Button>
                 </div>
+              </div>
+            </Card>
+          )}
+
+          {pr.state === "CLOSED" && (
+            <Card className="flex flex-wrap items-center gap-2 p-3">
+              <span className="text-xs text-ink-muted">
+                This pull request is closed without being merged.
+              </span>
+              {closeReopen.isError && (
+                <span className="text-xs text-err">
+                  {closeReopen.error instanceof Error ? closeReopen.error.message : "Failed"}
+                </span>
+              )}
+              <div className="ml-auto">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={closeReopen.isPending}
+                  onClick={() => closeReopen.mutate("reopen")}
+                >
+                  <GitPullRequest size={12} /> Reopen pull request
+                </Button>
               </div>
             </Card>
           )}
@@ -410,6 +529,152 @@ export function PrDetail({
               </Card>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Closes a popover when the pointer goes down outside `ref`. */
+function useClickOutside(ref: React.RefObject<HTMLElement | null>, open: boolean, close: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [ref, open, close]);
+}
+
+function BaseBranchControl({
+  owner,
+  name,
+  pr,
+  pending,
+  onPick,
+}: {
+  owner: string;
+  name: string;
+  pr: PrDetailData;
+  pending: boolean;
+  onPick: (branch: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useClickOutside(ref, open, () => setOpen(false));
+  const branches = useQuery({
+    queryKey: ["gh-branches", owner, name],
+    queryFn: () =>
+      api.get<{ defaultBranch: string; branches: { name: string }[] }>(
+        `/api/github/${owner}/${name}/branches`,
+      ),
+    enabled: open,
+  });
+
+  if (pr.state !== "OPEN") return <code className="font-mono">{pr.baseRefName}</code>;
+
+  // GitHub rejects a base equal to the head, and the current base is a no-op.
+  const options = (branches.data?.branches ?? []).filter(
+    (b) => b.name !== pr.baseRefName && b.name !== pr.headRefName,
+  );
+  return (
+    <span ref={ref} className="relative inline-block">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        disabled={pending}
+        title="Change base branch"
+        className="inline-flex cursor-pointer items-center gap-0.5 rounded border border-edge bg-surface px-1 font-mono text-ink hover:border-accent/60 disabled:opacity-50"
+      >
+        {pending ? "changing…" : pr.baseRefName} <ChevronDown size={10} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-hairline-strong bg-surface-2 p-1 shadow-xl backdrop-blur-md">
+          {branches.isLoading && <p className="px-2 py-1 text-xs text-ink-muted">Loading…</p>}
+          {branches.error && (
+            <p className="px-2 py-1 text-xs text-err">
+              {branches.error instanceof Error ? branches.error.message : "Failed to load branches"}
+            </p>
+          )}
+          {options.map((b) => (
+            <button
+              key={b.name}
+              onClick={() => {
+                setOpen(false);
+                if (
+                  window.confirm(
+                    `Change base of #${pr.number} from ${pr.baseRefName} to ${b.name}?`,
+                  )
+                ) {
+                  onPick(b.name);
+                }
+              }}
+              className="block w-full cursor-pointer truncate rounded px-2 py-1 text-left font-mono text-xs text-ink hover:bg-surface"
+            >
+              {b.name}
+            </button>
+          ))}
+          {branches.data && options.length === 0 && (
+            <p className="px-2 py-1 text-xs text-ink-muted">No other branches</p>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function AssigneeMenu({
+  owner,
+  name,
+  assignees,
+  pending,
+  onToggle,
+}: {
+  owner: string;
+  name: string;
+  assignees: string[];
+  pending: boolean;
+  onToggle: (user: string, assigned: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useClickOutside(ref, open, () => setOpen(false));
+  const users = useQuery({
+    queryKey: ["gh-assignable", owner, name],
+    queryFn: () => api.get<string[]>(`/api/github/${owner}/${name}/assignable-users`),
+    enabled: open,
+  });
+
+  return (
+    <div ref={ref} className="relative">
+      <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)}>
+        <Users size={12} /> Assign{assignees.length > 0 ? ` (${assignees.length})` : ""}
+      </Button>
+      {open && (
+        <div className="absolute bottom-full left-0 z-20 mb-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-hairline-strong bg-surface-2 p-1 shadow-xl backdrop-blur-md">
+          {users.isLoading && <p className="px-2 py-1 text-xs text-ink-muted">Loading…</p>}
+          {users.error && (
+            <p className="px-2 py-1 text-xs text-err">
+              {users.error instanceof Error ? users.error.message : "Failed to load users"}
+            </p>
+          )}
+          {(users.data ?? []).map((u) => {
+            const assigned = assignees.includes(u);
+            return (
+              <button
+                key={u}
+                disabled={pending}
+                onClick={() => onToggle(u, assigned)}
+                className="flex w-full cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-ink hover:bg-surface disabled:opacity-50"
+              >
+                <Check size={11} className={assigned ? "text-ok" : "invisible"} />
+                {u}
+              </button>
+            );
+          })}
+          {users.data?.length === 0 && (
+            <p className="px-2 py-1 text-xs text-ink-muted">No assignable users</p>
+          )}
         </div>
       )}
     </div>

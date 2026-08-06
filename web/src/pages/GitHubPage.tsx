@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, ExternalLink, File, Folder, Trash2 } from "lucide-react";
+import { ChevronRight, ExternalLink, File, Folder, GitPullRequest, Trash2 } from "lucide-react";
 import { normalizeGithubRepo } from "@claude-station/shared";
 import { Badge, Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { Input, Label, Textarea } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { WorkWithClaude } from "@/features/integrations/WorkWithClaude";
@@ -80,6 +83,7 @@ export function GitHubPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]["value"]>("pulls");
   const [selectedRepo, setRepo] = useState("");
   const [selectedPr, setSelectedPr] = useState<number | null>(null);
+  const [newPrOpen, setNewPrOpen] = useState(false);
 
   const { data: config } = useQuery({
     queryKey: ["github-repos"],
@@ -175,6 +179,23 @@ export function GitHubPage() {
         <PrDetail owner={owner!} name={name!} number={selectedPr} onBack={() => setSelectedPr(null)} />
       )}
 
+      {tab === "pulls" && selectedPr === null && enabled && (
+        <div className="mb-2 flex justify-end">
+          <Button size="sm" variant="primary" onClick={() => setNewPrOpen(true)}>
+            <GitPullRequest size={12} /> New pull request
+          </Button>
+        </div>
+      )}
+      {enabled && (
+        <NewPrDialog
+          owner={owner!}
+          name={name!}
+          open={newPrOpen}
+          onClose={() => setNewPrOpen(false)}
+          onCreated={(number) => setSelectedPr(number)}
+        />
+      )}
+
       <div className="space-y-1.5">
         {tab === "pulls" &&
           selectedPr === null &&
@@ -238,6 +259,135 @@ export function GitHubPage() {
         {tab === "code" && enabled && <CodeTab owner={owner!} name={name!} />}
       </div>
     </div>
+  );
+}
+
+function NewPrDialog({
+  owner,
+  name,
+  open,
+  onClose,
+  onCreated,
+}: {
+  owner: string;
+  name: string;
+  open: boolean;
+  onClose: () => void;
+  onCreated: (number: number) => void;
+}) {
+  const qc = useQueryClient();
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [base, setBase] = useState("");
+  const [head, setHead] = useState("");
+  const [draft, setDraft] = useState(false);
+
+  const branches = useQuery({
+    queryKey: ["gh-branches", owner, name],
+    queryFn: () => api.get<BranchList>(`/api/github/${owner}/${name}/branches`),
+    enabled: open,
+  });
+  const baseValue = base || branches.data?.defaultBranch || "";
+  const names = branches.data?.branches.map((b) => b.name) ?? [];
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.post<{ number: number; url: string }>(`/api/github/${owner}/${name}/pulls`, {
+        title,
+        body: body || undefined,
+        base: baseValue,
+        head,
+        draft,
+      }),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["gh-pulls", `${owner}/${name}`] });
+      setTitle("");
+      setBody("");
+      setHead("");
+      setBase("");
+      setDraft(false);
+      onClose();
+      if (res.number) onCreated(res.number);
+    },
+  });
+
+  const canCreate = !!title.trim() && !!head && !!baseValue && head !== baseValue && !create.isPending;
+
+  return (
+    <Dialog open={open} onClose={onClose} title="New pull request">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+          <span>base</span>
+          <select
+            value={baseValue}
+            onChange={(e) => setBase(e.target.value)}
+            className="h-7 rounded-md border border-edge bg-surface px-2 font-mono text-xs text-ink"
+          >
+            {names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <span>←</span>
+          <span>compare</span>
+          <select
+            value={head}
+            onChange={(e) => setHead(e.target.value)}
+            className="h-7 rounded-md border border-edge bg-surface px-2 font-mono text-xs text-ink"
+          >
+            <option value="">choose a branch…</option>
+            {names
+              .filter((n) => n !== baseValue)
+              .map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+          </select>
+          {branches.isLoading && <span className="text-ink-faint">loading branches…</span>}
+        </div>
+
+        <div>
+          <Label htmlFor="new-pr-title">Title</Label>
+          <Input
+            id="new-pr-title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Title"
+          />
+        </div>
+        <div>
+          <Label htmlFor="new-pr-body">Description</Label>
+          <Textarea
+            id="new-pr-body"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={5}
+            placeholder="Leave a description (optional)"
+          />
+        </div>
+        <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+          <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} />
+          Create as draft
+        </label>
+
+        {create.isError && (
+          <p className="text-xs text-err">
+            {create.error instanceof Error ? create.error.message : "Failed to create PR"}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="sm" variant="primary" disabled={!canCreate} onClick={() => create.mutate()}>
+            <GitPullRequest size={12} /> {draft ? "Create draft pull request" : "Create pull request"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

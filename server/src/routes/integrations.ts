@@ -15,12 +15,17 @@ import {
   transitionIssue,
 } from "../services/jira";
 import {
+  closePull,
   commentPull,
+  createPull,
   deleteBranch,
+  editPullAssignees,
+  editPullBase,
   getContents,
   githubConfig,
   githubContext,
   issueDetail,
+  listAssignableUsers,
   listBranches,
   listIssues,
   listPulls,
@@ -29,7 +34,10 @@ import {
   pullDetail,
   pullDetailFull,
   pullDiff,
+  reopenPull,
+  repoViewer,
   reviewPull,
+  setPullDraft,
 } from "../services/gh";
 import { createTerminal } from "../services/terminals";
 
@@ -188,6 +196,20 @@ export function integrationRoutes(app: FastifyInstance): void {
     return listIssues(`${owner}/${repo}`);
   });
 
+  app.post("/api/github/:owner/:repo/pulls", async (req) => {
+    const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
+    const input = z
+      .object({
+        title: z.string().min(1),
+        body: z.string().optional(),
+        base: z.string().min(1),
+        head: z.string().min(1),
+        draft: z.boolean().default(false),
+      })
+      .parse(req.body);
+    return createPull(`${owner}/${repo}`, input);
+  });
+
   const prParams = z.object({
     owner: z.string(),
     repo: z.string(),
@@ -232,6 +254,54 @@ export function integrationRoutes(app: FastifyInstance): void {
       })
       .parse(req.body);
     await mergePull(`${owner}/${repo}`, number, method, del);
+    return { ok: true };
+  });
+
+  app.get("/api/github/:owner/:repo/viewer", async (req) => {
+    const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
+    return repoViewer(`${owner}/${repo}`);
+  });
+
+  app.get("/api/github/:owner/:repo/assignable-users", async (req) => {
+    const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
+    return listAssignableUsers(`${owner}/${repo}`);
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/base", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    const { base } = z.object({ base: z.string().min(1) }).parse(req.body);
+    await editPullBase(`${owner}/${repo}`, number, base);
+    return { ok: true };
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/close", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    await closePull(`${owner}/${repo}`, number);
+    return { ok: true };
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/reopen", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    await reopenPull(`${owner}/${repo}`, number);
+    return { ok: true };
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/draft", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    const { draft } = z.object({ draft: z.boolean() }).parse(req.body);
+    await setPullDraft(`${owner}/${repo}`, number, draft);
+    return { ok: true };
+  });
+
+  app.post("/api/github/:owner/:repo/pulls/:number/assignees", async (req) => {
+    const { owner, repo, number } = prParams.parse(req.params);
+    const { add, remove } = z
+      .object({
+        add: z.array(z.string()).default([]),
+        remove: z.array(z.string()).default([]),
+      })
+      .parse(req.body);
+    await editPullAssignees(`${owner}/${repo}`, number, add, remove);
     return { ok: true };
   });
 

@@ -88,6 +88,32 @@ Click PR trong tab Pull requests → view chi tiết (thay list, có nút back):
   `GitHubPage` tab pulls: click title → mở detail, back → về list.
 - Sau comment/review/merge → invalidate detail + list. Merge có `window.confirm`.
 
+## Bổ sung đợt 3 — PR actions (plan: `github-pr-actions.md`)
+
+- **Đổi base branch**: `baseRefName` ở header thành nút mở picker (list branches,
+  bỏ base hiện tại + head), confirm → POST `/pulls/:number/base` →
+  `editPullBase` (`gh pr edit --base`).
+- **Gate quyền**: GET `/:owner/:repo/viewer` → `repoViewer` (`gh api user` +
+  `gh api repos/{repo}` → `{login, canPush, canAdmin}`). Approve/Request changes
+  disabled khi không có push access hoặc viewer là author (tooltip giải thích);
+  Merge disabled khi không có push access.
+- **Close/Reopen**: POST `/pulls/:number/close|reopen` (`gh pr close|reopen`).
+  Nút Close (danger, confirm) ở hàng action; PR CLOSED chưa merge → card Reopen.
+- **Assignees**: `pullDetailFull` trả thêm `assignees[]` (badge `@user` ở header).
+  GET `/:owner/:repo/assignable-users` (`gh api repos/{repo}/assignees`);
+  POST `/pulls/:number/assignees` `{add[], remove[]}` → `editPullAssignees`
+  (`gh pr edit --add-assignee/--remove-assignee`, validate login). UI: popover
+  toggle từng user (pattern click-outside như BranchMenu).
+- **Draft toggle**: POST `/pulls/:number/draft` `{draft}` → `setPullDraft`
+  (`gh pr ready [--undo]`). Nút "Convert to draft" ⇄ "Ready for review".
+- Guard input: `assertBranch` (tách từ `deleteBranch`), `LOGIN_RE` cho assignee;
+  luôn argv array. Mutation nào cũng `onSuccess: refresh` (invalidate detail + list).
+- **Tạo PR mới**: nút "New pull request" ở tab Pull requests → `NewPrDialog`
+  (base/compare select từ `["gh-branches"]`, title, description, checkbox draft) →
+  POST `/:owner/:repo/pulls` → `createPull` (`gh pr create --title --body --base
+  --head [--draft]`, chặn base = head, parse `{number, url}` từ stdout) → tạo xong
+  invalidate list + mở luôn PR detail.
+
 ## Edge cases
 - Branch tên chứa `/` (vd `khai/develop/x`) → DELETE qua query param, encode segment.
 - Xoá default/protected → server chặn 400, UI không hiện nút.
