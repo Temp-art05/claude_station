@@ -1,0 +1,36 @@
+{
+  "name": "claude-station",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local dashboard to orchestrate Claude Code across projects (FE/BE/Mobile) plus daily Jira/Excel/GitHub work",
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "postinstall": "node scripts/fix-node-pty.mjs",
+    "fix:pty": "node scripts/fix-node-pty.mjs",
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "NODE_ENV=production npm run start -w server",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "db:generate": "npm run db:generate -w server",
+    "test": "npm run test -w server",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^9.1.2",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.6",
+    "typescript-eslint": "^8.66.0"
+  }
+}

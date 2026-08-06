@@ -1,0 +1,48 @@
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
+import { AppShell } from "@/components/AppShell";
+import { ProjectsPage } from "@/pages/ProjectsPage";
+import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
+import { SettingsPage } from "@/pages/SettingsPage";
+import { EnvPage } from "@/pages/EnvPage";
+import { JiraPage } from "@/pages/JiraPage";
+import { GitHubPage } from "@/pages/GitHubPage";
+import { KnowledgePage } from "@/pages/KnowledgePage";
+import { AgentsPage } from "@/pages/AgentsPage";
+import { WorkflowsPage } from "@/pages/WorkflowsPage";
+import { SearchPage } from "@/pages/SearchPage";
+import "./index.css";
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
+});
+
+const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <AppShell />,
+    children: [
+      { index: true, element: <Navigate to="/projects" replace /> },
+      { path: "projects", element: <ProjectsPage /> },
+      { path: "projects/:id", element: <ProjectDetailPage /> },
+      { path: "env", element: <EnvPage /> },
+      { path: "settings", element: <SettingsPage /> },
+      { path: "jira", element: <JiraPage /> },
+      { path: "github", element: <GitHubPage /> },
+      { path: "knowledge", element: <KnowledgePage /> },
+      { path: "agents", element: <AgentsPage /> },
+      { path: "workflows", element: <WorkflowsPage /> },
+      { path: "search", element: <SearchPage /> },
+    ],
+  },
+]);
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
+  </StrictMode>,
+);

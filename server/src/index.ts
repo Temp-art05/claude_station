@@ -1,0 +1,120 @@
+import "./lib/env-file"; // must be first: applies <repo>/.env before anything reads it
+import Fastify from "fastify";
+import fastifyMultipart from "@fastify/multipart";
+import fastifyStatic from "@fastify/static";
+import fastifyWebsocket from "@fastify/websocket";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { ZodError } from "zod";
+import { registerAuth, TOKEN } from "./lib/auth";
+import { env } from "./lib/config";
+import { REPO_ROOT } from "./lib/repo-root";
+import { agentRoutes } from "./routes/agents";
+import { attachmentRoutes } from "./routes/attachments";
+import { chatRoutes } from "./routes/chat";
+import { commandRoutes } from "./routes/commands";
+import { envRoutes } from "./routes/env";
+import { gitRoutes } from "./routes/git";
+import { integrationRoutes } from "./routes/integrations";
+import { knowledgeRoutes } from "./routes/knowledge";
+import { memoryRoutes } from "./routes/memory";
+import { projectRoutes } from "./routes/projects";
+import { searchRoutes } from "./routes/search";
+import { settingsRoutes } from "./routes/settings";
+import { terminalRoutes } from "./routes/terminals";
+import { workflowRoutes } from "./routes/workflows";
+import { backfillChatSearch, ensureSearchTables } from "./services/search";
+import { reconcileRunsOnBoot } from "./services/workflow-runner";
+import { killAllRuns } from "./services/commands";
+import { killAll as killAllPtys } from "./services/pty-manager";
+import { chatWs } from "./ws/chat-ws";
+import { workflowWs } from "./ws/workflow-ws";
+import { commandWs } from "./ws/command-ws";
+import { terminalWs } from "./ws/terminal-ws";
+
+const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+
+app.setErrorHandler((err: unknown, _req, reply) => {
+  if (err instanceof ZodError) {
+    return reply.code(400).send({ error: "Validation failed", issues: err.issues });
+  }
+  const statusCode =
+    typeof err === "object" && err !== null && "statusCode" in err &&
+    typeof (err as { statusCode?: unknown }).statusCode === "number"
+      ? (err as { statusCode: number }).statusCode
+      : 500;
+  if (statusCode >= 500) app.log.error(err);
+  const message = err instanceof Error ? err.message : "Internal error";
+  return reply.code(statusCode).send({ error: message });
+});
+
+await app.register(fastifyWebsocket);
+await app.register(fastifyMultipart);
+registerAuth(app);
+
+// FTS5 tables + triggers live outside drizzle's schema.
+ensureSearchTables();
+backfillChatSearch();
+// A step that was mid-flight when the process died is marked interrupted, never
+// resumed blind: it may already have edited files or commented on a ticket.
+const interruptedSteps = reconcileRunsOnBoot();
+if (interruptedSteps > 0) {
+  app.log.warn(`${interruptedSteps} workflow step(s) interrupted by a restart — resume from the UI`);
+}
+
+app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
+
+projectRoutes(app);
+terminalRoutes(app);
+commandRoutes(app);
+chatRoutes(app);
+attachmentRoutes(app);
+agentRoutes(app);
+gitRoutes(app);
+knowledgeRoutes(app);
+memoryRoutes(app);
+workflowRoutes(app);
+integrationRoutes(app);
+searchRoutes(app);
+envRoutes(app);
+settingsRoutes(app);
+terminalWs(app);
+commandWs(app);
+chatWs(app);
+workflowWs(app);
+
+// Prod mode: serve the built web app from the same port.
+const webDist = join(REPO_ROOT, "web/dist");
+if (env.isProd && existsSync(webDist)) {
+  await app.register(fastifyStatic, { root: webDist });
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith("/api") || req.url.startsWith("/ws")) {
+      return reply.code(404).send({ error: "Not found" });
+    }
+    return reply.sendFile("index.html"); // SPA fallback
+  });
+}
+
+// Never leave orphaned shells or build processes behind.
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    killAllPtys();
+    killAllRuns();
+    app.close().finally(() => process.exit(0));
+  });
+}
+
+try {
+  await app.listen({ port: env.port, host: env.host });
+  const uiUrl = env.isProd
+    ? `http://${env.host}:${env.port}`
+    : `http://${env.host}:${env.webPort}`;
+  console.log(`\n  claude-station ready\n  → ${uiUrl}/?t=${TOKEN}\n`);
+  console.log(`  (token also in data/.token — API needs header x-cs-token)\n`);
+} catch (err) {
+  console.error(err);
+  process.exit(1);
+}

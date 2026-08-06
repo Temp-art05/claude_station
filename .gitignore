@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.local
+*.tsbuildinfo
+
+# App-managed runtime data (db, knowledge, skills, logs, worktrees, token)
+data/
+
+# IDE
+.idea/
