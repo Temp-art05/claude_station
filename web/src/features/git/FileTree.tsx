@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -34,12 +34,30 @@ interface Props {
   /** Paths with local modifications get the accent tint, like Android Studio. */
   changed?: Set<string>;
   onOpen: (path: string) => void;
+  /** Bump nonce to expand a path's ancestors and scroll it into view. */
+  reveal?: { path: string; nonce: number } | null;
 }
 
 /** Lazy project tree: children render only when a directory is expanded. */
-export function FileTree({ files, selected, changed, onOpen }: Props) {
+export function FileTree({ files, selected, changed, onOpen, reveal }: Props) {
   const root = useMemo(() => buildTree(files), [files]);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const revealRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!reveal) return;
+    setOpen((prev) => {
+      const next = new Set(prev);
+      const parts = reveal.path.split("/");
+      for (let i = 1; i < parts.length; i += 1) next.add(parts.slice(0, i).join("/"));
+      return next;
+    });
+    // Scroll after the expanded rows have committed to the DOM.
+    const t = setTimeout(() => {
+      revealRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [reveal]);
 
   const toggle = (path: string) =>
     setOpen((prev) => {
@@ -93,6 +111,7 @@ export function FileTree({ files, selected, changed, onOpen }: Props) {
           .map((file) => (
             <button
               key={file.path}
+              ref={reveal && file.path === reveal.path ? revealRef : undefined}
               onClick={() => onOpen(file.path)}
               style={{ paddingLeft: depth * 14 + 6 + 12 }}
               title={file.path}

@@ -9,6 +9,7 @@ import {
   Columns2,
   Eye,
   FileDiff,
+  LocateFixed,
   RotateCcw,
   Rows3,
 } from "lucide-react";
@@ -125,6 +126,7 @@ export function DiffTab({ project }: { project: Project }) {
   const [sideBySide, setSideBySide] = useState(true);
   const [bottomView, setBottomView] = useState<"files" | "history">("files");
   const [mdSource, setMdSource] = useState(false); // .md viewer: preview ⟷ source
+  const [reveal, setReveal] = useState<{ path: string; nonce: number } | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   const statusKey = ["git-status", project.id, pathId];
@@ -427,13 +429,11 @@ export function DiffTab({ project }: { project: Project }) {
           {bottomView === "files" ? (
             <FileTree
               files={tree?.files ?? []}
-              selected={fileSelected}
+              selected={fileSelected ?? changeSelected}
               changed={changedSet}
-              onOpen={(path) =>
-                setSelected(
-                  changedSet.has(path) ? { type: "change", path } : { type: "file", path },
-                )
-              }
+              reveal={reveal}
+              // Tree clicks always preview the file; the Changes list is where diffs open.
+              onOpen={(path) => setSelected({ type: "file", path })}
             />
           ) : (
             <div>
@@ -478,6 +478,18 @@ export function DiffTab({ project }: { project: Project }) {
         {selected && selected.type !== "commit" && (
           <div className="flex items-center gap-2 border-b border-hairline px-3 py-1.5">
             <span className="truncate font-mono text-xs text-ink">{selected.path}</span>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-5 w-5 shrink-0"
+              title="Locate in Project files"
+              onClick={() => {
+                setBottomView("files");
+                setReveal((prev) => ({ path: selected.path, nonce: (prev?.nonce ?? 0) + 1 }));
+              }}
+            >
+              <LocateFixed size={12} />
+            </Button>
             {selected.type === "file" && selected.path.toLowerCase().endsWith(".md") && (
               <div className="ml-auto flex items-center gap-1">
                 <Button

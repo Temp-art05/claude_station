@@ -50,7 +50,9 @@ export interface GitFileChange {
 
 export function status(cwd: string): GitFileChange[] {
   if (!isGitRepo(cwd)) return [];
-  const out = git(cwd, ["status", "--porcelain=v1", "-z"]);
+  // -uall: expand untracked directories into individual files — a bare
+  // `?? dir/` entry can't be diffed (diff --no-index rejects directories).
+  const out = git(cwd, ["status", "--porcelain=v1", "-z", "-uall"]);
   const entries = out.split("\0").filter(Boolean);
   const changes: GitFileChange[] = [];
   for (const entry of entries) {

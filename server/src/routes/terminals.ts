@@ -3,6 +3,8 @@ import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { terminalInputSchema, terminalKindSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
+import { TOKEN } from "../lib/auth";
+import { env as config } from "../lib/config";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed } from "../lib/path-safety";
 import { envVarsFor } from "../services/env-sets";
@@ -86,7 +88,19 @@ export function terminalRoutes(app: FastifyInstance): void {
     const existing = db.select().from(schema.terminals).where(eq(schema.terminals.id, id)).get();
     if (!existing) return reply.code(404).send({ error: "Terminal not found" });
     if (pty.isRunning(id)) return existing;
-    const env = existing.envSetId ? envVarsFor(existing.envSetId) : {};
+    const env: Record<string, string> = existing.envSetId ? envVarsFor(existing.envSetId) : {};
+    // Terminal-mode workflow runs curl step progress back with these two vars.
+    // extraEnv is never persisted — and shouldn't be, port/token can change
+    // across boots — so re-derive it when this terminal drives a run.
+    const drivesRun = db
+      .select()
+      .from(schema.workflowRuns)
+      .where(eq(schema.workflowRuns.terminalId, id))
+      .get();
+    if (drivesRun) {
+      env.CLAUDE_STATION_URL = `http://127.0.0.1:${config.port}`;
+      env.CLAUDE_STATION_TOKEN = TOKEN;
+    }
     const cwd = assertPathAllowed(existing.cwd, existing.projectId);
     const { pid } = pty.start({
       id,
