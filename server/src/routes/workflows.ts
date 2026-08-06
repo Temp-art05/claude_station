@@ -8,6 +8,8 @@ import {
   workflowRunInputSchema,
   type FolderImportResult,
 } from "@claude-station/shared";
+import { TOKEN } from "../lib/auth";
+import { env } from "../lib/config";
 import { readSinglePart, readUploadParts } from "../lib/multipart";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import {
@@ -35,6 +37,7 @@ import {
   deleteRun,
   getRun,
   listRuns,
+  reportTerminalProgress,
   retryStep,
   skipStep,
 } from "../services/workflow-runner";
@@ -166,12 +169,13 @@ export function workflowRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * Dynamic mode: run the workflow INSIDE an interactive claude terminal.
-   * Returns a seeded terminal — the runbook prompt is typed into the CLI,
-   * never auto-sent; the user steers step-by-step by chatting.
+   * Dynamic mode: run the workflow INSIDE an interactive claude terminal that
+   * sits under the run's stepper. The runbook is typed into the CLI (never
+   * auto-sent); the session drives the steps and curls transitions back so the
+   * stepper follows along.
    */
   app.post<{ Params: { id: string; workflowId: string } }>(
-    "/api/projects/:id/workflows/:workflowId/claude-run",
+    "/api/projects/:id/workflows/:workflowId/terminal-run",
     async (req, reply) => {
       const { id, workflowId } = z.object({ id: z.string(), workflowId: z.string() }).parse(req.params);
       const { goal, cwdPathId, envSetId, useWorktree } = z
@@ -184,16 +188,46 @@ export function workflowRoutes(app: FastifyInstance): void {
         .parse(req.body ?? {});
       const workflow = getWorkflow(workflowId);
       if (!workflow) return reply.code(404).send({ error: "Workflow not found" });
-      const seed = renderWorkflowRunbook(workflow, goal);
+
       const terminal = createTerminal(id, {
         kind: "claude",
         title: `wf:${workflow.name}`,
         cwdPathId,
         envSetId: envSetId ?? null,
         useWorktree,
+        // Lets the session report step transitions back to the stepper.
+        extraEnv: {
+          CLAUDE_STATION_URL: `http://127.0.0.1:${env.port}`,
+          CLAUDE_STATION_TOKEN: TOKEN,
+        },
       });
+      const run = createRun(id, {
+        workflowId,
+        goal,
+        cwdPathId,
+        envSetId: envSetId ?? null,
+        mode: "terminal",
+        terminalId: terminal.id,
+      });
+      const seed = renderWorkflowRunbook(workflow, goal, { runId: run.id });
       reply.code(201);
-      return { terminalId: terminal.id, seed };
+      return { run, terminalId: terminal.id, seed };
+    },
+  );
+
+  /** Terminal-mode runs report step transitions here (curl from the PTY). */
+  app.post<{ Params: { id: string } }>(
+    "/api/workflow-runs/:id/terminal-progress",
+    async (req) => {
+      const { id } = idParam.parse(req.params);
+      const input = z
+        .object({
+          step: z.string().min(1),
+          status: z.enum(["running", "done", "failed", "skipped"]),
+          note: z.string().optional(),
+        })
+        .parse(req.body);
+      return reportTerminalProgress(id, input);
     },
   );
 

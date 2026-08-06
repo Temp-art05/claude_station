@@ -71,6 +71,13 @@
       "when": 1786004294926,
       "tag": "0009_workflow-run-goal",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786006839325,
+      "tag": "0010_workflow-terminal-mode",
+      "breakpoints": true
     }
   ]
 }

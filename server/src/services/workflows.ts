@@ -299,7 +299,12 @@ export function exportWorkflowYaml(workflow: Workflow): string {
  * announces each step, pauses on ⏸ steps, and the user steers by chatting
  * (skip a step, change course, answer questions inline).
  */
-export function renderWorkflowRunbook(workflow: Workflow, goal?: string): string {
+export function renderWorkflowRunbook(
+  workflow: Workflow,
+  goal?: string,
+  /** Set for terminal-mode runs: the session curls step transitions back to the stepper. */
+  progress?: { runId: string },
+): string {
   const steps = workflow.steps
     .map((s, i) => {
       const gate = s.requiresConfirm ? " ⏸ (dừng chờ tôi duyệt xong step này rồi mới đi tiếp)" : "";
@@ -331,6 +336,20 @@ export function renderWorkflowRunbook(workflow: Workflow, goal?: string): string
     "- Tôi có thể điều khiển bằng chat bất cứ lúc nào: \"bỏ qua step X\", \"quay lại step Y\", \"sửa yêu cầu: …\", \"đang ở step nào?\" — làm theo và xác nhận lại kế hoạch.",
     "- Chỉ làm việc của step đang chạy; không tự ý gộp/nhảy step trừ khi tôi bảo.",
     "- Instruction có thể nhắc các tool `workflow_ask` / `workflow_emit_artifact` / `workflow_note` (chỉ có ở chế độ engine). Trong phiên này quy đổi: workflow_ask = hỏi tôi trực tiếp trong chat; workflow_emit_artifact = ghi ra file và nói rõ đường dẫn; workflow_note = in một dòng tóm tắt.",
+    ...(progress
+      ? [
+          "",
+          "## Báo tiến độ cho stepper (BẮT BUỘC — station đang hiển thị các step của run này phía trên terminal)",
+          "Mỗi lần một step đổi trạng thái, chạy lệnh Bash sau (thay `<key>` và `<status>`):",
+          "```bash",
+          `curl -s -X POST "$CLAUDE_STATION_URL/api/workflow-runs/${progress.runId}/terminal-progress" \\`,
+          `  -H "x-cs-token: $CLAUDE_STATION_TOKEN" -H 'Content-Type: application/json' \\`,
+          `  -d '{"step":"<key>","status":"<status>"}'`,
+          "```",
+          '- Bắt đầu làm một step → `"status":"running"`. Xong → `"done"`. Tôi bảo bỏ qua → `"skipped"`. Bế tắc/dừng vì lỗi → `"failed"` (thêm `"note":"lý do ngắn"`).',
+          "- Gọi NGAY tại thời điểm chuyển trạng thái, đừng dồn về cuối. Hai biến env `$CLAUDE_STATION_URL` / `$CLAUDE_STATION_TOKEN` đã được set sẵn trong terminal này.",
+        ]
+      : []),
   ].join("\n");
 }
 

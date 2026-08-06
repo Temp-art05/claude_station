@@ -716,6 +716,10 @@ export const workflowRunSchema = z.object({
   title: z.string(),
   /** What the user asked this run to do — shown to every step's agent. */
   goal: z.string().nullable().default(null),
+  /** "engine" = stepper drives; "terminal" = an interactive claude PTY drives. */
+  mode: z.enum(["engine", "terminal"]).default("engine"),
+  /** Terminal-mode runs: the claude PTY that drives this run. */
+  terminalId: z.string().nullable().default(null),
   status: workflowRunStatusSchema,
   currentStepKey: z.string().nullable(),
   cwd: z.string(),

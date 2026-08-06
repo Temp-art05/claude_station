@@ -20,6 +20,7 @@ import { api } from "@/lib/api";
 import { fileUrl } from "@/lib/upload";
 import { wsUrl } from "@/lib/token";
 import { cn } from "@/lib/utils";
+import { TerminalPane } from "@/features/terminals/TerminalPane";
 
 const DOT: Record<WorkflowRunStepStatus, string> = {
   pending: "bg-ink-faint",
@@ -36,7 +37,18 @@ const DOT: Record<WorkflowRunStepStatus, string> = {
  * the WS and re-fetches, so the view is correct even if the tab was closed for
  * the whole run.
  */
-export function RunView({ runId, projectId }: { runId: string; projectId: string }) {
+export function RunView({
+  runId,
+  projectId,
+  seed,
+  onSeedSent,
+}: {
+  runId: string;
+  projectId: string;
+  /** Terminal-mode runs: runbook typed into the embedded CLI on first open. */
+  seed?: string;
+  onSeedSent?: () => void;
+}) {
   const qc = useQueryClient();
   const [answers, setAnswers] = useState<Record<string, string>>({});
 
@@ -262,6 +274,17 @@ export function RunView({ runId, projectId }: { runId: string; projectId: string
           );
         })}
       </div>
+
+      {run.mode === "terminal" && run.terminalId && (
+        <div className="mt-3">
+          <p className="mb-1.5 text-xs font-bold tracking-wide text-ink-faint uppercase">
+            Claude terminal — điều khiển run này (skip / confirm / đổi hướng bằng chat)
+          </p>
+          <div className="h-[46vh] min-h-[300px] overflow-hidden rounded-lg border border-edge">
+            <TerminalPane terminalId={run.terminalId} seedText={seed} onSeedSent={onSeedSent} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

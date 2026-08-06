@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 import { ChevronLeft, Import, Play, Terminal, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import type { EnvSet, Project } from "@claude-station/shared";
@@ -30,6 +30,8 @@ export function WorkflowsTab({ project, envSets }: Props) {
   const { data: runs = [] } = useRuns(project.id);
   const deleteRun = useDeleteRun(project.id);
   const [openRun, setOpenRun] = useState<string | null>(null);
+  // Terminal-mode runs: the runbook typed into the embedded CLI, once per launch.
+  const [runSeed, setRunSeed] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [startFor, setStartFor] = useState<string | null>(null);
 
@@ -41,7 +43,12 @@ export function WorkflowsTab({ project, envSets }: Props) {
         <Button size="sm" variant="ghost" className="mb-3" onClick={() => setOpenRun(null)}>
           <ChevronLeft size={14} /> All workflows
         </Button>
-        <RunView runId={openRun} projectId={project.id} />
+        <RunView
+          runId={openRun}
+          projectId={project.id}
+          seed={runSeed ?? undefined}
+          onSeedSent={() => setRunSeed(null)}
+        />
       </div>
     );
   }
@@ -187,8 +194,9 @@ export function WorkflowsTab({ project, envSets }: Props) {
           envSets={envSets}
           workflowId={startFor}
           onClose={() => setStartFor(null)}
-          onStarted={(runId) => {
+          onStarted={(runId, seed) => {
             setStartFor(null);
+            setRunSeed(seed ?? null);
             setOpenRun(runId);
           }}
         />
@@ -313,21 +321,20 @@ function StartDialog({
   envSets: EnvSet[];
   workflowId: string;
   onClose: () => void;
-  onStarted: (runId: string) => void;
+  onStarted: (runId: string, seed?: string) => void;
 }) {
   const start = useStartRun(project.id);
-  const navigate = useNavigate();
   const [goal, setGoal] = useState("");
   const [pathId, setPathId] = useState(project.paths[0]?.id ?? "");
   const [envSetId, setEnvSetId] = useState("");
   const [useWorktree, setUseWorktree] = useState(false);
 
-  // Dynamic mode: the workflow runs inside an interactive claude terminal —
-  // the runbook is typed into the CLI and the user steers it by chatting.
+  // Dynamic mode: the run opens with its stepper on top and an interactive
+  // claude terminal below driving the steps (reporting progress back).
   const claudeRun = useMutation({
     mutationFn: () =>
-      api.post<{ terminalId: string; seed: string }>(
-        `/api/projects/${project.id}/workflows/${workflowId}/claude-run`,
+      api.post<{ run: { id: string }; terminalId: string; seed: string }>(
+        `/api/projects/${project.id}/workflows/${workflowId}/terminal-run`,
         {
           goal: goal.trim() || undefined,
           cwdPathId: pathId || undefined,
@@ -335,12 +342,7 @@ function StartDialog({
           useWorktree,
         },
       ),
-    onSuccess: ({ terminalId, seed }) => {
-      onClose();
-      navigate(
-        `/projects/${project.id}?tab=chat&terminal=${terminalId}&seed=${encodeURIComponent(seed)}`,
-      );
-    },
+    onSuccess: ({ run, seed }) => onStarted(run.id, seed),
   });
 
   return (
@@ -418,10 +420,10 @@ function StartDialog({
           <Button
             variant="ghost"
             disabled={claudeRun.isPending}
-            title="Chạy workflow trong terminal Claude — bạn điều khiển từng step bằng chat (skip / confirm / đổi hướng)"
+            title="Mở màn run với stepper + terminal Claude bên dưới — bạn điều khiển từng step bằng chat (skip / confirm / đổi hướng), stepper tự nhảy theo"
             onClick={() => claudeRun.mutate()}
           >
-            <Terminal size={13} /> {claudeRun.isPending ? "Opening…" : "Run in Claude tab"}
+            <Terminal size={13} /> {claudeRun.isPending ? "Opening…" : "Run with Claude terminal"}
           </Button>
           <Button
             variant="primary"

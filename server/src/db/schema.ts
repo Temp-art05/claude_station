@@ -372,6 +372,10 @@ export const workflowRuns = sqliteTable(
     title: text("title").notNull(),
     /** What the user asked this run to do — injected into every step's context. */
     goal: text("goal"),
+    /** "engine" = stepper drives sessions; "terminal" = an interactive claude PTY drives, reporting progress back. */
+    mode: text("mode").notNull().default("engine"),
+    /** Terminal-mode runs: the claude PTY that drives this run. */
+    terminalId: text("terminal_id"),
     /**
      * Snapshot of the steps as they were at start. Editing the workflow later
      * must not rewrite a finished run or change one that's mid-flight.

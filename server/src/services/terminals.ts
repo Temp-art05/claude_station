@@ -31,14 +31,19 @@ export function resolveCwd(projectId: string, input: { cwdPathId?: string; cwd?:
 /** Shared by the terminal routes and the "Work with Claude" entry points. */
 export function createTerminal(
   projectId: string,
-  input: TerminalInput & { useWorktree?: boolean; command?: string },
+  input: TerminalInput & {
+    useWorktree?: boolean;
+    command?: string;
+    /** Extra env for this PTY only (e.g. workflow progress-report credentials). */
+    extraEnv?: Record<string, string>;
+  },
 ) {
   const kind: TerminalKind = input.kind ?? "shell";
   const id = newId();
   const base = resolveCwd(projectId, input);
   // A worktree cwd lives in data/worktrees/<terminalId>, which path-safety allows.
   const cwd = input.useWorktree ? createWorktree(base, id) : base;
-  const env = input.envSetId ? envVarsFor(input.envSetId) : {};
+  const env = { ...(input.envSetId ? envVarsFor(input.envSetId) : {}), ...input.extraEnv };
   const { pid } = pty.start({
     id,
     cwd,

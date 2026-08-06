@@ -121,6 +121,8 @@ export function getRun(runId: string): WorkflowRun | null {
     workflowId: row.workflowId,
     title: row.title,
     goal: row.goal,
+    mode: (row.mode === "terminal" ? "terminal" : "engine") as WorkflowRun["mode"],
+    terminalId: row.terminalId,
     status: row.status as WorkflowRun["status"],
     currentStepKey: row.currentStepKey,
     cwd: row.cwd,
@@ -271,6 +273,8 @@ export function createRun(
     cwdPathId?: string;
     envSetId?: string | null;
     useWorktree?: boolean;
+    mode?: "engine" | "terminal";
+    terminalId?: string;
   },
 ): WorkflowRun {
   const workflow = getWorkflow(input.workflowId);
@@ -298,9 +302,12 @@ export function createRun(
       workflowId: workflow.id,
       title: input.title ?? `${workflow.name} · ${new Date().toLocaleString()}`,
       goal: input.goal?.trim() || null,
+      mode: input.mode ?? "engine",
+      terminalId: input.terminalId ?? null,
       // Snapshot: later edits to the workflow must not rewrite this run.
       definition: JSON.stringify(workflow.steps),
-      status: "pending",
+      // A terminal run is live the moment its PTY exists — the engine never drives it.
+      status: input.mode === "terminal" ? "running" : "pending",
       currentStepKey: null,
       cwd: chosen.path,
       envSetId: input.envSetId ?? null,
@@ -324,6 +331,36 @@ export function createRun(
     .run();
 
   return getRun(id)!;
+}
+
+/**
+ * Terminal-mode runs: the claude PTY drives and reports transitions here
+ * (curl from inside the session). The stepper UI updates over the run's WS.
+ */
+export function reportTerminalProgress(
+  runId: string,
+  input: { step: string; status: "running" | "done" | "failed" | "skipped"; note?: string },
+): WorkflowRun {
+  const run = getRun(runId);
+  if (!run) throw badRequest("Run not found");
+  if (run.mode !== "terminal") throw badRequest("Not a terminal-mode run");
+  if (run.status === "cancelled") throw badRequest("Run was cancelled");
+  if (!run.steps.some((s) => s.key === input.step)) {
+    throw badRequest(`Unknown step "${input.step}" — keys: ${run.steps.map((s) => s.key).join(", ")}`);
+  }
+
+  const now = nowIso();
+  upsertRunStep(runId, input.step, {
+    status: input.status,
+    ...(input.note ? { note: input.note.slice(0, 500) } : {}),
+    ...(input.status === "running" ? { startedAt: now } : { finishedAt: now }),
+  });
+
+  const after = getRun(runId)!;
+  const allSettled = after.runSteps.every((s) => s.status === "done" || s.status === "skipped");
+  if (input.status === "running") setRunStatus(runId, "running", input.step);
+  else if (allSettled) setRunStatus(runId, "done", null);
+  return getRun(runId)!;
 }
 
 // ── Engine ────────────────────────────────────────────────────────────────────
@@ -578,6 +615,8 @@ export async function advanceRun(runId: string): Promise<WorkflowRun> {
     for (;;) {
       const run = getRun(runId);
       if (!run) throw badRequest("Run not found");
+      // Terminal-mode runs are driven by their claude PTY, never by the engine.
+      if (run.mode === "terminal") return run;
       if (run.status === "cancelled" || run.status === "done" || run.status === "failed") return run;
 
       const index = run.steps.findIndex((step) => {
@@ -887,7 +926,15 @@ export function reconcileRunsOnBoot(): number {
     .select()
     .from(schema.workflowRuns)
     .all()
-    .filter((r) => r.status !== "done" && r.status !== "failed" && r.status !== "cancelled");
+    // Terminal-mode runs have no engine state to reconcile — their PTY either
+    // survived (pty-manager restores it) or the user restarts it by hand.
+    .filter(
+      (r) =>
+        r.mode !== "terminal" &&
+        r.status !== "done" &&
+        r.status !== "failed" &&
+        r.status !== "cancelled",
+    );
 
   let touched = 0;
   for (const run of stale) {
