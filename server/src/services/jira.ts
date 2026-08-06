@@ -13,16 +13,30 @@ export function jiraConfig(): JiraConfig {
   return jiraConfigSchema.parse(JSON.parse(row.config));
 }
 
+function isServer(cfg: JiraConfig): boolean {
+  return cfg.deployment === "server";
+}
+
+/** Cloud speaks REST v3; Server/DC only has v2. Paths passed to jiraFetch are
+ *  version-less (e.g. "/issue/KEY-1") and get the right prefix here. */
+function apiPath(cfg: JiraConfig, path: string): string {
+  return `/rest/api/${isServer(cfg) ? "2" : "3"}${path}`;
+}
+
 async function jiraFetch<T>(
   path: string,
   init?: { method?: string; body?: unknown },
 ): Promise<T> {
   const cfg = jiraConfig();
-  const auth = Buffer.from(`${cfg.email}:${cfg.apiToken}`).toString("base64");
-  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}${path}`, {
+  // Cloud authenticates with Basic email:apiToken; Server/DC uses a Personal
+  // Access Token as a Bearer header (Basic+PAT just returns an HTML 401 page).
+  const auth = isServer(cfg)
+    ? `Bearer ${cfg.apiToken}`
+    : `Basic ${Buffer.from(`${cfg.email}:${cfg.apiToken}`).toString("base64")}`;
+  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}${apiPath(cfg, path)}`, {
     method: init?.method ?? "GET",
     headers: {
-      Authorization: `Basic ${auth}`,
+      Authorization: auth,
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
     },
@@ -175,44 +189,66 @@ function toSummary(issue: RawIssue, baseUrl: string): JiraIssueSummary {
 const MY_ISSUES_JQL =
   "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
 
+// Operators/keywords that mean the user typed real JQL, not a search phrase.
+const JQL_HINT = /[=~<>!]|\b(AND|OR|NOT|ORDER\s+BY|IS|IN|WAS|CHANGED|EMPTY)\b/i;
+// Bare issue keys jump straight to that ticket.
+const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9]+-\d+$/;
+
+/** The search box takes plain text; JQL still passes through untouched. */
+function toJql(query: string): string {
+  const q = query.trim();
+  if (!q) return MY_ISSUES_JQL;
+  if (ISSUE_KEY.test(q)) return `key = "${q.toUpperCase()}"`;
+  if (JQL_HINT.test(q)) return q;
+  const esc = q.replace(/(["\\])/g, "\\$1");
+  return `text ~ "${esc}" ORDER BY updated DESC`;
+}
+
 export async function searchIssues(jql?: string, limit = 50): Promise<JiraIssueSummary[]> {
   const cfg = jiraConfig();
   const body = {
-    jql: jql?.trim() || MY_ISSUES_JQL,
+    jql: toJql(jql ?? ""),
     maxResults: limit,
     fields: ["summary", "status", "issuetype", "priority", "assignee", "updated"],
   };
-  const data = await jiraFetch<{ issues?: RawIssue[] }>("/rest/api/3/search/jql", {
-    method: "POST",
-    body,
-  });
+  // Same request body, different endpoint name: v3 renamed /search to /search/jql.
+  const data = await jiraFetch<{ issues?: RawIssue[] }>(
+    isServer(cfg) ? "/search" : "/search/jql",
+    { method: "POST", body },
+  );
   return (data.issues ?? []).map((i) => toSummary(i, cfg.baseUrl));
 }
 
 export async function getIssue(key: string) {
   const cfg = jiraConfig();
   const issue = await jiraFetch<RawIssue>(
-    `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,issuetype,priority,assignee,reporter,updated,description,labels`,
+    `/issue/${encodeURIComponent(key)}?fields=summary,status,issuetype,priority,assignee,reporter,updated,description,labels`,
   );
   return {
     ...toSummary(issue, cfg.baseUrl),
     reporter: issue.fields.reporter?.displayName ?? null,
     labels: issue.fields.labels ?? [],
-    description: adfToMarkdown(issue.fields.description),
+    // Server/DC (v2) returns description as a wiki-markup string; Cloud as ADF.
+    description:
+      typeof issue.fields.description === "string"
+        ? issue.fields.description
+        : adfToMarkdown(issue.fields.description),
   };
 }
 
 export async function getTransitions(key: string) {
   const data = await jiraFetch<{ transitions?: { id: string; name: string; to?: { name?: string } }[] }>(
-    `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`,
+    `/issue/${encodeURIComponent(key)}/transitions`,
   );
   return (data.transitions ?? []).map((t) => ({ id: t.id, name: t.name, to: t.to?.name ?? "" }));
 }
 
 export async function addComment(key: string, body: string): Promise<void> {
-  await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(key)}/comment`, {
+  // v2 takes the comment as a plain string; v3 wants ADF.
+  const payload = isServer(jiraConfig()) ? body : toAdf(body);
+  await jiraFetch(`/issue/${encodeURIComponent(key)}/comment`, {
     method: "POST",
-    body: { body: toAdf(body) },
+    body: { body: payload },
   });
 }
 
@@ -240,7 +276,7 @@ export async function transitionIssue(
     id = match.id;
     label = `${match.name}→${match.to}`;
   }
-  await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, {
+  await jiraFetch(`/issue/${encodeURIComponent(key)}/transitions`, {
     method: "POST",
     body: { transition: { id } },
   });
@@ -252,9 +288,13 @@ export async function addWorklog(
   timeSpent: string,
   comment?: string,
 ): Promise<void> {
-  await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(key)}/worklog`, {
+  const cfg = jiraConfig();
+  await jiraFetch(`/issue/${encodeURIComponent(key)}/worklog`, {
     method: "POST",
-    body: { timeSpent, ...(comment ? { comment: toAdf(comment) } : {}) },
+    body: {
+      timeSpent,
+      ...(comment ? { comment: isServer(cfg) ? comment : toAdf(comment) } : {}),
+    },
   });
 }
 

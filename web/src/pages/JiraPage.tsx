@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,12 @@ interface JiraDetail extends JiraIssue {
 export function JiraPage() {
   const qc = useQueryClient();
   const [jql, setJql] = useState("");
+  // Text search fires as you type — debounce so we don't hammer Jira per keystroke.
+  const [debouncedJql, setDebouncedJql] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedJql(jql), 400);
+    return () => clearTimeout(t);
+  }, [jql]);
   const [selected, setSelected] = useState<string | null>(null);
 
   const { data: status } = useQuery({
@@ -35,9 +41,11 @@ export function JiraPage() {
   });
 
   const { data: issues = [], isFetching, refetch, error } = useQuery({
-    queryKey: ["jira-issues", jql],
+    queryKey: ["jira-issues", debouncedJql],
     queryFn: () =>
-      api.get<JiraIssue[]>(`/api/jira/issues${jql.trim() ? `?jql=${encodeURIComponent(jql)}` : ""}`),
+      api.get<JiraIssue[]>(
+        `/api/jira/issues${debouncedJql.trim() ? `?jql=${encodeURIComponent(debouncedJql)}` : ""}`,
+      ),
     enabled: status?.configured === true,
   });
 
@@ -112,7 +120,7 @@ export function JiraPage() {
         <Input
           value={jql}
           onChange={(e) => setJql(e.target.value)}
-          placeholder="JQL — empty means my open issues"
+          placeholder="Search text, issue key, or JQL — empty means my open issues"
           className="mb-3 font-mono text-xs"
         />
 
