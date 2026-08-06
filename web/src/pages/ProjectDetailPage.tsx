@@ -1,13 +1,14 @@
 import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, ExternalLink, Pencil } from "lucide-react";
+import { ChevronRight, ExternalLink, Pencil, Trash2 } from "lucide-react";
 import type { ChatSession, EnvSet } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
 import { Tabs } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { useProject } from "@/features/projects/hooks";
+import { DeleteProjectDialog } from "@/features/projects/DeleteProjectDialog";
 import { ProjectFormDialog } from "@/features/projects/ProjectFormDialog";
 import { TerminalsTab } from "@/features/terminals/TerminalsTab";
 import { CommandsTab } from "@/features/commands/CommandsTab";
@@ -61,8 +62,10 @@ export function ProjectDetailPage() {
   const [params] = useSearchParams();
   const [picked, setTab] = useState<Tab | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [descOpen, setDescOpen] = useState(false);
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   // "Work with Claude" deep-links via ?tab=chat; an explicit click wins after that.
   // Every open agent workspace is an extra tab; the route carries which one.
@@ -143,9 +146,21 @@ export function ProjectDetailPage() {
               })}
             </div>
           </div>
-          <Button size="sm" variant="ghost" onClick={() => setEditOpen(true)}>
-            <Pencil size={13} /> Edit
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="ghost" onClick={() => setEditOpen(true)}>
+              <Pencil size={13} /> Edit
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Delete project"
+              title="Delete project"
+              className="hover:text-err"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 size={14} />
+            </Button>
+          </div>
         </div>
         <Tabs
           tabs={allTabs}
@@ -191,6 +206,12 @@ export function ProjectDetailPage() {
       </div>
 
       <ProjectFormDialog key={`${project.id}-${editOpen}`} open={editOpen} onClose={() => setEditOpen(false)} project={project} />
+      <DeleteProjectDialog
+        project={project}
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={() => void navigate("/projects")}
+      />
     </div>
   );
 }

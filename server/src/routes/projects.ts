@@ -12,6 +12,7 @@ import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
 import { parsePatch } from "../lib/patch";
 import { prettyPath, resolveDirectory } from "../lib/path-safety";
+import { deleteProject } from "../services/projects";
 
 const idParam = z.object({ id: z.string() });
 const pathIdParam = z.object({ id: z.string(), pathId: z.string() });
@@ -188,7 +189,8 @@ export function projectRoutes(app: FastifyInstance): void {
 
   app.delete<{ Params: { id: string } }>("/api/projects/:id", async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
+    if (!loadProject(id)) return reply.code(404).send({ error: "Project not found" });
+    await deleteProject(id);
     reply.code(204);
   });
 

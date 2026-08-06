@@ -37,6 +37,10 @@ export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete(`/api/projects/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+    onSuccess: (_result, id) => {
+      // Drop the detail cache outright — refetching a deleted project only 404s.
+      qc.removeQueries({ queryKey: ["projects", id] });
+      void qc.invalidateQueries({ queryKey: ["projects"] });
+    },
   });
 }
