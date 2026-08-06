@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, CircleAlert, CircleCheck } from "lucide-react";
+import { Bell, CircleAlert, CircleCheck, Download, Upload } from "lucide-react";
 import { normalizeGithubRepo, type AppSettings } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { fileUrl, uploadFile } from "@/lib/upload";
 
 interface Doctor {
   node: string;
@@ -160,6 +161,7 @@ export function SettingsPage() {
 
       <JiraSettings />
       <GitHubSettings />
+      <BackupSettings />
     </div>
   );
 }
@@ -340,6 +342,76 @@ function GitHubForm({ initial }: { initial: string }) {
           Save repos
         </Button>
       </div>
+    </Card>
+  );
+}
+
+/** Whole-app export/import — move the station (and all its data) between machines. */
+function BackupSettings() {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [result, setResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const doImport = useMutation({
+    mutationFn: (file: File) =>
+      uploadFile<{ ok: boolean; backupDir: string; note: string }>("/api/import", file),
+    onSuccess: (r) =>
+      setResult({
+        tone: "ok",
+        text: `Imported. Previous data moved to ${r.backupDir}. ${r.note}`,
+      }),
+    onError: (err: unknown) =>
+      setResult({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
+  });
+
+  return (
+    <Card className="mt-4 space-y-3">
+      <h2 className="text-sm font-medium">Backup & migrate</h2>
+      <p className="text-xs text-ink-muted">
+        Export bundles the database, knowledge, skills, agent bundles and attachments into one
+        archive. Import it on another machine running this app — absolute paths inside the
+        database are rewritten to the new data dir, current data is moved aside (never deleted),
+        and skills are relinked. Worktrees, logs and the auth token stay machine-local; project
+        repo paths are kept as-is, fix them in each project if the new machine differs.
+      </p>
+      <div className="flex items-center gap-2">
+        <a href={fileUrl("/api/export")}>
+          <Button size="sm" variant="primary">
+            <Download size={13} /> Export data
+          </Button>
+        </a>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={doImport.isPending}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload size={13} /> {doImport.isPending ? "Importing…" : "Import archive"}
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".gz,.tgz,application/gzip"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (
+              file &&
+              confirm(
+                "Import this archive? Current data will be moved aside and replaced — you must restart the server afterwards.",
+              )
+            ) {
+              setResult(null);
+              doImport.mutate(file);
+            }
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {result && (
+        <p className={result.tone === "ok" ? "text-xs text-ok" : "text-xs text-err"}>
+          {result.text}
+        </p>
+      )}
     </Card>
   );
 }
