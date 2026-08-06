@@ -9,6 +9,7 @@ import {
   Download,
   FileText,
   RotateCcw,
+  RotateCw,
   SkipForward,
   Terminal,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import { fileUrl } from "@/lib/upload";
 import { wsUrl } from "@/lib/token";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "@/features/terminals/TerminalPane";
+import { useRestartTerminal } from "@/features/terminals/hooks";
 
 const DOT: Record<WorkflowRunStepStatus, string> = {
   pending: "bg-ink-faint",
@@ -51,6 +53,10 @@ export function RunView({
 }) {
   const qc = useQueryClient();
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Bumped on restart: TerminalPane stops reconnecting once the PTY dies, so a
+  // fresh mount is the only way to re-attach.
+  const [terminalEpoch, setTerminalEpoch] = useState(0);
+  const restartTerminal = useRestartTerminal(projectId);
 
   const { data: run } = useQuery({
     queryKey: ["workflow-run", runId],
@@ -277,11 +283,31 @@ export function RunView({
 
       {run.mode === "terminal" && run.terminalId && (
         <div className="mt-3">
-          <p className="mb-1.5 text-xs font-bold tracking-wide text-ink-faint uppercase">
-            Claude terminal — điều khiển run này (skip / confirm / đổi hướng bằng chat)
-          </p>
+          <div className="mb-1.5 flex items-center justify-between">
+            <p className="text-xs font-bold tracking-wide text-ink-faint uppercase">
+              Claude terminal — điều khiển run này (skip / confirm / đổi hướng bằng chat)
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Restart the terminal (claude --continue resumes the conversation)"
+              disabled={restartTerminal.isPending}
+              onClick={() =>
+                restartTerminal.mutate(run.terminalId!, {
+                  onSuccess: () => setTerminalEpoch((e) => e + 1),
+                })
+              }
+            >
+              <RotateCw size={13} /> Restart
+            </Button>
+          </div>
           <div className="h-[46vh] min-h-[300px] overflow-hidden rounded-lg border border-edge">
-            <TerminalPane terminalId={run.terminalId} seedText={seed} onSeedSent={onSeedSent} />
+            <TerminalPane
+              key={terminalEpoch}
+              terminalId={run.terminalId}
+              seedText={seed}
+              onSeedSent={onSeedSent}
+            />
           </div>
         </div>
       )}
