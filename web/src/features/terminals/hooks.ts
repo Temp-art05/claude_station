@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Terminal, TerminalInput } from "@claude-station/shared";
+import type { Terminal, TerminalInput, TerminalKind } from "@claude-station/shared";
 import { api } from "@/lib/api";
 
-export function useTerminals(projectId: string) {
+export function useTerminals(projectId: string, kind: TerminalKind = "shell") {
   return useQuery({
-    queryKey: ["terminals", projectId],
-    queryFn: () => api.get<Terminal[]>(`/api/projects/${projectId}/terminals`),
+    queryKey: ["terminals", projectId, kind],
+    queryFn: () => api.get<Terminal[]>(`/api/projects/${projectId}/terminals?kind=${kind}`),
   });
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Plus, RotateCw, X } from "lucide-react";
-import type { EnvSet, Project } from "@claude-station/shared";
+import type { EnvSet, Project, TerminalKind } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -15,17 +16,35 @@ import {
 interface Props {
   project: Project;
   envSets: EnvSet[];
+  /** "shell" = the Terminals tab; "claude" = the Claude tab (PTYs running the claude CLI). */
+  kind?: TerminalKind;
 }
 
-export function TerminalsTab({ project, envSets }: Props) {
-  const { data: terminals = [], isLoading } = useTerminals(project.id);
+export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
+  const { data: terminals = [], isLoading } = useTerminals(project.id, kind);
   const create = useCreateTerminal(project.id);
   const kill = useKillTerminal(project.id);
   const restart = useRestartTerminal(project.id);
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // "Work with Claude" deep-links land here as ?terminal=<id>&seed=<text> (claude kind only).
+  const [params, setParams] = useSearchParams();
+  const [seedTarget] = useState(() => (kind === "claude" ? params.get("terminal") : null));
+  const [seed, setSeed] = useState<string | null>(() =>
+    kind === "claude" ? params.get("seed") : null,
+  );
+
+  const [selectedId, setSelectedId] = useState<string | null>(seedTarget);
   const [pathId, setPathId] = useState(project.paths[0]?.id ?? "");
   const [envSetId, setEnvSetId] = useState<string>("");
+
+  // Strip the one-shot params so a reload or tab switch never replays the seed.
+  useEffect(() => {
+    if (!params.has("terminal") && !params.has("seed")) return;
+    const next = new URLSearchParams(params);
+    next.delete("terminal");
+    next.delete("seed");
+    setParams(next, { replace: true });
+  }, [params, setParams]);
 
   const live = terminals.filter((t) => t.status !== "exited");
   // Derived, not synced: the selection falls back to the first live tab.
@@ -106,39 +125,58 @@ export function TerminalsTab({ project, envSets }: Props) {
           size="sm"
           onClick={() =>
             create.mutate(
-              { cwdPathId: pathId || undefined, envSetId: envSetId || null },
+              { cwdPathId: pathId || undefined, envSetId: envSetId || null, kind },
               { onSuccess: (t) => setActiveId(t.id) },
             )
           }
           disabled={create.isPending || project.paths.length === 0}
         >
-          <Plus size={14} /> Terminal
+          <Plus size={14} /> {kind === "claude" ? "Claude" : "Terminal"}
         </Button>
       </div>
 
       <div className="min-h-0 flex-1">
         {!active && (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <p className="text-sm text-ink-muted">No terminal open.</p>
-            <p className="text-xs text-ink-faint">
-              Open one and run <code className="font-mono text-ink-muted">claude</code> inside it.
-            </p>
+            {kind === "claude" ? (
+              <>
+                <p className="text-sm text-ink-muted">No Claude session open.</p>
+                <p className="text-xs text-ink-faint">
+                  Pick a repo and hit <span className="text-ink-muted">+ Claude</span> — the{" "}
+                  <code className="font-mono text-ink-muted">claude</code> CLI runs right here.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-ink-muted">No terminal open.</p>
+                <p className="text-xs text-ink-faint">
+                  Open one and run <code className="font-mono text-ink-muted">claude</code> inside
+                  it.
+                </p>
+              </>
+            )}
           </div>
         )}
         {active?.status === "orphaned" && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <Badge tone="err">orphaned</Badge>
             <p className="max-w-sm text-xs text-ink-muted">
-              This shell belonged to a previous server process, so its output is gone. Restart it to
-              get a fresh shell in the same directory.
+              {kind === "claude"
+                ? "This Claude session belonged to a previous server process. Restart resumes the last conversation in this directory via claude --continue."
+                : "This shell belonged to a previous server process, so its output is gone. Restart it to get a fresh shell in the same directory."}
             </p>
             <Button size="sm" onClick={() => restart.mutate(active.id)} disabled={restart.isPending}>
-              <RotateCw size={14} /> Restart shell
+              <RotateCw size={14} /> {kind === "claude" ? "Restart Claude" : "Restart shell"}
             </Button>
           </div>
         )}
         {active?.status === "running" && (
-          <TerminalPane key={active.id} terminalId={active.id} />
+          <TerminalPane
+            key={active.id}
+            terminalId={active.id}
+            seedText={seed && active.id === seedTarget ? seed : undefined}
+            onSeedSent={() => setSeed(null)}
+          />
         )}
       </div>
 
