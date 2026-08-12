@@ -291,7 +291,32 @@ danh sách sẽ không có mục nào sáng.
 Bản đầu của vòng này tôi làm khác — thêm danh sách project đang mở thành các mục con dưới `Projects`.
 Người dùng bác: không muốn thêm thành phần mới trong nav, muốn đúng hành vi của `GitHub`. Đã gỡ.
 
-## Tình trạng — xong 10 bước gốc + vòng 2 → 5 (2026-08-12)
+### Vòng 6 — hai lần `setSearchParams` trong một handler **không** cộng dồn
+
+Triệu chứng: ở GitHub không đổi được repo, và bấm Back không thoát khỏi PR về danh sách.
+
+`node_modules/react-router/dist/development/lib/dom/lib.js:761`:
+
+```js
+nextInit(new URLSearchParams(searchParams))   // searchParams = snapshot của render trước
+```
+
+`searchParams` là `useMemo` theo `location.search`. Gọi hai lần trong cùng một handler thì **cả hai
+đều nhận snapshot cũ**, và `navigate` lần sau ghi đè lần trước.
+
+- `closePr()` = `setPr(null)` rồi `patchUrl({prtab:null})` → lệnh sau tính từ snapshot vẫn còn
+  `pr=829` → URL cuối vẫn có `pr` → PR không đóng được.
+- Đổi repo = `setRepo(v)` rồi `closePr()` → hai navigate sau ghi đè, repo mới bị mất.
+
+Đây đúng là thứ `useUrlPatch` sinh ra để tránh, và ở vòng 2 tôi tự phá luật bằng cách gọi nối tiếp
+hai setter.
+
+**Sửa:** hook sticky trả thêm phần tử thứ ba `setStore` (chỉ ghi store). Hành động chạm nhiều param
+thì cập nhật store trực tiếp và gộp **toàn bộ** thay đổi URL vào **một** `useUrlPatch`.
+
+**Luật cần nhớ:** một hành động của người dùng = **tối đa một** lần ghi URL.
+
+## Tình trạng — xong 10 bước gốc + vòng 2 → 6 (2026-08-12)
 
 File mới: `web/src/lib/useUrlState.ts`, `web/src/lib/uiStore.ts`, `web/src/lib/useScrollMemory.ts`,
 `web/src/components/KeepAlive.tsx`, `web/src/components/DraftNotice.tsx`.

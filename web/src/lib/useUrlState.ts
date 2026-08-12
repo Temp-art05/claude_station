@@ -103,12 +103,22 @@ export function useUrlStateOptional(
  * reload keep working), and when it is absent the last value used here fills in
  * and is written back to the URL so the next reload agrees. Writes update both.
  */
+/**
+ * Returns `[value, set, setStore]`.
+ *
+ * `set` writes both the store and the URL and is what you want almost always.
+ * `setStore` touches only the store — reach for it when one action changes
+ * several params at once (pick a repo *and* close the open PR): every URL write
+ * must then be folded into a single `useUrlPatch` call, because two
+ * `setSearchParams` calls in one handler do **not** compose. Each is handed the
+ * same pre-render snapshot, so the second silently reverts the first.
+ */
 export function useStickyUrlState(
   param: string,
   storeKey: string,
   fallback: string,
   { replace = true, enabled = true }: StickyOptions = {},
-): [string, (next: string) => void] {
+): [string, (next: string) => void, (next: string) => void] {
   const [params] = useSearchParams();
   const [stored, setStored] = useUiState(storeKey, fallback);
   const write = useWrite(param, replace);
@@ -131,7 +141,7 @@ export function useStickyUrlState(
     [setStored, write, fallback, enabled],
   );
 
-  return [value, set];
+  return [value, set, setStored];
 }
 
 /** Sticky variant for "nothing selected" state — an open PR, a chosen issue. */
@@ -139,7 +149,11 @@ export function useStickyUrlStateOptional(
   param: string,
   storeKey: string,
   { replace = false, enabled = true }: StickyOptions = {},
-): [string | null, (next: string | null) => void] {
+): [
+  string | null,
+  (next: string | null) => void,
+  (next: string | null) => void,
+] {
   const [params] = useSearchParams();
   const [stored, setStored] = useUiState<string | null>(storeKey, null);
   const write = useWrite(param, replace);
@@ -159,5 +173,5 @@ export function useStickyUrlStateOptional(
     [setStored, write, enabled],
   );
 
-  return [value, set];
+  return [value, set, setStored];
 }

@@ -113,19 +113,28 @@ export function GitHubPage() {
   // back restores them, and the address bar is a shareable pointer at one PR.
   const [rawTab, setTab] = useStickyUrlState("tab", globalKey("github", "tab"), "pulls");
   const tab = TABS.find((t) => t.value === rawTab)?.value ?? "pulls";
-  const [selectedRepo, setRepo] = useStickyUrlState("repo", globalKey("github", "repo"), "");
+  const [selectedRepo, , setRepoStore] = useStickyUrlState("repo", globalKey("github", "repo"), "");
   // Opening a PR pushes, so Back returns to the list instead of leaving GitHub.
-  const [rawPr, setPr] = useStickyUrlStateOptional("pr", globalKey("github", "pr"), {
+  const [rawPr, setPr, setPrStore] = useStickyUrlStateOptional("pr", globalKey("github", "pr"), {
     replace: false,
   });
   const selectedPr = Number.isInteger(Number(rawPr)) && rawPr ? Number(rawPr) : null;
   const patchUrl = useUrlPatch();
-  // Must go through `setPr`, not a raw URL write: clearing only the param would
-  // leave the remembered PR in the store, and the backfill would reopen it on
-  // the very next render. The sub-tab has no store, so it clears via the URL.
+
+  // Both of these change more than one param, so the stores are updated
+  // directly and every URL change goes through ONE patch. Chaining the
+  // all-in-one setters instead would lose all but the last: `setSearchParams`
+  // hands each caller the same pre-render snapshot, so the second navigation
+  // reverts the first — closing a PR would leave `?pr=` in place, and picking a
+  // repo would be undone by the PR that follows it.
   const closePr = () => {
-    setPr(null);
-    patchUrl({ prtab: null });
+    setPrStore(null); // clearing only the param would let the backfill reopen it
+    patchUrl({ pr: null, prtab: null });
+  };
+  const changeRepo = (next: string) => {
+    setRepoStore(next);
+    setPrStore(null); // a PR number means nothing against a different repo
+    patchUrl({ repo: next || null, pr: null, prtab: null });
   };
   const [newPrOpen, setNewPrOpen] = useState(false);
 
@@ -181,11 +190,7 @@ export function GitHubPage() {
         <h1 className="text-lg font-semibold">GitHub</h1>
         <select
           value={repo}
-          // A PR number is meaningless against a different repo, so it goes too.
-          onChange={(e) => {
-            setRepo(e.target.value);
-            closePr();
-          }}
+          onChange={(e) => changeRepo(e.target.value)}
           className="h-8 rounded-md border border-edge bg-surface px-2 text-xs text-ink"
         >
           {repos.map((r) => (
