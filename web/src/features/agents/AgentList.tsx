@@ -72,14 +72,14 @@ export function AgentList({ agents, projectId, editable = true }: Props) {
 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-sm">{agent.name}</span>
+                    <span className="font-mono text-[15px] font-bold text-ok">{agent.name}</span>
                     {agent.enabledGlobally && <Badge tone="accent">global</Badge>}
                     {agent.model && <Badge>{agent.model}</Badge>}
                     {agent.maxTurns && <Badge>{agent.maxTurns} turns</Badge>}
                     {agent.background && <Badge>background</Badge>}
                     {agent.source === "imported" && <Badge>imported</Badge>}
                   </div>
-                  <p className="mt-0.5 text-xs text-ink-muted">{agent.description}</p>
+                  <p className="mt-1 text-[13px] text-white">{agent.description}</p>
 
                   {(agent.tools?.length || agent.disallowedTools?.length) && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1">
@@ -104,7 +104,7 @@ export function AgentList({ agents, projectId, editable = true }: Props) {
                     </div>
                   )}
                   {!agent.tools?.length && !agent.disallowedTools?.length && (
-                    <p className="mt-1.5 text-[10.5px] text-ink-faint">
+                    <p className="mt-1.5 text-[12px] text-ink-muted">
                       Inherits every tool from the session.
                     </p>
                   )}
@@ -114,8 +114,11 @@ export function AgentList({ agents, projectId, editable = true }: Props) {
                   <div className="flex shrink-0 items-center gap-0.5">
                     <a
                       href={fileUrl(`/api/agents/${agent.id}/export`)}
+                      download
                       className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink"
-                      title="Export as .agent.md"
+                      title={
+                        agent.bundleDir ? "Export bundle as .zip" : "Export as .agent.md"
+                      }
                     >
                       <Download size={14} />
                     </a>

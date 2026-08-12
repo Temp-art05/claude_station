@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import type { WorkHistory } from "@claude-station/shared";
 import { Badge } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { projectKey } from "@/lib/uiStore";
+import { useScrollMemory } from "@/lib/useScrollMemory";
 
 function dayLabel(iso: string): string {
   const d = new Date(iso);
@@ -13,6 +15,9 @@ export function HistoryTab({ projectId }: { projectId: string }) {
     queryKey: ["history", projectId],
     queryFn: () => api.get<WorkHistory[]>(`/api/projects/${projectId}/history`),
   });
+  // Declared before the early returns below — hooks can't be conditional. The
+  // ref simply stays unattached while the list isn't rendered.
+  const scrollRef = useScrollMemory<HTMLDivElement>(projectKey(projectId, "history", "scroll"));
 
   if (isLoading) return <p className="p-6 text-sm text-ink-muted">Loading…</p>;
   if (rows.length === 0)
@@ -27,7 +32,7 @@ export function HistoryTab({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-4">
+    <div ref={scrollRef} className="h-full overflow-y-auto px-6 py-4">
       {[...groups.entries()].map(([day, items]) => (
         <div key={day} className="mb-5">
           <p className="mb-2 text-xs font-medium text-ink-faint">{day}</p>

@@ -9,11 +9,13 @@ import { DATA_DIR } from "../lib/data-dir";
 import { parsePatch } from "../lib/patch";
 import { readSinglePart, readUploadParts, splitFolderRoot } from "../lib/multipart";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
+import { contentDisposition } from "../lib/zip";
 import * as pty from "../services/pty-manager";
 import { createTerminal } from "../services/terminals";
 import {
   createAgent,
   deleteAgent,
+  exportAgentBundle,
   exportAgentMarkdown,
   getAgent,
   importAgentFolder,
@@ -149,8 +151,16 @@ export function agentRoutes(app: FastifyInstance): void {
     const { id } = idParam.parse(req.params);
     const agent = getAgent(id);
     if (!agent) return reply.code(404).send({ error: "Agent not found" });
+    // A packaged agent is its companions too — exporting only the definition
+    // would silently drop the templates and scripts the prompt refers to.
+    const bundle = await exportAgentBundle(agent);
+    if (bundle) {
+      reply.header("Content-Type", "application/zip");
+      reply.header("Content-Disposition", contentDisposition(agent.name, ".zip"));
+      return reply.send(bundle);
+    }
     reply.header("Content-Type", "text/markdown; charset=utf-8");
-    reply.header("Content-Disposition", `attachment; filename="${agent.name}.agent.md"`);
+    reply.header("Content-Disposition", contentDisposition(agent.name, ".agent.md"));
     return exportAgentMarkdown(agent);
   });
 }

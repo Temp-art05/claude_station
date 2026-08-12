@@ -57,6 +57,10 @@ export interface PullRequest {
   baseRefName: string;
   updatedAt: string;
   url: string;
+  /** "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "" (no branch protection). */
+  reviewDecision: string;
+  /** Logins/team slugs still owing a review — the other half of "needs review". */
+  reviewRequests: string[];
 }
 
 export async function listPulls(repo: string, limit = 30): Promise<PullRequest[]> {
@@ -71,6 +75,8 @@ export async function listPulls(repo: string, limit = 30): Promise<PullRequest[]
       baseRefName: string;
       updatedAt: string;
       url: string;
+      reviewDecision?: string;
+      reviewRequests?: { login?: string; slug?: string; name?: string }[];
     }[]
   >([
     "pr",
@@ -82,9 +88,19 @@ export async function listPulls(repo: string, limit = 30): Promise<PullRequest[]
     "--state",
     "open",
     "--json",
-    "number,title,state,isDraft,author,headRefName,baseRefName,updatedAt,url",
+    // `gh pr list` is GraphQL-backed, so reviewDecision/reviewRequests come back
+    // in the same call — no per-PR fan-out (each request forks a `gh` process).
+    "number,title,state,isDraft,author,headRefName,baseRefName,updatedAt,url,reviewDecision,reviewRequests",
   ]);
-  return raw.map((p) => ({ ...p, author: p.author?.login ?? "unknown" }));
+  return raw.map((p) => ({
+    ...p,
+    author: p.author?.login ?? "unknown",
+    reviewDecision: p.reviewDecision ?? "",
+    // Requested reviewers are users (login) or teams (slug/name).
+    reviewRequests: (p.reviewRequests ?? [])
+      .map((r) => r.login ?? r.slug ?? r.name ?? "")
+      .filter(Boolean),
+  }));
 }
 
 export interface Issue {
@@ -198,7 +214,12 @@ export async function pullDetailFull(repo: string, number: number): Promise<PrDe
     labels?: { name?: string }[];
     assignees?: { login?: string }[];
     comments?: { author?: { login?: string }; body?: string; createdAt?: string }[];
-    reviews?: { author?: { login?: string }; state?: string; body?: string; submittedAt?: string }[];
+    reviews?: {
+      author?: { login?: string };
+      state?: string;
+      body?: string;
+      submittedAt?: string;
+    }[];
     commits?: {
       oid?: string;
       messageHeadline?: string;
@@ -229,7 +250,9 @@ export async function pullDetailFull(repo: string, number: number): Promise<PrDe
     number: raw.number,
     title: raw.title ?? "",
     body: raw.body ?? "",
-    state: (raw.state === "MERGED" || raw.state === "CLOSED" ? raw.state : "OPEN") as PrDetail["state"],
+    state: (raw.state === "MERGED" || raw.state === "CLOSED"
+      ? raw.state
+      : "OPEN") as PrDetail["state"],
     isDraft: !!raw.isDraft,
     author: raw.author?.login ?? "unknown",
     headRefName: raw.headRefName ?? "",
@@ -307,7 +330,11 @@ export async function reviewPull(
   body?: string,
 ): Promise<void> {
   const flag =
-    event === "approve" ? "--approve" : event === "request-changes" ? "--request-changes" : "--comment";
+    event === "approve"
+      ? "--approve"
+      : event === "request-changes"
+        ? "--request-changes"
+        : "--comment";
   const args = ["pr", "review", String(number), "--repo", assertRepo(repo), flag];
   // gh requires a body for request-changes/comment reviews.
   if (body || event !== "approve") args.push("--body", body ?? "");
@@ -564,7 +591,13 @@ export async function getContents(repo: string, path = "", ref = ""): Promise<Re
     return { type: "dir", path, entries };
   }
 
-  const f = raw as { name?: string; path?: string; size?: number; content?: string; encoding?: string };
+  const f = raw as {
+    name?: string;
+    path?: string;
+    size?: number;
+    content?: string;
+    encoding?: string;
+  };
   let text: string | null = null;
   let truncated = false;
   if (typeof f.content === "string" && f.encoding === "base64") {
@@ -592,8 +625,7 @@ export async function githubContext(
   kind: "pr" | "issue",
   number: number,
 ): Promise<string> {
-  const data =
-    kind === "pr" ? await pullDetail(repo, number) : await issueDetail(repo, number);
+  const data = kind === "pr" ? await pullDetail(repo, number) : await issueDetail(repo, number);
   const body = typeof data.body === "string" ? data.body : "";
   return [
     `# GitHub ${kind === "pr" ? "PR" : "issue"} ${repo}#${number}: ${String(data.title ?? "")}`,

@@ -12,7 +12,9 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
+import { DraftNotice } from "@/components/DraftNotice";
 import { api } from "@/lib/api";
+import { globalKey, projectKey, useRestorableDraft, useUiState } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { LogPane } from "./LogPane";
 import {
@@ -38,7 +40,12 @@ export function CommandsTab({ project, envSets }: Props) {
   const kill = useKillRun(project.id);
   const removeRun = useDeleteRun(project.id);
 
-  const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  const [storedRun, setSelectedRun] = useUiState<string | null>(
+    projectKey(project.id, "commands", "selectedRun"),
+    null,
+  );
+  const selectedRun = runs.some((r) => r.id === storedRun) ? storedRun : null;
+  // Dialog — deliberately not persisted; see WorkflowsTab.
   const [addFor, setAddFor] = useState<string | null>(null);
 
   // Each repo remembers its own default env set — Claude's runs use it too.
@@ -217,7 +224,13 @@ function CommandRow({
 
 function AddCommandDialog({ pathId, onClose }: { pathId: string | null; onClose: () => void }) {
   const create = useCreateCommand(pathId ?? "");
-  const [draft, setDraft] = useState<PathCommandInput>({
+  const {
+    value: draft,
+    set: setDraft,
+    restored,
+    discard,
+    clear: clearDraft,
+  } = useRestorableDraft<PathCommandInput>(globalKey("commandDraft", pathId ?? "none"), {
     name: "",
     kind: "build",
     command: "",
@@ -233,6 +246,7 @@ function AddCommandDialog({ pathId, onClose }: { pathId: string | null; onClose:
   return (
     <Dialog open={pathId !== null} onClose={onClose} title="Add command">
       <div className="space-y-3">
+        {restored && <DraftNotice onDiscard={discard} />}
         <div className="flex flex-wrap gap-1.5">
           {Object.keys(COMMAND_PRESETS).map((key) => (
             <Button
@@ -307,7 +321,7 @@ function AddCommandDialog({ pathId, onClose }: { pathId: string | null; onClose:
             onClick={() =>
               create.mutate(draft, {
                 onSuccess: () => {
-                  setDraft({ name: "", kind: "build", command: "", cwdOverride: null, timeoutSec: 900 });
+                  clearDraft(); // created — the form resets to blank on reopen
                   onClose();
                 },
               })

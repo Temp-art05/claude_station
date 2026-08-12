@@ -4,6 +4,8 @@ import { Plus, RotateCw, X } from "lucide-react";
 import type { EnvSet, Project, TerminalKind } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
+import { usePanelActive } from "@/components/KeepAlive";
+import { projectKey, useUiState } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "./TerminalPane";
 import {
@@ -26,6 +28,7 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   const kill = useKillTerminal(project.id);
   const restart = useRestartTerminal(project.id);
 
+  const onScreen = usePanelActive();
   // "Work with Claude" deep-links land here as ?terminal=<id>&seed=<text> (claude kind only).
   const [params, setParams] = useSearchParams();
   const [seedTarget] = useState(() => (kind === "claude" ? params.get("terminal") : null));
@@ -33,18 +36,41 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
     kind === "claude" ? params.get("seed") : null,
   );
 
-  const [selectedId, setSelectedId] = useState<string | null>(seedTarget);
-  const [pathId, setPathId] = useState(project.paths[0]?.id ?? "");
-  const [envSetId, setEnvSetId] = useState<string>("");
+  // Keyed by kind: the Claude tab and the Terminals tab each keep their own.
+  const ui = (...parts: string[]) => projectKey(project.id, "terminals", kind, ...parts);
+  const [selectedId, setSelectedId] = useUiState<string | null>(ui("selectedId"), null);
+  const [storedPathId, setPathId] = useUiState(ui("pathId"), project.paths[0]?.id ?? "");
+  const [storedEnvSetId, setEnvSetId] = useUiState(ui("envSetId"), "");
+  // A repo or env set can disappear between visits; "" is a valid env choice.
+  const pathId = project.paths.some((p) => p.id === storedPathId)
+    ? storedPathId
+    : (project.paths[0]?.id ?? "");
+  const envSetId = envSets.some((e) => e.id === storedEnvSetId) ? storedEnvSetId : "";
+
+  // A deep link outranks whatever was selected last time — but only once, so a
+  // later click on another terminal still wins.
+  useEffect(() => {
+    if (seedTarget) setSelectedId(seedTarget);
+  }, [seedTarget, setSelectedId]);
 
   // Strip the one-shot params so a reload or tab switch never replays the seed.
+  // Functional form: ?tab= may be written in the same tick, and a snapshot-based
+  // write here would silently roll it back.
   useEffect(() => {
+    // Never from a kept-alive pane that isn't on screen — it would be editing
+    // the URL of whatever page the user is actually looking at.
+    if (!onScreen) return;
     if (!params.has("terminal") && !params.has("seed")) return;
-    const next = new URLSearchParams(params);
-    next.delete("terminal");
-    next.delete("seed");
-    setParams(next, { replace: true });
-  }, [params, setParams]);
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("terminal");
+        next.delete("seed");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [onScreen, params, setParams]);
 
   const live = terminals.filter((t) => t.status !== "exited");
   // Derived, not synced: the selection falls back to the first live tab.

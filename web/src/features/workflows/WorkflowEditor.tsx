@@ -16,7 +16,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Textarea } from "@/components/ui/input";
+import { DraftNotice } from "@/components/DraftNotice";
 import { api } from "@/lib/api";
+import { globalKey, useRestorableDraft } from "@/lib/uiStore";
 import { useSaveWorkflow } from "./hooks";
 
 const STEP_TYPES = workflowStepTypeSchema.options;
@@ -70,11 +72,19 @@ interface Props {
 }
 
 export function WorkflowEditor({ onClose, workflow, preset }: Props) {
-  const [draft, setDraft] = useState<WorkflowInput>(
-    () =>
-      workflow
-        ? toInput(workflow)
-        : (preset ?? { name: "", description: "", folder: "", steps: [blankStep(0)] }),
+  // Keyed by what's being edited, so the new-workflow draft and each existing
+  // workflow's edits never bleed into one another.
+  const {
+    value: draft,
+    set: setDraft,
+    restored,
+    discard,
+    clear: clearDraft,
+  } = useRestorableDraft<WorkflowInput>(
+    globalKey("workflowEditor", workflow?.id ?? "new"),
+    workflow
+      ? toInput(workflow)
+      : (preset ?? { name: "", description: "", folder: "", steps: [blankStep(0)] }),
   );
   const [openStep, setOpenStep] = useState<number | null>(0);
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +119,7 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
       className="max-w-3xl"
     >
       <div className="space-y-4">
+        {restored && <DraftNotice onDiscard={discard} />}
         <div className="grid grid-cols-3 gap-3">
           <div>
             <Label>Name</Label>
@@ -360,7 +371,10 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
             onClick={() => {
               setError(null);
               save.mutate(draft, {
-                onSuccess: onClose,
+                onSuccess: () => {
+                  clearDraft(); // saved — nothing left unsaved to restore
+                  onClose();
+                },
                 onError: (err: unknown) =>
                   setError(err instanceof Error ? err.message : "Failed to save"),
               });

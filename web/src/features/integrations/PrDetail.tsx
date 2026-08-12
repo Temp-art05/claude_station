@@ -15,6 +15,9 @@ import { Badge, Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { authorColor } from "@/lib/authorColor";
+import { useUrlState } from "@/lib/useUrlState";
+import { MarkdownBody } from "@/features/git/MarkdownView";
 import { WorkWithClaude } from "@/features/integrations/WorkWithClaude";
 
 interface PrDetailData {
@@ -115,7 +118,9 @@ export function PrDetail({
 }) {
   const qc = useQueryClient();
   const base = `/api/github/${owner}/${name}/pulls/${number}`;
-  const [tab, setTab] = useState<(typeof SUB_TABS)[number]["value"]>("conversation");
+  // Its own param, so a link can point at a PR's Files tab and Back still works.
+  const [rawTab, setTab] = useUrlState("prtab", "conversation");
+  const tab = SUB_TABS.find((t) => t.value === rawTab)?.value ?? "conversation";
   const [comment, setComment] = useState("");
   const [mergeMethod, setMergeMethod] = useState<"merge" | "squash" | "rebase">("squash");
   const [deleteBranch, setDeleteBranch] = useState(true);
@@ -198,7 +203,15 @@ export function PrDetail({
       : viewer.login === pr.author
         ? "You can't approve your own PR"
         : undefined;
-  const pushHint = !viewer ? "Checking permissions…" : !viewer.canPush ? "You don't have push access" : undefined;
+  const pushHint = !viewer
+    ? "Checking permissions…"
+    : !viewer.canPush
+      ? "You don't have push access"
+      : undefined;
+  // GitHub refuses the merge outright, so the button must not look available.
+  const conflicted = pr.mergeable === "CONFLICTING";
+  const mergeHint =
+    pushHint ?? (conflicted ? `Resolve conflicts with ${pr.baseRefName} first` : undefined);
   // Review + comment events interleave on GitHub's conversation timeline.
   const timeline = [
     ...pr.comments.map((c) => ({ ...c, kind: "comment" as const, at: c.createdAt })),
@@ -210,65 +223,122 @@ export function PrDetail({
       <BackButton onBack={onBack} />
 
       <div className="mb-1 flex items-start gap-2">
-        <h2 className="min-w-0 flex-1 text-base font-semibold">
-          {pr.title} <span className="font-normal text-ink-faint">#{pr.number}</span>
+        <h2 className="min-w-0 flex-1 text-lg leading-snug font-semibold text-ink">
+          {pr.title} <span className="font-normal text-ink-muted">#{pr.number}</span>
         </h2>
-        <a href={pr.url} target="_blank" rel="noreferrer" className="mt-1 text-ink-faint hover:text-ink">
+        <a
+          href={pr.url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 text-ink-faint hover:text-ink"
+        >
           <ExternalLink size={14} />
         </a>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
-        <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${badge.cls}`}>
-          {pr.state === "MERGED" ? <GitMerge size={11} /> : <GitPullRequest size={11} />}
-          {badge.label}
-        </span>
-        <span>
-          <span className="text-ink">{pr.author}</span> wants to merge{" "}
-          {pr.commits.length} commit{pr.commits.length === 1 ? "" : "s"} into{" "}
-          <BaseBranchControl
-            owner={owner}
-            name={name}
-            pr={pr}
-            pending={editBase.isPending}
-            onPick={(branch) => editBase.mutate(branch)}
-          />{" "}
-          from <code className="font-mono">{pr.headRefName}</code>
-        </span>
-        <span className="text-ok">+{pr.additions}</span>
-        <span className="text-err">−{pr.deletions}</span>
-        <span>{pr.changedFiles} files</span>
-        {pr.labels.map((l) => (
-          <Badge key={l}>{l}</Badge>
-        ))}
-        {pr.assignees.map((a) => (
-          <Badge key={a} tone="accent">
-            @{a}
-          </Badge>
-        ))}
-        {pr.reviewDecision === "APPROVED" && <Badge tone="ok">approved</Badge>}
-        {pr.reviewDecision === "CHANGES_REQUESTED" && <Badge tone="err">changes requested</Badge>}
-        {pr.state === "OPEN" && pr.mergeable === "CONFLICTING" && (
-          <Badge tone="err">⚠ conflicts</Badge>
-        )}
-        {pr.state === "OPEN" && pr.mergeable === "MERGEABLE" && <Badge tone="ok">mergeable</Badge>}
-        {pr.checks.map((c) => (
-          <span key={c.name} className="flex items-center gap-0.5 text-[10.5px] text-ink-faint" title={c.name}>
-            {["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.state) ? (
-              <Check size={10} className="text-ok" />
-            ) : ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"].includes(c.state) ? (
-              <X size={10} className="text-err" />
-            ) : (
-              <span className="inline-block h-2 w-2 rounded-full bg-warn" />
-            )}
-            {c.name}
+      <div className="mb-3 flex items-start gap-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-[12.5px] text-ink-muted">
+          <span
+            className={`flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${badge.cls}`}
+          >
+            {pr.state === "MERGED" ? <GitMerge size={11} /> : <GitPullRequest size={11} />}
+            {badge.label}
           </span>
-        ))}
-        <div className="ml-auto">
-          <WorkWithClaude
-            endpoint={`/api/github/${owner}/${name}/pr/${pr.number}/work-with-claude`}
-            label="Work with Claude"
-          />
+          <span>
+            <span className="font-bold tracking-tight" style={{ color: authorColor(pr.author) }}>
+              {pr.author}
+            </span>{" "}
+            wants to merge {pr.commits.length} commit{pr.commits.length === 1 ? "" : "s"} into{" "}
+            <BaseBranchControl
+              owner={owner}
+              name={name}
+              pr={pr}
+              pending={editBase.isPending}
+              onPick={(branch) => editBase.mutate(branch)}
+            />{" "}
+            from <code className="font-mono">{pr.headRefName}</code>
+          </span>
+          <span className="text-ok">+{pr.additions}</span>
+          <span className="text-err">−{pr.deletions}</span>
+          <span>{pr.changedFiles} files</span>
+          {pr.labels.map((l) => (
+            <Badge key={l}>{l}</Badge>
+          ))}
+          {pr.assignees.map((a) => (
+            <Badge key={a} tone="accent">
+              @{a}
+            </Badge>
+          ))}
+          {pr.checks.map((c) => (
+            <span
+              key={c.name}
+              className="flex items-center gap-0.5 text-[11.5px] text-ink-muted"
+              title={c.name}
+            >
+              {["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.state) ? (
+                <Check size={10} className="text-ok" />
+              ) : ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"].includes(c.state) ? (
+                <X size={10} className="text-err" />
+              ) : (
+                <span className="inline-block h-2 w-2 rounded-full bg-warn" />
+              )}
+              {c.name}
+            </span>
+          ))}
+        </div>
+
+        {/* Status the reviewer acts on sits under the CTA, not buried in the meta run-on.
+            Assign lives here too — it used to be below the whole conversation. */}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            {assign.isError && (
+              <span className="text-[13px] text-err">
+                {assign.error instanceof Error ? assign.error.message : "Assign failed"}
+              </span>
+            )}
+            {pr.state === "OPEN" && (
+              <AssigneeMenu
+                owner={owner}
+                name={name}
+                assignees={pr.assignees}
+                pending={assign.isPending}
+                onToggle={(user, assigned) =>
+                  assign.mutate(assigned ? { remove: [user] } : { add: [user] })
+                }
+              />
+            )}
+            <WorkWithClaude
+              endpoint={`/api/github/${owner}/${name}/pr/${pr.number}/work-with-claude`}
+              label="Work with Claude"
+            />
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            {pr.reviewDecision === "APPROVED" && (
+              <Badge tone="ok" glow>
+                approved
+              </Badge>
+            )}
+            {pr.reviewDecision === "CHANGES_REQUESTED" && (
+              <Badge tone="err" glow>
+                changes requested
+              </Badge>
+            )}
+            {pr.reviewDecision === "REVIEW_REQUIRED" && (
+              <Badge tone="warn" glow>
+                review required
+              </Badge>
+            )}
+            {pr.state === "OPEN" && pr.mergeable === "CONFLICTING" && (
+              <Badge tone="err" glow>
+                ⚠ conflicts
+              </Badge>
+            )}
+            {pr.state === "OPEN" && pr.mergeable === "MERGEABLE" && (
+              <Badge tone="ok" glow>
+                mergeable
+              </Badge>
+            )}
+          </div>
         </div>
       </div>
 
@@ -292,8 +362,13 @@ export function PrDetail({
           <TimelineCard author={pr.author} at={pr.createdAt} body={pr.body || "(no description)"} />
           {timeline.map((item, i) =>
             item.kind === "review" && !item.body ? (
-              <p key={i} className="px-1 text-xs text-ink-faint">
-                <span className="text-ink-muted">{item.author}</span>{" "}
+              <p key={i} className="px-1 text-[12.5px] text-ink-muted">
+                <span
+                  className="font-bold tracking-tight"
+                  style={{ color: authorColor(item.author) }}
+                >
+                  {item.author}
+                </span>{" "}
                 {REVIEW_LABEL[item.state] ?? item.state.toLowerCase()} · {fmtDate(item.at)}
               </p>
             ) : (
@@ -302,22 +377,26 @@ export function PrDetail({
                 author={item.author}
                 at={item.at}
                 body={item.body}
-                tag={item.kind === "review" ? REVIEW_LABEL[item.state] ?? item.state.toLowerCase() : undefined}
+                tag={
+                  item.kind === "review"
+                    ? (REVIEW_LABEL[item.state] ?? item.state.toLowerCase())
+                    : undefined
+                }
               />
             ),
           )}
 
           {pr.state === "OPEN" && (
-            <Card className="space-y-2 p-3">
+            <Card className="space-y-3 p-4">
               <textarea
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
-                rows={3}
+                rows={4}
                 placeholder="Leave a comment"
-                className="w-full rounded-md border border-edge bg-surface px-3 py-2 text-xs text-ink placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
+                className="w-full rounded-md border border-edge-strong bg-surface px-3 py-2.5 text-sm leading-relaxed text-ink placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
               />
               {send.isError && (
-                <p className="text-xs text-err">
+                <p className="text-[13px] text-err">
                   {send.error instanceof Error ? send.error.message : "Failed"}
                 </p>
               )}
@@ -325,16 +404,15 @@ export function PrDetail({
                 {/* Tooltip lives on the span: disabled buttons have pointer-events none. */}
                 <span className="inline-flex gap-2" title={canReview ? undefined : reviewHint}>
                   <Button
-                    size="sm"
-                    variant="ghost"
+                    variant="secondary"
+                    className="border-ok/40 text-ok hover:border-ok/70 hover:bg-ok/12"
                     disabled={!canReview || send.isPending}
                     onClick={() => send.mutate({ kind: "approve" })}
                   >
-                    <Check size={12} /> Approve
+                    <Check size={14} /> Approve
                   </Button>
                   <Button
-                    size="sm"
-                    variant="ghost"
+                    variant="secondary"
                     disabled={!canReview || !comment.trim() || send.isPending}
                     onClick={() => send.mutate({ kind: "request-changes" })}
                   >
@@ -342,7 +420,6 @@ export function PrDetail({
                   </Button>
                 </span>
                 <Button
-                  size="sm"
                   variant="primary"
                   disabled={!comment.trim() || send.isPending}
                   onClick={() => send.mutate({ kind: "comment" })}
@@ -351,34 +428,23 @@ export function PrDetail({
                 </Button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-2">
-                <AssigneeMenu
-                  owner={owner}
-                  name={name}
-                  assignees={pr.assignees}
-                  pending={assign.isPending}
-                  onToggle={(user, assigned) =>
-                    assign.mutate(assigned ? { remove: [user] } : { add: [user] })
-                  }
-                />
+              <div className="flex flex-wrap items-center gap-2 border-t border-edge-strong pt-3">
                 <Button
-                  size="sm"
-                  variant="ghost"
+                  variant="secondary"
                   disabled={draftToggle.isPending}
                   onClick={() => draftToggle.mutate(!pr.isDraft)}
                 >
                   {pr.isDraft ? "Ready for review" : "Convert to draft"}
                 </Button>
-                {(assign.isError || draftToggle.isError || closeReopen.isError || editBase.isError) && (
-                  <span className="text-xs text-err">
-                    {[assign.error, draftToggle.error, closeReopen.error, editBase.error]
+                {(draftToggle.isError || closeReopen.isError || editBase.isError) && (
+                  <span className="text-[13px] text-err">
+                    {[draftToggle.error, closeReopen.error, editBase.error]
                       .filter((e): e is Error => e instanceof Error)
                       .map((e) => e.message)[0] ?? "Action failed"}
                   </span>
                 )}
                 <div className="ml-auto">
                   <Button
-                    size="sm"
                     variant="danger"
                     disabled={closeReopen.isPending}
                     onClick={() => {
@@ -387,43 +453,43 @@ export function PrDetail({
                       }
                     }}
                   >
-                    <X size={12} /> Close pull request
+                    <X size={14} /> Close pull request
                   </Button>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-2">
-                <GitMerge size={13} className="text-ink-muted" />
+              <div className="flex flex-wrap items-center gap-2 border-t border-edge-strong pt-3">
+                <GitMerge size={16} className="text-ink" />
                 <select
                   value={mergeMethod}
                   onChange={(e) => setMergeMethod(e.target.value as typeof mergeMethod)}
-                  className="h-7 rounded-md border border-edge bg-surface px-2 text-xs text-ink"
+                  className="h-9 rounded-md border border-edge-strong bg-surface px-3 text-sm text-ink"
                 >
                   <option value="squash">Squash and merge</option>
                   <option value="merge">Create a merge commit</option>
                   <option value="rebase">Rebase and merge</option>
                 </select>
-                <label className="flex items-center gap-1 text-xs text-ink-muted">
+                <label className="flex items-center gap-1.5 text-sm text-ink">
                   <input
                     type="checkbox"
                     checked={deleteBranch}
                     onChange={(e) => setDeleteBranch(e.target.checked)}
+                    className="h-4 w-4"
                   />
                   delete branch
                 </label>
-                {pr.mergeable === "CONFLICTING" && (
-                  <span className="text-xs text-err">has conflicts</span>
+                {conflicted && (
+                  <span className="text-[13px] font-semibold text-err">has conflicts</span>
                 )}
                 {merge.isError && (
-                  <span className="text-xs text-err">
+                  <span className="text-[13px] text-err">
                     {merge.error instanceof Error ? merge.error.message : "Merge failed"}
                   </span>
                 )}
-                <div className="ml-auto" title={pushHint}>
+                <div className="ml-auto" title={mergeHint}>
                   <Button
-                    size="sm"
                     variant="primary"
-                    disabled={!viewer?.canPush || merge.isPending}
+                    disabled={!viewer?.canPush || conflicted || merge.isPending}
                     onClick={() => {
                       if (
                         window.confirm(
@@ -435,7 +501,7 @@ export function PrDetail({
                       }
                     }}
                   >
-                    <GitMerge size={12} /> Merge
+                    <GitMerge size={14} /> Merge
                   </Button>
                 </div>
               </div>
@@ -473,9 +539,14 @@ export function PrDetail({
             <Card key={c.sha} className="p-3">
               <div className="flex items-center gap-2">
                 <GitCommitHorizontal size={12} className="shrink-0 text-ink-faint" />
-                <span className="min-w-0 flex-1 truncate text-sm">{c.message}</span>
-                <span className="text-[10.5px] text-ink-faint">{c.author}</span>
-                <span className="text-[10.5px] text-ink-faint">{fmtDate(c.date)}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-ink">{c.message}</span>
+                <span
+                  className="shrink-0 text-[12.5px] font-bold tracking-tight"
+                  style={{ color: authorColor(c.author) }}
+                >
+                  {c.author}
+                </span>
+                <span className="shrink-0 text-[11.5px] text-ink-muted">{fmtDate(c.date)}</span>
                 <a
                   href={`https://github.com/${owner}/${name}/commit/${c.sha}`}
                   target="_blank"
@@ -506,16 +577,18 @@ export function PrDetail({
             const stat = pr.files.find((x) => x.path === f.path);
             return (
               <Card key={f.path} className="overflow-hidden p-0">
-                <div className="flex items-center gap-2 border-b border-edge bg-surface px-3 py-1.5">
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink">{f.path}</span>
+                <div className="flex items-center gap-2 border-b border-edge bg-surface-2 px-3 py-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] font-medium text-ink">
+                    {f.path}
+                  </span>
                   {stat && (
-                    <span className="text-[10.5px]">
+                    <span className="text-[11.5px] font-medium">
                       <span className="text-ok">+{stat.additions}</span>{" "}
                       <span className="text-err">−{stat.deletions}</span>
                     </span>
                   )}
                 </div>
-                <pre className="max-h-[50vh] overflow-auto text-[11px] leading-relaxed">
+                <pre className="max-h-[50vh] overflow-auto font-mono text-[12px] leading-[1.6]">
                   {f.patch
                     .split("\n")
                     .filter((l) => !isDiffMeta(l))
@@ -536,7 +609,11 @@ export function PrDetail({
 }
 
 /** Closes a popover when the pointer goes down outside `ref`. */
-function useClickOutside(ref: React.RefObject<HTMLElement | null>, open: boolean, close: () => void) {
+function useClickOutside(
+  ref: React.RefObject<HTMLElement | null>,
+  open: boolean,
+  close: () => void,
+) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -637,6 +714,7 @@ function AssigneeMenu({
   onToggle: (user: string, assigned: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   useClickOutside(ref, open, () => setOpen(false));
   const users = useQuery({
@@ -645,36 +723,57 @@ function AssigneeMenu({
     enabled: open,
   });
 
+  // Substring match, not prefix — org logins are often `firstname-company`.
+  const needle = query.trim().toLowerCase();
+  const matches = (users.data ?? []).filter((u) => u.toLowerCase().includes(needle));
+
   return (
     <div ref={ref} className="relative">
-      <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)}>
-        <Users size={12} /> Assign{assignees.length > 0 ? ` (${assignees.length})` : ""}
+      <Button
+        variant="secondary"
+        onClick={() => {
+          setQuery("");
+          setOpen((v) => !v);
+        }}
+      >
+        <Users size={14} /> Assign{assignees.length > 0 ? ` (${assignees.length})` : ""}
       </Button>
       {open && (
-        <div className="absolute bottom-full left-0 z-20 mb-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-hairline-strong bg-surface-2 p-1 shadow-xl backdrop-blur-md">
-          {users.isLoading && <p className="px-2 py-1 text-xs text-ink-muted">Loading…</p>}
-          {users.error && (
-            <p className="px-2 py-1 text-xs text-err">
-              {users.error instanceof Error ? users.error.message : "Failed to load users"}
-            </p>
-          )}
-          {(users.data ?? []).map((u) => {
-            const assigned = assignees.includes(u);
-            return (
-              <button
-                key={u}
-                disabled={pending}
-                onClick={() => onToggle(u, assigned)}
-                className="flex w-full cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-ink hover:bg-surface disabled:opacity-50"
-              >
-                <Check size={11} className={assigned ? "text-ok" : "invisible"} />
-                {u}
-              </button>
-            );
-          })}
-          {users.data?.length === 0 && (
-            <p className="px-2 py-1 text-xs text-ink-muted">No assignable users</p>
-          )}
+        <div className="absolute top-full right-0 z-20 mt-1 flex max-h-80 w-72 flex-col rounded-lg border border-hairline-strong bg-surface-2 p-1.5 shadow-xl backdrop-blur-md">
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search people…"
+            className="mb-1.5 w-full rounded-md border border-edge-strong bg-surface px-2.5 py-1.5 text-sm text-white placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {users.isLoading && <p className="px-2 py-1.5 text-sm text-ink-muted">Loading…</p>}
+            {users.error && (
+              <p className="px-2 py-1.5 text-sm text-err">
+                {users.error instanceof Error ? users.error.message : "Failed to load users"}
+              </p>
+            )}
+            {matches.map((u) => {
+              const assigned = assignees.includes(u);
+              return (
+                <button
+                  key={u}
+                  disabled={pending}
+                  onClick={() => onToggle(u, assigned)}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm font-semibold text-white hover:bg-surface disabled:opacity-50"
+                >
+                  <Check size={14} className={assigned ? "text-ok" : "invisible"} />
+                  {u}
+                </button>
+              );
+            })}
+            {users.data && matches.length === 0 && (
+              <p className="px-2 py-1.5 text-sm text-ink-muted">
+                {needle ? `No match for “${query.trim()}”` : "No assignable users"}
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -685,7 +784,7 @@ function BackButton({ onBack }: { onBack: () => void }) {
   return (
     <button
       onClick={onBack}
-      className="mb-3 flex items-center gap-1 text-xs text-ink-muted hover:text-ink"
+      className="mb-3 flex items-center gap-1 text-[13px] text-ink-muted hover:text-ink"
     >
       <ArrowLeft size={12} /> Pull requests
     </button>
@@ -705,14 +804,14 @@ function TimelineCard({
 }) {
   return (
     <Card className="p-0">
-      <div className="flex items-center gap-2 border-b border-edge bg-surface px-3 py-1.5 text-xs">
-        <span className="font-medium text-ink">{author}</span>
+      <div className="flex items-center gap-2 border-b border-edge bg-surface-2 px-3.5 py-2 text-[13px]">
+        <span className="font-bold tracking-tight" style={{ color: authorColor(author) }}>
+          {author}
+        </span>
         {tag && <Badge>{tag}</Badge>}
-        <span className="ml-auto text-[10.5px] text-ink-faint">{fmtDate(at)}</span>
+        <span className="ml-auto text-[11.5px] text-ink-faint">{fmtDate(at)}</span>
       </div>
-      <div className="whitespace-pre-wrap px-3 py-2 text-xs leading-relaxed text-ink-muted">
-        {body}
-      </div>
+      <MarkdownBody source={body} breaks className="px-3.5 py-3" />
     </Card>
   );
 }

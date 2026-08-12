@@ -3,6 +3,7 @@ import { TriangleAlert } from "lucide-react";
 import type { Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { clearProjectUi } from "@/lib/uiStore";
 import { useDeleteProject } from "./hooks";
 
 /**
@@ -28,6 +29,9 @@ export function DeleteProjectDialog({
     setError(null);
     del.mutate(project.id, {
       onSuccess: () => {
+        // Remembered tabs, selections and drafts for a project that no longer
+        // exists are dead weight that would sit in localStorage forever.
+        clearProjectUi(project.id);
         onClose();
         onDeleted?.();
       },

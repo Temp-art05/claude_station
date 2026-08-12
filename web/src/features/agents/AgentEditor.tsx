@@ -9,6 +9,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Textarea } from "@/components/ui/input";
+import { DraftNotice } from "@/components/DraftNotice";
+import { globalKey, useRestorableDraft } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { useSaveAgent } from "./hooks";
 
@@ -63,7 +65,14 @@ interface Props {
  * three-state toggle per tool rather than two free-text lists.
  */
 export function AgentEditor({ open, onClose, agent, preset }: Props) {
-  const [draft, setDraft] = useState<AgentInput>(() =>
+  const {
+    value: draft,
+    set: setDraft,
+    restored,
+    discard,
+    clear: clearDraft,
+  } = useRestorableDraft<AgentInput>(
+    globalKey("agentEditor", agent?.id ?? "new"),
     agent ? toInput(agent) : (preset ?? blank()),
   );
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +109,10 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
     save.mutate(
       { ...draft, name: draft.name.trim(), description: draft.description.trim() },
       {
-        onSuccess: onClose,
+        onSuccess: () => {
+          clearDraft(); // saved — nothing left unsaved to restore
+          onClose();
+        },
         onError: (err: unknown) => setError(err instanceof Error ? err.message : "Failed to save"),
       },
     );
@@ -114,6 +126,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
       className="max-w-3xl"
     >
       <div className="space-y-4">
+        {restored && <DraftNotice onDiscard={discard} />}
         <div className="grid grid-cols-3 gap-3">
           <div>
             <Label>Name</Label>

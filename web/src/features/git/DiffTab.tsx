@@ -16,7 +16,10 @@ import {
 import type { Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
+import { usePanelActive } from "@/components/KeepAlive";
 import { api } from "@/lib/api";
+import { projectKey, useUiDraft, useUiSet, useUiState } from "@/lib/uiStore";
+import { useScrollMemory } from "@/lib/useScrollMemory";
 import { cn } from "@/lib/utils";
 import { BranchMenu } from "./BranchMenu";
 import { FileTree } from "./FileTree";
@@ -117,17 +120,31 @@ type Selection =
 
 export function DiffTab({ project }: { project: Project }) {
   const qc = useQueryClient();
-  const [pathId, setPathId] = useState(project.paths[0]?.id ?? "");
-  const [selected, setSelected] = useState<Selection>(null);
+  const panelActive = usePanelActive();
+  const ui = (...parts: string[]) => projectKey(project.id, "diff", ...parts);
+  const [storedPathId, setPathId] = useUiState(ui("pathId"), project.paths[0]?.id ?? "");
+  // A repo can be removed from the project between visits.
+  const pathId = project.paths.some((p) => p.id === storedPathId)
+    ? storedPathId
+    : (project.paths[0]?.id ?? "");
+  const [storedSelection, setSelected] = useUiState<Selection>(ui(pathId, "selection"), null);
   // Everything starts checked, Android Studio style — we track the unchecks.
-  const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
-  const [message, setMessage] = useState("");
-  const [amend, setAmend] = useState(false);
-  const [sideBySide, setSideBySide] = useState(true);
-  const [bottomView, setBottomView] = useState<"files" | "history">("files");
-  const [mdSource, setMdSource] = useState(false); // .md viewer: preview ⟷ source
+  const [unchecked, setUnchecked] = useUiSet(ui(pathId, "unchecked"));
+  // The one piece of typed-but-unsent text here — it outlives tab switches,
+  // route changes and reloads until it is actually committed.
+  const [message, setMessage] = useUiDraft(ui(pathId, "commitMessage"));
+  const [amend, setAmend] = useUiState(ui("amend"), false);
+  const [sideBySide, setSideBySide] = useUiState(ui("sideBySide"), true);
+  const [bottomView, setBottomView] = useUiState<"files" | "history">(ui("bottomView"), "files");
+  const [mdSource, setMdSource] = useUiState(ui("mdSource"), false); // .md: preview ⟷ source
+  // Transient by design: a one-shot scroll target and a toast. Both *should*
+  // die with the panel — restoring either would be noise, not continuity.
   const [reveal, setReveal] = useState<{ path: string; nonce: number } | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  // KeepAlive covers tab switches; these cover leaving the project entirely,
+  // which still unmounts the panel.
+  const changesScroll = useScrollMemory<HTMLDivElement>(ui(pathId, "scroll", "changes"));
+  const bottomScroll = useScrollMemory<HTMLDivElement>(ui(pathId, "scroll", bottomView));
 
   const statusKey = ["git-status", project.id, pathId];
   const { data: status } = useQuery({
@@ -135,8 +152,22 @@ export function DiffTab({ project }: { project: Project }) {
     queryFn: () =>
       api.get<StatusResponse>(`/api/projects/${project.id}/git/status?pathId=${pathId}`),
     enabled: !!pathId,
-    refetchInterval: 5000,
+    // Unconditional 5s poll — worth pausing while this panel sits behind
+    // another tab. (The workflow/command run polls stay on: they already stop
+    // when nothing is running, and their progress is wanted from elsewhere.)
+    refetchInterval: panelActive ? 5000 : false,
   });
+
+  const changes = status?.files ?? [];
+  const changedSet = new Set(changes.map((f) => f.path));
+  // A restored selection can point at a file that has since been committed or
+  // reverted. Derived rather than written back — correcting it with a state
+  // update would fight the store on every render. Waits for `status`, so the
+  // first render (before it loads) doesn't discard a perfectly good selection.
+  const selected: Selection =
+    storedSelection?.type === "change" && status && !changedSet.has(storedSelection.path)
+      ? null
+      : storedSelection;
 
   const { data: tree } = useQuery({
     queryKey: ["git-tree", project.id, pathId],
@@ -236,19 +267,16 @@ export function DiffTab({ project }: { project: Project }) {
       setNotice({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
   });
 
-  const changes = status?.files ?? [];
   const checkedFiles = changes.map((f) => f.path).filter((p) => !unchecked.has(p));
-  const changedSet = new Set(changes.map((f) => f.path));
   const canCommit =
     checkedFiles.length > 0 && (amend || message.trim().length > 0) && !doCommit.isPending;
 
-  const toggleCheck = (path: string) =>
-    setUnchecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
+  const toggleCheck = (path: string) => {
+    const next = new Set(unchecked);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    setUnchecked(next);
+  };
 
   return (
     <div className="flex h-full min-h-0">
@@ -257,11 +285,9 @@ export function DiffTab({ project }: { project: Project }) {
         <div className="space-y-1.5 border-b border-hairline p-3 pb-2">
           <select
             value={pathId}
-            onChange={(e) => {
-              setPathId(e.target.value);
-              setSelected(null);
-              setUnchecked(new Set());
-            }}
+            // Selection, unchecks and commit message are keyed by repo path, so
+            // switching repos reveals that repo's own state instead of clearing.
+            onChange={(e) => setPathId(e.target.value)}
             className="h-7 w-full rounded-md border border-edge bg-surface px-2 text-xs text-ink"
           >
             {project.paths.map((p) => (
@@ -307,7 +333,7 @@ export function DiffTab({ project }: { project: Project }) {
             <Badge>{changes.length}</Badge>
             {status && !status.isRepo && <span className="text-ink-faint">not a repo</span>}
           </button>
-          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-1">
+          <div ref={changesScroll} className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-1">
             {changes.length === 0 && (
               <p className="px-2 py-1 text-xs text-ink-faint">Working tree clean.</p>
             )}
@@ -425,7 +451,7 @@ export function DiffTab({ project }: { project: Project }) {
             </button>
           ))}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-1.5 pt-0.5">
+        <div ref={bottomScroll} className="min-h-0 flex-1 overflow-y-auto p-1.5 pt-0.5">
           {bottomView === "files" ? (
             <FileTree
               files={tree?.files ?? []}

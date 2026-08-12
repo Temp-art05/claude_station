@@ -8,6 +8,9 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { authorColor } from "@/lib/authorColor";
+import { globalKey } from "@/lib/uiStore";
+import { useUrlPatch, useStickyUrlState, useStickyUrlStateOptional } from "@/lib/useUrlState";
 import { WorkWithClaude } from "@/features/integrations/WorkWithClaude";
 import { PrDetail } from "@/features/integrations/PrDetail";
 
@@ -20,6 +23,21 @@ interface Pull {
   baseRefName: string;
   updatedAt: string;
   url: string;
+  reviewDecision: string;
+  reviewRequests: string[];
+}
+
+/**
+ * GitHub only fills `reviewDecision` when the branch has a required-review rule;
+ * everywhere else a pending request is the only "someone still owes a review"
+ * signal, so both feed one badge.
+ */
+function reviewBadge(pr: Pull): { label: string; tone: "ok" | "err" | "warn" } | null {
+  if (pr.reviewDecision === "APPROVED") return { label: "approved", tone: "ok" };
+  if (pr.reviewDecision === "CHANGES_REQUESTED") return { label: "changes requested", tone: "err" };
+  if (pr.reviewDecision === "REVIEW_REQUIRED" || (pr.reviewRequests?.length ?? 0) > 0)
+    return { label: "review required", tone: "warn" };
+  return null;
 }
 
 interface Issue {
@@ -47,8 +65,19 @@ interface Release {
 }
 
 type RepoContent =
-  | { type: "dir"; path: string; entries: { name: string; path: string; type: "dir" | "file"; size: number }[] }
-  | { type: "file"; path: string; name: string; size: number; text: string | null; truncated: boolean };
+  | {
+      type: "dir";
+      path: string;
+      entries: { name: string; path: string; type: "dir" | "file"; size: number }[];
+    }
+  | {
+      type: "file";
+      path: string;
+      name: string;
+      size: number;
+      text: string | null;
+      truncated: boolean;
+    };
 
 const TABS = [
   { value: "pulls", label: "Pull requests" },
@@ -80,9 +109,24 @@ function fmtSize(bytes: number): string {
 }
 
 export function GitHubPage() {
-  const [tab, setTab] = useState<(typeof TABS)[number]["value"]>("pulls");
-  const [selectedRepo, setRepo] = useState("");
-  const [selectedPr, setSelectedPr] = useState<number | null>(null);
+  // Repo, tab and open PR live in the URL: leaving for another page and coming
+  // back restores them, and the address bar is a shareable pointer at one PR.
+  const [rawTab, setTab] = useStickyUrlState("tab", globalKey("github", "tab"), "pulls");
+  const tab = TABS.find((t) => t.value === rawTab)?.value ?? "pulls";
+  const [selectedRepo, setRepo] = useStickyUrlState("repo", globalKey("github", "repo"), "");
+  // Opening a PR pushes, so Back returns to the list instead of leaving GitHub.
+  const [rawPr, setPr] = useStickyUrlStateOptional("pr", globalKey("github", "pr"), {
+    replace: false,
+  });
+  const selectedPr = Number.isInteger(Number(rawPr)) && rawPr ? Number(rawPr) : null;
+  const patchUrl = useUrlPatch();
+  // Must go through `setPr`, not a raw URL write: clearing only the param would
+  // leave the remembered PR in the store, and the backfill would reopen it on
+  // the very next render. The sub-tab has no store, so it clears via the URL.
+  const closePr = () => {
+    setPr(null);
+    patchUrl({ prtab: null });
+  };
   const [newPrOpen, setNewPrOpen] = useState(false);
 
   const { data: config } = useQuery({
@@ -94,9 +138,10 @@ export function GitHubPage() {
   const repos = (config?.repos ?? [])
     .map(normalizeGithubRepo)
     .filter((r): r is string => r !== null);
-  const repo = normalizeGithubRepo(selectedRepo) && repos.includes(normalizeGithubRepo(selectedRepo)!)
-    ? normalizeGithubRepo(selectedRepo)!
-    : repos[0] ?? "";
+  const repo =
+    normalizeGithubRepo(selectedRepo) && repos.includes(normalizeGithubRepo(selectedRepo)!)
+      ? normalizeGithubRepo(selectedRepo)!
+      : (repos[0] ?? "");
   const [owner, name] = repo.split("/");
   const enabled = !!owner && !!name;
 
@@ -136,9 +181,10 @@ export function GitHubPage() {
         <h1 className="text-lg font-semibold">GitHub</h1>
         <select
           value={repo}
+          // A PR number is meaningless against a different repo, so it goes too.
           onChange={(e) => {
             setRepo(e.target.value);
-            setSelectedPr(null);
+            closePr();
           }}
           className="h-8 rounded-md border border-edge bg-surface px-2 text-xs text-ink"
         >
@@ -176,7 +222,12 @@ export function GitHubPage() {
       )}
 
       {tab === "pulls" && selectedPr !== null && enabled && (
-        <PrDetail owner={owner!} name={name!} number={selectedPr} onBack={() => setSelectedPr(null)} />
+        <PrDetail
+          owner={owner!}
+          name={name!}
+          number={selectedPr}
+          onBack={closePr}
+        />
       )}
 
       {tab === "pulls" && selectedPr === null && enabled && (
@@ -192,42 +243,60 @@ export function GitHubPage() {
           name={name!}
           open={newPrOpen}
           onClose={() => setNewPrOpen(false)}
-          onCreated={(number) => setSelectedPr(number)}
+          onCreated={(number) => setPr(String(number))}
         />
       )}
 
       <div className="space-y-1.5">
         {tab === "pulls" &&
           selectedPr === null &&
-          pulls.data?.map((pr) => (
-            <Card key={pr.number} className="p-3">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs text-accent">#{pr.number}</span>
-                <button
-                  onClick={() => setSelectedPr(pr.number)}
-                  className="min-w-0 flex-1 truncate text-left text-sm hover:text-accent"
-                >
-                  {pr.title}
-                </button>
-                {pr.isDraft && <Badge>draft</Badge>}
-                <a href={pr.url} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink">
-                  <ExternalLink size={12} />
-                </a>
-              </div>
-              <div className="mt-1 flex items-center gap-2 text-[10.5px] text-ink-faint">
-                <span>{pr.author}</span>
-                <span className="font-mono">
-                  {pr.headRefName} → {pr.baseRefName}
-                </span>
-                <div className="ml-auto">
-                  <WorkWithClaude
-                    endpoint={`/api/github/${owner}/${name}/pr/${pr.number}/work-with-claude`}
-                    label="Work with Claude"
-                  />
+          pulls.data?.map((pr) => {
+            const review = reviewBadge(pr);
+            return (
+              <Card key={pr.number} className="p-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-accent">#{pr.number}</span>
+                  <button
+                    onClick={() => setPr(String(pr.number))}
+                    className="min-w-0 flex-1 truncate text-left text-sm hover:text-accent"
+                  >
+                    {pr.title}
+                  </button>
+                  {pr.isDraft && <Badge>draft</Badge>}
+                  {review && (
+                    <Badge tone={review.tone} glow className="shrink-0">
+                      {review.label}
+                    </Badge>
+                  )}
+                  <a
+                    href={pr.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-ink-faint hover:text-ink"
+                  >
+                    <ExternalLink size={12} />
+                  </a>
                 </div>
-              </div>
-            </Card>
-          ))}
+                <div className="mt-1.5 flex items-center gap-2 text-[10.5px] text-ink-faint">
+                  <span
+                    className="text-[12.5px] font-bold tracking-tight"
+                    style={{ color: authorColor(pr.author) }}
+                  >
+                    {pr.author}
+                  </span>
+                  <span className="font-mono">
+                    {pr.headRefName} → {pr.baseRefName}
+                  </span>
+                  <div className="ml-auto">
+                    <WorkWithClaude
+                      endpoint={`/api/github/${owner}/${name}/pr/${pr.number}/work-with-claude`}
+                      label="Work with Claude"
+                    />
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
 
         {tab === "issues" &&
           issues.data?.map((issue) => (
@@ -235,12 +304,22 @@ export function GitHubPage() {
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs text-accent">#{issue.number}</span>
                 <span className="min-w-0 flex-1 truncate text-sm">{issue.title}</span>
-                <a href={issue.url} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink">
+                <a
+                  href={issue.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-ink-faint hover:text-ink"
+                >
                   <ExternalLink size={12} />
                 </a>
               </div>
-              <div className="mt-1 flex items-center gap-2 text-[10.5px] text-ink-faint">
-                <span>{issue.author}</span>
+              <div className="mt-1.5 flex items-center gap-2 text-[10.5px] text-ink-faint">
+                <span
+                  className="text-[12.5px] font-bold tracking-tight"
+                  style={{ color: authorColor(issue.author) }}
+                >
+                  {issue.author}
+                </span>
                 {issue.labels.map((l) => (
                   <Badge key={l}>{l}</Badge>
                 ))}
@@ -311,7 +390,8 @@ function NewPrDialog({
     },
   });
 
-  const canCreate = !!title.trim() && !!head && !!baseValue && head !== baseValue && !create.isPending;
+  const canCreate =
+    !!title.trim() && !!head && !!baseValue && head !== baseValue && !create.isPending;
 
   return (
     <Dialog open={open} onClose={onClose} title="New pull request">
@@ -383,7 +463,8 @@ function NewPrDialog({
             Cancel
           </Button>
           <Button size="sm" variant="primary" disabled={!canCreate} onClick={() => create.mutate()}>
-            <GitPullRequest size={12} /> {draft ? "Create draft pull request" : "Create pull request"}
+            <GitPullRequest size={12} />{" "}
+            {draft ? "Create draft pull request" : "Create pull request"}
           </Button>
         </div>
       </div>
@@ -476,7 +557,12 @@ function ReleasesTab({ owner, name }: { owner: string; name: string }) {
             {r.isDraft && <Badge>draft</Badge>}
             {r.isPrerelease && <Badge>pre-release</Badge>}
             <span className="text-[10.5px] text-ink-faint">{fmtDate(r.publishedAt)}</span>
-            <a href={r.url} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink">
+            <a
+              href={r.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-ink-faint hover:text-ink"
+            >
               <ExternalLink size={12} />
             </a>
           </div>

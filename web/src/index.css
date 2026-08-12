@@ -14,9 +14,11 @@
   --color-surface-3: #242933;
   --color-edge: #262b34;
   --color-edge-strong: #333a46;
-  --color-ink: #e7e9ee;
-  --color-ink-muted: #8d93a1;
-  --color-ink-faint: #5c6270;
+  --color-ink: #f1f3f7;
+  /* Lifted from #8d93a1 / #5c6270: on the charcoal base those sat at ~5:1 and
+     ~3.2:1, and most of the UI uses them at 11-13px where 3.2:1 is unreadable. */
+  --color-ink-muted: #b4bbc7;
+  --color-ink-faint: #8f97a6;
   --color-accent: #2dd4bf;
   --color-accent-hover: #5eead4;
   --color-accent-ink: #04201c;
@@ -32,9 +34,16 @@
   --color-hairline: rgb(255 255 255 / 7%);
   --color-hairline-strong: rgb(255 255 255 / 12%);
 
-  /* Display face for headings, humanist geometric for UI text */
+  /*
+   * Outfit everywhere for the geometric, premium look. It ships latin +
+   * latin-ext only — Vietnamese tone marks (U+1EA0–1EF9) are NOT in it — so
+   * Plus Jakarta Sans stays as the next fallback and picks those glyphs up
+   * instead of dropping to the OS default face.
+   */
   --font-display: "Outfit Variable", "Outfit", system-ui, sans-serif;
-  --font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-sans:
+    "Outfit Variable", "Outfit", "Plus Jakarta Sans Variable", "Plus Jakarta Sans", system-ui,
+    sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
   /* Softer, larger shapes than before */
@@ -66,6 +75,9 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: 14px;
+  /* Both faces are variable, so 500 is a real weight, not a synthesised bold.
+     Regular reads too thin against the dark base at 11-14px. */
+  font-weight: 500;
   font-optical-sizing: auto;
   letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
@@ -91,10 +103,26 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(48rem 34rem at 6% -6%, color-mix(in srgb, var(--color-accent) 26%, transparent), transparent 62%),
-    radial-gradient(46rem 34rem at 104% 4%, color-mix(in srgb, var(--color-think) 24%, transparent), transparent 60%),
-    radial-gradient(52rem 34rem at 78% 108%, color-mix(in srgb, var(--color-think) 18%, transparent), transparent 64%),
-    radial-gradient(40rem 26rem at 22% 112%, color-mix(in srgb, var(--color-accent) 14%, transparent), transparent 66%);
+    radial-gradient(
+      48rem 34rem at 6% -6%,
+      color-mix(in srgb, var(--color-accent) 26%, transparent),
+      transparent 62%
+    ),
+    radial-gradient(
+      46rem 34rem at 104% 4%,
+      color-mix(in srgb, var(--color-think) 24%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      52rem 34rem at 78% 108%,
+      color-mix(in srgb, var(--color-think) 18%, transparent),
+      transparent 64%
+    ),
+    radial-gradient(
+      40rem 26rem at 22% 112%,
+      color-mix(in srgb, var(--color-accent) 14%, transparent),
+      transparent 66%
+    );
 }
 
 ::selection {
@@ -115,7 +143,8 @@ select {
   -webkit-backdrop-filter: blur(12px);
   color: var(--color-ink);
   padding-right: 1.85rem;
-  background-image: linear-gradient(45deg, transparent 50%, var(--color-ink-muted) 50%),
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-ink-muted) 50%),
     linear-gradient(135deg, var(--color-ink-muted) 50%, transparent 50%);
   background-position:
     right 0.95rem center,

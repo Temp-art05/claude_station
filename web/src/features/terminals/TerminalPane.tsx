@@ -148,13 +148,18 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
 
     // Keep the PTY's viewport in sync with the pane, not the window.
     const observer = new ResizeObserver(() => {
+      // A pane kept alive behind another tab measures 0×0. Fitting to that
+      // would resize the PTY to a garbage geometry and reflow the program's
+      // output — the damage is only visible later, when the tab comes back.
+      // Re-showing changes the size again, so the observer fits then.
+      if (!host.clientWidth || !host.clientHeight) return;
       try {
         fit.fit();
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
         }
       } catch {
-        /* pane hidden — ignore */
+        /* transient layout — the next observation will settle it */
       }
     });
     observer.observe(host);

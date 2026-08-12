@@ -25,6 +25,7 @@ import {
   uploadFiles,
   type PickedFile,
 } from "@/lib/folder-upload";
+import { globalKey, useUiState } from "@/lib/uiStore";
 import { fileUrl, uploadFile } from "@/lib/upload";
 import { cn } from "@/lib/utils";
 import { WorkflowEditor } from "@/features/workflows/WorkflowEditor";
@@ -44,7 +45,9 @@ export function WorkflowsPage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const dirRef = useRef<HTMLInputElement | null>(null);
 
-  const [folder, setFolder] = useState<string>("");
+  // Validated on read: a folder can vanish when its last workflow moves out.
+  const [storedFolder, setFolder] = useUiState(globalKey("workflows", "folder"), "");
+  const folder = folders.some((f) => f.folder === storedFolder) ? storedFolder : "";
   const [editing, setEditing] = useState<Workflow | null>(null);
   const [creating, setCreating] = useState<WorkflowInput | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -257,6 +260,7 @@ export function WorkflowsPage() {
             </select>
             <a
               href={fileUrl(`/api/workflows/${w.id}/export`)}
+              download
               className="inline-flex h-8 w-8 items-center justify-center rounded-pill text-ink-muted hover:bg-white/6 hover:text-ink"
               title="Export as .workflow.yaml"
             >

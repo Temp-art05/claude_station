@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, CircleAlert, CircleCheck, Download, Upload } from "lucide-react";
+import { Bell, CircleAlert, CircleCheck, Download, RotateCcw, Upload } from "lucide-react";
 import { normalizeGithubRepo, type AppSettings } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { resetUiState } from "@/lib/uiStore";
 import { fileUrl, uploadFile } from "@/lib/upload";
 
 interface Doctor {
@@ -162,7 +163,41 @@ export function SettingsPage() {
       <JiraSettings />
       <GitHubSettings />
       <BackupSettings />
+      <InterfaceStateSettings />
     </div>
+  );
+}
+
+/**
+ * Restored UI state is guessed from what you did last, and a guess can land
+ * somewhere unhelpful — a tab pinned open, a stale draft you keep dismissing.
+ * Without this the only cure is clearing localStorage by hand in devtools.
+ */
+function InterfaceStateSettings() {
+  const [done, setDone] = useState(false);
+
+  return (
+    <Card className="mt-4 space-y-3">
+      <h2 className="text-sm font-medium">Interface state</h2>
+      <p className="text-xs text-ink-muted">
+        Open tabs, selected items, scroll positions and unsaved drafts are remembered per project
+        so switching away and back returns you where you were. Resetting clears all of it —
+        projects, files and settings are untouched.
+      </p>
+      <div className="flex items-center gap-3">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            resetUiState();
+            setDone(true);
+          }}
+        >
+          <RotateCcw size={13} /> Reset interface state
+        </Button>
+        {done && <span className="text-xs text-ok">Cleared — reload to start fresh.</span>}
+      </div>
+    </Card>
   );
 }
 

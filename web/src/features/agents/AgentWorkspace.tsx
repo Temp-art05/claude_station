@@ -4,6 +4,7 @@ import { ExternalLink, Play, RotateCw, Square, TerminalSquare } from "lucide-rea
 import type { Agent, ChatSession, EnvSet, Project, Terminal } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { projectKey, useUiState } from "@/lib/uiStore";
 import { fileUrl } from "@/lib/upload";
 import { cn } from "@/lib/utils";
 import { ChatTab } from "@/features/chat/ChatTab";
@@ -78,8 +79,13 @@ function AppAgentView({
   agent: Agent;
 }) {
   const qc = useQueryClient();
-  const envKey = `agentEnv:${project.id}:${agent.name}`;
-  const [envSetId, setEnvSetId] = useState<string>(() => localStorage.getItem(envKey) ?? "");
+  // Was a hand-rolled localStorage key; now it rides the same store as every
+  // other remembered choice, so "reset UI state" and project deletion reach it.
+  const [storedEnvSetId, setEnvSetId] = useUiState(
+    projectKey(project.id, "agentEnv", agent.name),
+    "",
+  );
+  const envSetId = envSets.some((e) => e.id === storedEnvSetId) ? storedEnvSetId : "";
   const [showTerminal, setShowTerminal] = useState(true);
   const [frameNonce, setFrameNonce] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -130,10 +136,7 @@ function AppAgentView({
         {canStart && (
           <select
             value={envSetId}
-            onChange={(e) => {
-              setEnvSetId(e.target.value);
-              localStorage.setItem(envKey, e.target.value);
-            }}
+            onChange={(e) => setEnvSetId(e.target.value)}
             disabled={Boolean(appTerminal)}
             className="h-7 px-2 text-[11px]"
             title="Env set injected when starting — overrides the bundle's .env"

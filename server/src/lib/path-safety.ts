@@ -14,6 +14,10 @@ export function forbidden(message: string): Error & { statusCode: number } {
   return Object.assign(new Error(message), { statusCode: 403 });
 }
 
+export function tooLarge(message: string): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode: 413 });
+}
+
 /** Expand `~`, resolve relative input against the repo, then canonicalise. */
 export function expandPath(input: string): string {
   const trimmed = input.trim();
