@@ -1,10 +1,10 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { Search } from "lucide-react";
 import { Badge, Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { globalKey, useUiState } from "@/lib/uiStore";
 
 interface Hits {
   chat: {
@@ -42,7 +42,7 @@ function Snippet({ text }: { text: string }) {
 }
 
 export function SearchPage() {
-  const [term, setTerm] = useState("");
+  const [term, setTerm] = useUiState(globalKey("search", "term"), "");
   const trimmed = term.trim();
 
   const { data, isFetching } = useQuery({

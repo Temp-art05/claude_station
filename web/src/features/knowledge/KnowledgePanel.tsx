@@ -354,15 +354,18 @@ export function KnowledgePanel({ projectId }: Props) {
                 ))}
               </select>
             )}
-            {row.kind !== "folder" && (
-              <a
-                href={fileUrl(`/api/knowledge/${row.id}/file`)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink"
-                title="Download"
-              >
-                <Download size={14} />
-              </a>
-            )}
+            <a
+              href={fileUrl(`/api/knowledge/${row.id}/file`)}
+              download
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink"
+              title={
+                row.kind === "folder" || row.kind === "skill"
+                  ? "Download as .zip"
+                  : "Download"
+              }
+            >
+              <Download size={14} />
+            </a>
             {row.attached ? (
               <Button
                 size="icon"

@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Textarea } from "@/components/ui/input";
+import { DraftNotice } from "@/components/DraftNotice";
 import { api } from "@/lib/api";
+import { projectKey, useRestorableDraft, useUiState } from "@/lib/uiStore";
 import { fileUrl, uploadFile } from "@/lib/upload";
 
 const SOURCE_LABEL: Record<ProjectMemory["source"], string> = {
@@ -24,13 +26,25 @@ export function MemoryTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const key = ["memory", projectId];
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const [editing, setEditing] = useState<ProjectMemory | "new" | null>(null);
+  // Stored as an id, not the record: a memory saved here last week would come
+  // back stale and quietly overwrite whatever the server has now.
+  const [editingId, setEditingId] = useUiState<string | null>(
+    projectKey(projectId, "memory", "editing"),
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   const { data: memories = [] } = useQuery({
     queryKey: key,
     queryFn: () => api.get<ProjectMemory[]>(`/api/projects/${projectId}/memory`),
   });
+
+  // Resolved against the live list, so an id whose memory was deleted while we
+  // were on another tab just closes the editor instead of opening it on nothing.
+  const editing: ProjectMemory | "new" | null =
+    editingId === "new" ? "new" : (memories.find((m) => m.id === editingId) ?? null);
+  const setEditing = (next: ProjectMemory | "new" | null) =>
+    setEditingId(next === null ? null : next === "new" ? "new" : next.id);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["memory"] });
 
@@ -180,12 +194,21 @@ function MemoryEditor({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [draft, setDraft] = useState<ProjectMemoryInput>({
-    title: memory?.title ?? "",
-    body: memory?.body ?? "",
-    tags: memory?.tags ?? null,
-    pinned: memory?.pinned ?? false,
-  });
+  const {
+    value: draft,
+    set: setDraft,
+    restored,
+    discard,
+    clear: clearDraft,
+  } = useRestorableDraft<ProjectMemoryInput>(
+    projectKey(projectId, "memoryEditor", memory?.id ?? "new"),
+    {
+      title: memory?.title ?? "",
+      body: memory?.body ?? "",
+      tags: memory?.tags ?? null,
+      pinned: memory?.pinned ?? false,
+    },
+  );
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({
@@ -194,6 +217,7 @@ function MemoryEditor({
         ? api.patch(`/api/memory/${memory.id}`, input)
         : api.post(`/api/projects/${projectId}/memory`, input),
     onSuccess: () => {
+      clearDraft(); // saved — nothing left unsaved to restore
       void qc.invalidateQueries({ queryKey: ["memory"] });
       onClose();
     },
@@ -203,6 +227,7 @@ function MemoryEditor({
   return (
     <Dialog open onClose={onClose} title={memory ? "Edit memory" : "New memory"} className="max-w-2xl">
       <div className="space-y-3">
+        {restored && <DraftNotice onDiscard={discard} />}
         <div>
           <Label>Title</Label>
           <Input

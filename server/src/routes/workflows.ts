@@ -12,6 +12,7 @@ import { TOKEN } from "../lib/auth";
 import { env } from "../lib/config";
 import { readSinglePart, readUploadParts } from "../lib/multipart";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
+import { contentDisposition } from "../lib/zip";
 import {
   createWorkflow,
   deleteWorkflow,
@@ -129,7 +130,7 @@ export function workflowRoutes(app: FastifyInstance): void {
     const workflow = getWorkflow(id);
     if (!workflow) return reply.code(404).send({ error: "Workflow not found" });
     reply.header("Content-Type", "text/yaml; charset=utf-8");
-    reply.header("Content-Disposition", `attachment; filename="${workflow.name}.workflow.yaml"`);
+    reply.header("Content-Disposition", contentDisposition(workflow.name, ".workflow.yaml"));
     return exportWorkflowYaml(workflow);
   });
 

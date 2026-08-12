@@ -9,6 +9,7 @@ import { AGENTS_DIR } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
 import type { UploadedFile } from "../lib/multipart";
 import { badRequest } from "../lib/path-safety";
+import { dirEntries, zipEntries } from "../lib/zip";
 
 type Row = typeof schema.agents.$inferSelect;
 
@@ -360,4 +361,17 @@ export function exportAgentMarkdown(agent: Agent): string {
   if (agent.viewUrl) front.push(`viewUrl: ${agent.viewUrl}`);
   if (agent.startCommand) front.push(`startCommand: ${JSON.stringify(agent.startCommand)}`);
   return `---\n${front.join("\n")}\n---\n\n${agent.prompt}\n`;
+}
+
+/**
+ * The whole packaged agent, laid out exactly the way `importAgentFolder` expects
+ * to read it back: the definition as `<name>.md` at the archive root, companions
+ * beside it. Returns null when there are no companions — a lone definition is
+ * better served as the plain .md it already was.
+ */
+export async function exportAgentBundle(agent: Agent): Promise<Buffer | null> {
+  if (!agent.bundleDir || !existsSync(agent.bundleDir)) return null;
+  const companions = dirEntries(agent.bundleDir);
+  if (companions.length === 0) return null;
+  return zipEntries([{ path: `${agent.name}.md`, data: exportAgentMarkdown(agent) }, ...companions]);
 }

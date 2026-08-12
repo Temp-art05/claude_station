@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
 import { AppShell } from "@/components/AppShell";
 import { ProjectsPage } from "@/pages/ProjectsPage";
-import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { EnvPage } from "@/pages/EnvPage";
 import { JiraPage } from "@/pages/JiraPage";
@@ -26,7 +25,9 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/projects" replace /> },
       { path: "projects", element: <ProjectsPage /> },
-      { path: "projects/:id", element: <ProjectDetailPage /> },
+      // Matched so the URL stays canonical, but rendered by AppShell outside
+      // the outlet — that is what keeps a project alive while you're elsewhere.
+      { path: "projects/:id", element: null },
       { path: "env", element: <EnvPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "jira", element: <JiraPage /> },

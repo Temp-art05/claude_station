@@ -8,6 +8,7 @@ import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { projectKey, useUiState } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { RunView } from "./RunView";
 import {
@@ -29,9 +30,17 @@ export function WorkflowsTab({ project, envSets }: Props) {
   const { data: workflows = [] } = useWorkflows(project.id);
   const { data: runs = [] } = useRuns(project.id);
   const deleteRun = useDeleteRun(project.id);
-  const [openRun, setOpenRun] = useState<string | null>(null);
+  // Which run is open is "where I was", so it survives; a run can also be
+  // deleted while we're away, hence the check against the live list.
+  const [storedOpenRun, setOpenRun] = useUiState<string | null>(
+    projectKey(project.id, "workflows", "openRun"),
+    null,
+  );
+  const openRun = runs.some((r) => r.id === storedOpenRun) ? storedOpenRun : null;
   // Terminal-mode runs: the runbook typed into the embedded CLI, once per launch.
   const [runSeed, setRunSeed] = useState<string | null>(null);
+  // Dialogs stay local on purpose — a modal that reopens itself on return is
+  // disorienting rather than helpful.
   const [importOpen, setImportOpen] = useState(false);
   const [startFor, setStartFor] = useState<string | null>(null);
 

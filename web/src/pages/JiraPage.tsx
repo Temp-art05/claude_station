@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { globalKey, useUiState } from "@/lib/uiStore";
+import { useStickyUrlStateOptional } from "@/lib/useUrlState";
 import { WorkWithClaude } from "@/features/integrations/WorkWithClaude";
 
 interface JiraIssue {
@@ -26,14 +28,18 @@ interface JiraDetail extends JiraIssue {
 
 export function JiraPage() {
   const qc = useQueryClient();
-  const [jql, setJql] = useState("");
+  const [jql, setJql] = useUiState(globalKey("jira", "jql"), "");
   // Text search fires as you type — debounce so we don't hammer Jira per keystroke.
   const [debouncedJql, setDebouncedJql] = useState("");
   useEffect(() => {
     const t = setTimeout(() => setDebouncedJql(jql), 400);
     return () => clearTimeout(t);
   }, [jql]);
-  const [selected, setSelected] = useState<string | null>(null);
+  // In the URL so leaving for a project and coming back reopens the same issue,
+  // and so an issue can be linked to directly. Pushed, so Back closes it.
+  const [selected, setSelected] = useStickyUrlStateOptional("issue", globalKey("jira", "issue"), {
+    replace: false,
+  });
 
   const { data: status } = useQuery({
     queryKey: ["jira-status"],

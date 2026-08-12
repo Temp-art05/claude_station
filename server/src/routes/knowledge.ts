@@ -19,6 +19,7 @@ import {
 } from "../services/library";
 import { reindexKnowledge } from "../services/search";
 import { skillLinkState } from "../services/skills";
+import { contentDisposition, dirEntries, zipEntries } from "../lib/zip";
 
 const idParam = z.object({ id: z.string() });
 const MAX_UPLOAD = 64 * 1024 * 1024;
@@ -153,13 +154,22 @@ export function knowledgeRoutes(app: FastifyInstance): void {
     if (!existsSync(safe)) {
       return reply.code(404).send({ error: "File missing on disk" });
     }
+    // A skill or an imported folder is a whole tree on disk — hand it over as a
+    // zip rather than refusing, which is the only way the UI can export one.
     if (statSync(safe).isDirectory()) {
-      return reply
-        .code(400)
-        .send({ error: "This item is a folder — browse it in the data directory" });
+      reply.header("Content-Type", "application/zip");
+      reply.header("Content-Disposition", contentDisposition(row.name, ".zip"));
+      return reply.send(await zipEntries(dirEntries(safe)));
     }
     reply.header("Content-Type", "application/octet-stream");
-    reply.header("Content-Disposition", `inline; filename="${row.originalFilename}"`);
+    // The preview pane fetches parsed sheets for display, so those stay inline;
+    // everything else is a download the user asked for.
+    reply.header(
+      "Content-Disposition",
+      sheet
+        ? contentDisposition(sheet, ".csv", "inline")
+        : contentDisposition(row.originalFilename, ""),
+    );
     return reply.send(createReadStream(safe));
   });
 

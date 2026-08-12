@@ -308,7 +308,7 @@ export function EnvPage() {
             <Card key={set.id} className="flex items-center gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium">{set.name}</span>
+                  <span className="text-[15px] font-bold text-ok">{set.name}</span>
                   <Badge tone={set.projectId ? "default" : "accent"}>
                     {set.projectId
                       ? (projects.find((p) => p.id === set.projectId)?.name ?? "project")
@@ -322,9 +322,9 @@ export function EnvPage() {
                   <Badge>{set.vars.length} vars</Badge>
                 </div>
                 {set.description && (
-                  <p className="mt-0.5 text-xs text-ink-muted">{set.description}</p>
+                  <p className="mt-1 text-[13px] text-white">{set.description}</p>
                 )}
-                <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-4 text-ink-faint">
+                <div className="mt-1.5 line-clamp-2 font-mono text-[12px] leading-5 text-white">
                   {set.vars.map((v) => (
                     <span key={v.id} className="mr-3">
                       {v.key}={v.isSecret ? "••••••" : v.value || "″″"}
