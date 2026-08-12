@@ -192,7 +192,7 @@ Mỗi bước tự đứng được và test được riêng; dừng ở bất k
 - **Selection trỏ tới thứ đã chết** — terminal đã kill, PR đã merge, file đã commit, repo đã gỡ, workspace đã archive. Luôn validate với list hiện tại; không khớp thì fallback im lặng, không hiện lỗi.
 - **`?tab=agent:<id>` của session đã archive** — `ProjectDetailPage.tsx:88` đang lọc theo `allTabs`, giữ nguyên cách này; fallback về `chat`.
 - **Nhiều tab trình duyệt cùng mở** — `persist` của zustand ghi đè lẫn nhau giữa các tab. Chọn: **không** bật đồng bộ cross-tab; mỗi tab tự chạy, ghi sau thắng. Đồng bộ live sẽ làm hai cửa sổ giật selection của nhau.
-- **Deep link `?terminal=&seed=`** — `TerminalsTab.tsx:41-48` xoá param sau khi dùng; store không được ghi đè logic một-lần này. Giữ nguyên `seedTarget` là `useState` khởi tạo từ URL.
+- **Deep link `?terminal=&seed=`** — param bị xoá sau khi dùng; store không được ghi đè logic một-lần này. ~~Giữ nguyên `seedTarget` là `useState` khởi tạo từ URL.~~ Sai dưới keep-alive — xem [Vòng 7](#vòng-7--work-with-claude-chết-vì-panel-không-còn-remount): phải derive từ `useSearchParams()` mỗi render, và xoá param ở `onSeedSent` chứ không phải trong effect.
 - **Quota `localStorage`** — draft dài (workflow prompt) có thể phình. Cap mỗi draft ở 64KB, bọc `try/catch` quanh mọi lần ghi, đầy thì âm thầm bỏ qua chứ không làm vỡ UI.
 - **Store cũ, shape mới** — `migrate` thất bại thì reset về mặc định, không crash.
 - **`unchecked` là `Set`** — `JSON.stringify` ra `{}`. Phải serialize thành mảng trong `partialize`/`merge`.
@@ -267,7 +267,7 @@ Hệ quả trực tiếp của vòng 3 mà bản đầu bỏ sót: `ProjectDetai
 
 **Sửa:** `useStickyUrlState`/`useStickyUrlStateOptional` nhận thêm `enabled`. Khi `false` thì bỏ qua
 URL hoàn toàn (chỉ đọc store) và không ghi gì. `ProjectDetailPage` truyền `enabled: usePanelActive()`.
-Effect xoá `?terminal=`/`?seed=` trong `TerminalsTab` cũng gate theo `onScreen` vì cùng lý do.
+Việc đọc/xoá `?terminal=`/`?seed=` trong `TerminalsTab` cũng gate theo `onScreen` vì cùng lý do.
 
 ### Vòng 5 — mất *project đang mở*, không phải state bên trong
 
@@ -315,6 +315,37 @@ hai setter.
 thì cập nhật store trực tiếp và gộp **toàn bộ** thay đổi URL vào **một** `useUrlPatch`.
 
 **Luật cần nhớ:** một hành động của người dùng = **tối đa một** lần ghi URL.
+
+### Vòng 7 — "Work with Claude" chết vì panel không còn remount
+
+Triệu chứng: bấm **Work with Claude** ở một PR trên GitHub thì không có gì xảy ra nữa — trước đây
+vẫn được. Chỉ còn chạy khi project đó **chưa từng mở** trong phiên trình duyệt hiện tại.
+
+Đây là hồi quy trực tiếp của vòng 3/7 (keep-alive), do hai giả định cũ chết theo cùng lúc:
+
+1. `TerminalsTab` đọc `?terminal=`/`?seed=` bằng `useState` khởi tạo từ URL — tức **chỉ lúc mount**.
+   Trước keep-alive, mỗi lần điều hướng là một lần remount nên nó luôn đọc lại. Giờ
+   `AppShell.tsx:52` giữ **mọi** project đã mở mount vĩnh viễn, deep link đi tới một component
+   không bao giờ mount lại → `seedTarget`/`seed` vẫn là `null` của lần mount đầu. Effect gate theo
+   `onScreen` sau đó **xoá luôn** param, nên không còn dấu vết gì.
+2. Terminal được tạo bằng `api.post` thẳng trong `WorkWithClaude`, không qua `useCreateTerminal`,
+   nên không invalidate gì. Panel đã mount sẵn + `refetchOnWindowFocus: false` (`main.tsx:18`) =
+   list terminal không bao giờ refetch → terminal mới không xuất hiện trong tab list.
+
+Ghi chú "Giữ nguyên `seedTarget` là `useState` khởi tạo từ URL" ở phần Edge case bên trên là **sai**
+kể từ khi có keep-alive; đã sửa tại chỗ.
+
+**Sửa:**
+
+- `TerminalsTab` **derive** `seedTarget`/`seed` từ `params` mỗi lần render, gate bằng
+  `kind === "claude" && onScreen` (giữ nguyên lý do của vòng 4: panel ẩn không được đụng URL của
+  trang đang hiện).
+- Không xoá param trong effect nữa mà xoá trong `onSeedSent` — param biến mất **đúng lúc** prompt đã
+  vào CLI. Lần đến mà không tới được terminal đang chạy thì giữ nguyên seed thay vì nuốt mất.
+- `WorkWithClaude` invalidate `["terminals", projectId]` trước khi `navigate`.
+
+**Luật cần nhớ:** dưới keep-alive, **không** đọc URL bằng `useState`/`useRef` khởi tạo một lần. Mọi
+deep link phải derive từ `useSearchParams()` theo từng render; mount không còn là mốc "vừa đến".
 
 ## Tình trạng — xong 10 bước gốc + vòng 2 → 6 (2026-08-12)
 

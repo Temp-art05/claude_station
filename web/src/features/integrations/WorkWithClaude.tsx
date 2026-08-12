@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { Sparkles } from "lucide-react";
 import type { Project } from "@claude-station/shared";
@@ -20,6 +20,7 @@ interface Props {
  */
 export function WorkWithClaude({ endpoint, label = "Work on this with Claude" }: Props) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
   const [pathId, setPathId] = useState("");
@@ -41,6 +42,10 @@ export function WorkWithClaude({ endpoint, label = "Work on this with Claude" }:
       }),
     onSuccess: ({ terminalId, seed }) => {
       setOpen(false);
+      // The terminal was created outside `useCreateTerminal`, and the project
+      // page is likely already mounted behind this one — arriving there won't
+      // refetch anything, so the new terminal would be missing from the list.
+      void qc.invalidateQueries({ queryKey: ["terminals", projectId] });
       navigate(
         `/projects/${projectId}?tab=chat&terminal=${terminalId}&seed=${encodeURIComponent(seed)}`,
       );
