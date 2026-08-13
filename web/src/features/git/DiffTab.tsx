@@ -1,30 +1,39 @@
-import { useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
   Check,
+  ChevronDown,
+  ChevronRight,
   Code,
   Columns2,
   Eye,
   FileDiff,
+  FilePlus,
+  FolderPlus,
   LocateFixed,
+  Pencil,
   RotateCcw,
   Rows3,
+  Trash2,
 } from "lucide-react";
 import type { Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
+import { Splitter } from "@/components/ui/Splitter";
 import { usePanelActive } from "@/components/KeepAlive";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { projectKey, useUiDraft, useUiSet, useUiState } from "@/lib/uiStore";
 import { useScrollMemory } from "@/lib/useScrollMemory";
 import { cn } from "@/lib/utils";
+import { AUTOSAVE_MS, shouldAutosave } from "./autosave";
 import { BranchMenu } from "./BranchMenu";
 import { FileTree } from "./FileTree";
 import { MarkdownView } from "./MarkdownView";
 import { SideBySideDiff, splitHunks } from "./SideBySideDiff";
+import { useGitWatch } from "./useGitWatch";
 
 interface StatusResponse {
   cwd: string;
@@ -44,7 +53,14 @@ interface FileResponse {
   content: string;
   truncated: boolean;
   binary: boolean;
+  hash: string;
 }
+
+/**
+ * CodeMirror is a few hundred KB and this bundle is already over vite's warning
+ * threshold — so it loads on the first Edit click, not on page load.
+ */
+const FileEditor = lazy(() => import("./FileEditor"));
 
 interface LogEntry {
   hash: string;
@@ -55,6 +71,12 @@ interface LogEntry {
   refs: string[];
 }
 
+interface Changelist {
+  id: string;
+  name: string;
+  files: string[];
+}
+
 const STATUS_TONE: Record<string, string> = {
   M: "text-warn",
   A: "text-ok",
@@ -62,6 +84,12 @@ const STATUS_TONE: Record<string, string> = {
   D: "text-err",
   R: "text-accent",
 };
+
+/** Untracked in porcelain v1. Everything else is a change git already knows about. */
+const isUntracked = (status: string) => status === "??" || status === "?";
+
+/** Drag payload: which file is being moved, and out of which repo. */
+const DND_MIME = "application/x-station-change";
 
 /** Minimal unified-diff colouring — the "All changes" overview. */
 function UnifiedDiff({ patch }: { patch: string }) {
@@ -112,6 +140,36 @@ function FileView({ file }: { file: FileResponse }) {
   );
 }
 
+/**
+ * Tick-all with a real third state. `indeterminate` exists only as a DOM
+ * property — there is no attribute for it — so it has to be set through a ref.
+ */
+function TriCheckbox({
+  checked,
+  indeterminate,
+  onToggle,
+  title,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  onToggle: () => void;
+  title: string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      ref={(el) => {
+        if (el) el.indeterminate = indeterminate;
+      }}
+      checked={checked}
+      onChange={onToggle}
+      onClick={(e) => e.stopPropagation()}
+      title={title}
+      className="shrink-0 accent-(--color-accent)"
+    />
+  );
+}
+
 type Selection =
   | { type: "change"; path: string }
   | { type: "file"; path: string }
@@ -137,10 +195,29 @@ export function DiffTab({ project }: { project: Project }) {
   const [sideBySide, setSideBySide] = useUiState(ui("sideBySide"), true);
   const [bottomView, setBottomView] = useUiState<"files" | "history">(ui("bottomView"), "files");
   const [mdSource, setMdSource] = useUiState(ui("mdSource"), false); // .md: preview ⟷ source
+  const [collapsed, setCollapsed] = useUiSet(ui(pathId, "collapsedGroups"));
+  // Pane sizes in px — dragged by the user, remembered like every other bit of
+  // tab state. Height is for the Changes block; the rest of the column flexes.
+  const [colWidth, setColWidth] = useUiState(ui("colWidth"), 320);
+  const [changesHeight, setChangesHeight] = useUiState(ui("changesHeight"), 260);
   // Transient by design: a one-shot scroll target and a toast. Both *should*
   // die with the panel — restoring either would be noise, not continuity.
   const [reveal, setReveal] = useState<{ path: string; nonce: number } | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  /**
+   * Unsaved edit buffers, keyed by path — a file with no entry here is clean and
+   * renders straight from the query, so a change on disk needs no reseeding.
+   *
+   * Keyed rather than a single buffer: editing file A then switching to B would
+   * otherwise drop A's unsaved work without a word. Transient on purpose too —
+   * persisting it would mean silently restoring an old version of a file an agent
+   * has since rewritten. `baseHash` is the version the buffer forked from; the
+   * whole overwrite guard hangs off it.
+   */
+  const [buffers, setBuffers] = useState<Record<string, { text: string; baseHash: string }>>({});
+  /** Paths whose last save hit a 409 — autosave stays off for them until resolved. */
+  const [conflictPaths, setConflictPaths] = useState<Record<string, true>>({});
   // KeepAlive covers tab switches; these cover leaving the project entirely,
   // which still unmounts the panel.
   const changesScroll = useScrollMemory<HTMLDivElement>(ui(pathId, "scroll", "changes"));
@@ -152,10 +229,10 @@ export function DiffTab({ project }: { project: Project }) {
     queryFn: () =>
       api.get<StatusResponse>(`/api/projects/${project.id}/git/status?pathId=${pathId}`),
     enabled: !!pathId,
-    // Unconditional 5s poll — worth pausing while this panel sits behind
-    // another tab. (The workflow/command run polls stay on: they already stop
-    // when nothing is running, and their progress is wanted from elsewhere.)
-    refetchInterval: panelActive ? 5000 : false,
+    // The watcher below is the real refresh path. This is the safety net for
+    // when it can't come up (OS limits, odd filesystem), so it stays slow —
+    // `git status` on a large repo is not something to run every few seconds.
+    refetchInterval: panelActive ? 20000 : false,
   });
 
   const changes = status?.files ?? [];
@@ -180,6 +257,16 @@ export function DiffTab({ project }: { project: Project }) {
     queryFn: () =>
       api.get<{ commits: LogEntry[] }>(`/api/projects/${project.id}/git/log?pathId=${pathId}`),
     enabled: !!pathId && bottomView === "history",
+  });
+
+  const changelistKey = ["git-changelists", project.id, pathId];
+  const { data: changelistData } = useQuery({
+    queryKey: changelistKey,
+    queryFn: () =>
+      api.get<{ changelists: Changelist[] }>(
+        `/api/projects/${project.id}/git/changelists?pathId=${pathId}`,
+      ),
+    enabled: !!pathId,
   });
 
   const changeSelected = selected?.type === "change" ? selected.path : null;
@@ -230,10 +317,79 @@ export function DiffTab({ project }: { project: Project }) {
     void qc.invalidateQueries({ queryKey: ["git-log", project.id, pathId] });
   };
 
+  // This is what makes the tab live: the server watches the working tree and
+  // every change re-runs the queries above, including the open diff — which the
+  // old 5s status poll never touched, so the diff pane sat stale until a reload.
+  const watching = useGitWatch(project.id, pathId, panelActive, refreshAll);
+
   const revert = useMutation({
     mutationFn: (files: string[]) =>
       api.post(`/api/projects/${project.id}/git/revert`, { files, pathId }),
     onSuccess: refreshAll,
+  });
+
+  const addToVcs = useMutation({
+    mutationFn: (files: string[]) =>
+      api.post(`/api/projects/${project.id}/git/add`, { files, pathId }),
+    onSuccess: refreshAll,
+    onError: (err: unknown) =>
+      setNotice({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
+  });
+
+  const deleteUnversioned = useMutation({
+    mutationFn: (files: string[]) =>
+      api.post<{ deleted: number }>(`/api/projects/${project.id}/git/delete-files`, {
+        files,
+        pathId,
+      }),
+    onSuccess: (r, files) => {
+      setNotice({ tone: "ok", text: `Deleted ${r.deleted} file(s)` });
+      if (files.includes(changeSelected ?? "")) setSelected(null);
+      refreshAll();
+    },
+    onError: (err: unknown) =>
+      setNotice({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
+  });
+
+  const saveFile = useMutation({
+    mutationFn: ({
+      silent: _silent,
+      ...v
+    }: {
+      file: string;
+      content: string;
+      baseHash: string;
+      silent?: boolean;
+    }) => api.put<{ hash: string }>(`/api/projects/${project.id}/git/file`, { pathId, ...v }),
+    onSuccess: (r, v) => {
+      // Autosave stays quiet: a toast every 1.2s while typing is noise, not news.
+      if (!v.silent) setNotice({ tone: "ok", text: `Saved ${v.file}` });
+      // Write the result straight into the cache instead of waiting for the
+      // refetch: in that gap the query still holds the OLD content and hash,
+      // which looks exactly like "someone else just wrote this file" and would
+      // flash the editor back to the previous version.
+      qc.setQueryData<FileResponse>(["git-file", project.id, pathId, v.file], (old) =>
+        old ? { ...old, content: v.content, hash: r.hash } : old,
+      );
+      dropBuffer(v.file);
+      setConflictPaths((prev) => {
+        if (!prev[v.file]) return prev;
+        const next = { ...prev };
+        delete next[v.file];
+        return next;
+      });
+      refreshAll();
+    },
+    onError: (err: unknown, v) => {
+      setNotice({ tone: "err", text: err instanceof Error ? err.message : String(err) });
+      // A 409 must latch. Without this, autosave retries every 1.2s — each attempt
+      // failing — because `fileContent.hash` still matches `baseHash` until the
+      // refetch lands, so nothing else would tell autosave to stand down.
+      if (err instanceof ApiError && err.status === 409) {
+        setConflictPaths((prev) => ({ ...prev, [v.file]: true }));
+        void qc.invalidateQueries({ queryKey: ["git-file", project.id, pathId, v.file] });
+      }
+    },
   });
 
   const revertHunk = useMutation({
@@ -245,6 +401,28 @@ export function DiffTab({ project }: { project: Project }) {
     },
     onError: (err: unknown) =>
       setNotice({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
+  });
+
+  const refreshChangelists = () => void qc.invalidateQueries({ queryKey: changelistKey });
+
+  const createList = useMutation({
+    mutationFn: (name: string) =>
+      api.post(`/api/projects/${project.id}/git/changelists`, { pathId, name }),
+    onSuccess: refreshChangelists,
+  });
+  const renameList = useMutation({
+    mutationFn: (v: { id: string; name: string }) =>
+      api.patch(`/api/projects/${project.id}/git/changelists/${v.id}`, { name: v.name }),
+    onSuccess: refreshChangelists,
+  });
+  const deleteList = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/projects/${project.id}/git/changelists/${id}`),
+    onSuccess: refreshChangelists,
+  });
+  const moveFiles = useMutation({
+    mutationFn: (v: { clId: string | null; paths: string[] }) =>
+      api.post(`/api/projects/${project.id}/git/changelist-files`, { pathId, ...v }),
+    onSuccess: refreshChangelists,
   });
 
   const doCommit = useMutation({
@@ -262,6 +440,7 @@ export function DiffTab({ project }: { project: Project }) {
       setAmend(false);
       setSelected(null);
       refreshAll();
+      refreshChangelists();
     },
     onError: (err: unknown) =>
       setNotice({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
@@ -278,10 +457,292 @@ export function DiffTab({ project }: { project: Project }) {
     setUnchecked(next);
   };
 
+  /**
+   * Tick-all for one group. Deliberately scoped to the group's own files: a
+   * top-level "check everything" that reached into the other groups would
+   * silently re-tick files the user had just cleared there.
+   */
+  const toggleGroup = (paths: string[], allChecked: boolean) => {
+    const next = new Set(unchecked);
+    for (const p of paths) {
+      if (allChecked) next.add(p);
+      else next.delete(p);
+    }
+    setUnchecked(next);
+  };
+
+  const toggleCollapsed = (id: string) => {
+    const next = new Set(collapsed);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setCollapsed(next);
+  };
+
+  // ── Grouping ───────────────────────────────────────────────────────────────
+  // Unversioned files are their own node and never join a changelist: the group
+  // is defined by "git doesn't track this yet", and it owns the Add action.
+  const tracked = changes.filter((f) => !isUntracked(f.status));
+  const untracked = changes.filter((f) => isUntracked(f.status));
+  const lists = changelistData?.changelists ?? [];
+  const assigned = new Map<string, string>();
+  for (const l of lists) for (const p of l.files) assigned.set(p, l.id);
+  // A file in a changelist that has since been committed or reverted is gone
+  // from `status`; filtering here is what keeps stale mappings invisible.
+  const groups: { id: string; name: string; files: typeof tracked; custom: boolean }[] = [
+    {
+      id: "default",
+      name: "Changes",
+      files: tracked.filter((f) => !assigned.has(f.path)),
+      custom: false,
+    },
+    ...lists.map((l) => ({
+      id: l.id,
+      name: l.name,
+      files: tracked.filter((f) => assigned.get(f.path) === l.id),
+      custom: true,
+    })),
+  ];
+
+  // ── Editing ────────────────────────────────────────────────────────────────
+  // The file pane is always editable — no Edit button to press. Binary and
+  // truncated files stay read-only: saving a truncated file would silently drop
+  // everything past the 1 MB the viewer received.
+  const editable = !!fileSelected && !!fileContent && !fileContent.binary && !fileContent.truncated;
+  const dirtyBuf = fileSelected ? buffers[fileSelected] : undefined;
+  const dirty = !!dirtyBuf;
+  const editorText = dirtyBuf?.text ?? fileContent?.content ?? "";
+  // While dirty this stays frozen at the forked-from version, which is both what
+  // the save guard needs and what keeps the editor from remounting mid-typing.
+  const editorBase = dirtyBuf?.baseHash ?? fileContent?.hash ?? "";
+  // Dirty AND the file moved underneath us — someone else (very likely an agent)
+  // wrote it. Never resolve this silently; the user picks. The latched 409 counts
+  // too: right after the rejection the refetch hasn't landed, so the hashes still
+  // look equal even though the server just told us otherwise.
+  const conflicted =
+    dirty && ((!!fileContent && fileContent.hash !== dirtyBuf.baseHash) || !!conflictPaths[fileSelected!]);
+  const onEditorChange = (text: string) => {
+    if (!fileSelected) return;
+    setBuffers((prev) => ({
+      ...prev,
+      [fileSelected]: { text, baseHash: prev[fileSelected]?.baseHash ?? (fileContent?.hash ?? "") },
+    }));
+  };
+
+  const dropBuffer = (path: string) => {
+    setBuffers((prev) => {
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+    setConflictPaths((prev) => {
+      if (!prev[path]) return prev;
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+  };
+
+  const commitEdit = (baseHash = editorBase, silent = false) => {
+    if (!fileSelected || !dirty) return;
+    saveFile.mutate({ file: fileSelected, content: editorText, baseHash, silent });
+  };
+
+  // Autosave: 1.2s after the last keystroke. `editorText` in the deps is what makes
+  // each keystroke restart the timer instead of letting the first one win.
+  const armAutosave = shouldAutosave({
+    dirty,
+    editable,
+    conflicted,
+    saving: saveFile.isPending,
+  });
+  useEffect(() => {
+    if (!armAutosave || !fileSelected) return;
+    const t = setTimeout(() => commitEdit(editorBase, true), AUTOSAVE_MS);
+    return () => clearTimeout(t);
+    // `commitEdit` is rebuilt every render; listing it would re-arm the timer on
+    // every render rather than on every edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [armAutosave, fileSelected, editorText, editorBase]);
+
+  // Switching files inside the autosave window would otherwise leave that buffer
+  // unsaved with nothing on screen saying so — now there is no indicator at all,
+  // so the switch itself has to flush it. Conflicted buffers are left alone: they
+  // would only 409 again, and their banner is waiting when you come back.
+  const prevFile = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevFile.current;
+    prevFile.current = fileSelected;
+    if (!prev || prev === fileSelected) return;
+    const buf = buffers[prev];
+    if (!buf || conflictPaths[prev]) return;
+    saveFile.mutate({ file: prev, content: buf.text, baseHash: buf.baseHash, silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileSelected]);
+
+  const askDelete = (paths: string[]) => {
+    const what = paths.length === 1 ? paths[0] : `${paths.length} unversioned files`;
+    if (
+      confirm(
+        `Delete ${what} from disk?\n\nUnversioned files have no committed version to restore from — this cannot be undone.`,
+      )
+    ) {
+      deleteUnversioned.mutate(paths);
+    }
+  };
+
+  const selectedIsUntracked =
+    !!changeSelected && untracked.some((f) => f.path === changeSelected);
+
+  // Del/Backspace on the selected row. Scoped to unversioned files on purpose:
+  // tracked files already have Rollback, and a mistyped key should never be able
+  // to remove a file the repo is carrying.
+  useEffect(() => {
+    if (!panelActive || !selectedIsUntracked || !changeSelected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      // Without this, Backspace while writing a commit message deletes a file.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+      e.preventDefault();
+      askDelete([changeSelected]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // `askDelete` closes over react-query's `mutate`, which is stable; listing it
+    // would re-bind the listener on every render for no behavioural gain.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelActive, selectedIsUntracked, changeSelected]);
+
+  const onDropInto = (clId: string | null) => (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(null);
+    const path = e.dataTransfer.getData(DND_MIME);
+    if (path) moveFiles.mutate({ clId, paths: [path] });
+  };
+
+  const fileRow = (f: { path: string; status: string }, group: string) => (
+    <div
+      key={f.path}
+      draggable={!isUntracked(f.status)}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DND_MIME, f.path);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      className={cn(
+        "group flex items-center gap-1.5 rounded-md px-1.5 py-0.5",
+        changeSelected === f.path ? "bg-surface-3" : "hover:bg-surface-2",
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={!unchecked.has(f.path)}
+        onChange={() => toggleCheck(f.path)}
+        className="shrink-0 accent-(--color-accent)"
+      />
+      <span
+        className={cn(
+          "w-3 shrink-0 text-center font-mono text-[10px] font-bold",
+          STATUS_TONE[f.status[0] ?? ""] ?? "text-ink-muted",
+        )}
+      >
+        {f.status}
+      </span>
+      <button
+        onClick={() => setSelected({ type: "change", path: f.path })}
+        className="min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-[11px]"
+        title={f.path}
+      >
+        <span className="text-ink">{f.path.split("/").pop()}</span>
+        {f.path.includes("/") && (
+          <span className="text-ink-faint">
+            {"  "}
+            {f.path.slice(0, f.path.lastIndexOf("/"))}
+          </span>
+        )}
+      </button>
+      {group === "unversioned" ? (
+        <>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
+            title="Add to VCS"
+            onClick={() => addToVcs.mutate([f.path])}
+          >
+            <FilePlus size={11} />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
+            title="Delete from disk (Del)"
+            onClick={() => askDelete([f.path])}
+          >
+            <Trash2 size={11} />
+          </Button>
+        </>
+      ) : (
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
+          title="Rollback — discard changes to this file"
+          onClick={() => {
+            if (confirm(`Discard local changes to ${f.path}? This cannot be undone.`)) {
+              revert.mutate([f.path]);
+            }
+          }}
+        >
+          <RotateCcw size={11} />
+        </Button>
+      )}
+    </div>
+  );
+
+  const groupHeader = (
+    id: string,
+    name: string,
+    files: { path: string }[],
+    extra?: React.ReactNode,
+  ) => {
+    const paths = files.map((f) => f.path);
+    const allChecked = paths.length > 0 && paths.every((p) => !unchecked.has(p));
+    const someChecked = paths.some((p) => !unchecked.has(p));
+    const isCollapsed = collapsed.has(id);
+    return (
+      <div
+        className={cn(
+          "group/hdr flex items-center gap-1.5 rounded-md px-1.5 py-1",
+          dragOver === id && "bg-accent/15 ring-1 ring-accent/40",
+        )}
+      >
+        <button
+          onClick={() => toggleCollapsed(id)}
+          className="cursor-pointer text-ink-faint hover:text-ink"
+          title={isCollapsed ? "Expand" : "Collapse"}
+        >
+          {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+        </button>
+        <TriCheckbox
+          checked={allChecked}
+          indeterminate={!allChecked && someChecked}
+          onToggle={() => toggleGroup(paths, allChecked)}
+          title={allChecked ? "Uncheck all in this group" : "Check all in this group"}
+        />
+        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-ink">{name}</span>
+        <Badge>{files.length}</Badge>
+        {extra}
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-full min-h-0">
       {/* ── Left: repo + branch, changes + commit, files / history ────────── */}
-      <div className="flex w-80 shrink-0 flex-col border-r border-edge">
+      <div
+        className="flex shrink-0 flex-col border-r border-edge"
+        style={{ width: colWidth }}
+      >
         <div className="space-y-1.5 border-b border-hairline p-3 pb-2">
           <select
             value={pathId}
@@ -321,72 +782,140 @@ export function DiffTab({ project }: { project: Project }) {
         </div>
 
         {/* Changes + commit box */}
-        <div className="flex max-h-[42%] flex-col border-b border-hairline">
-          <button
-            onClick={() => setSelected(null)}
-            className={cn(
-              "flex w-full cursor-pointer items-center gap-1.5 px-3 py-1.5 text-left text-xs font-medium",
-              selected === null ? "bg-surface-3" : "hover:bg-surface-2",
+        <div
+          className="flex shrink-0 flex-col border-b border-hairline"
+          style={{ height: changesHeight }}
+        >
+          <div className="flex items-center gap-1.5 px-3 py-1.5">
+            <TriCheckbox
+              checked={changes.length > 0 && checkedFiles.length === changes.length}
+              indeterminate={checkedFiles.length > 0 && checkedFiles.length < changes.length}
+              onToggle={() =>
+                toggleGroup(
+                  changes.map((f) => f.path),
+                  checkedFiles.length === changes.length,
+                )
+              }
+              title="Check / uncheck every file"
+            />
+            <button
+              onClick={() => setSelected(null)}
+              className={cn(
+                "flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-medium",
+                selected === null ? "bg-surface-3" : "hover:bg-surface-2",
+              )}
+            >
+              All changes
+              <Badge>{changes.length}</Badge>
+              {status && !status.isRepo && <span className="text-ink-faint">not a repo</span>}
+            </button>
+            {/* No dot = the watcher never came up and the 20s poll is carrying
+                the tab. Worth showing: it explains a laggy list. */}
+            {!watching && panelActive && (
+              <span className="shrink-0 text-[10px] text-ink-faint" title="Live watch unavailable — refreshing every 20s">
+                poll
+              </span>
             )}
-          >
-            Changes
-            <Badge>{changes.length}</Badge>
-            {status && !status.isRepo && <span className="text-ink-faint">not a repo</span>}
-          </button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-5 w-5 shrink-0"
+              title="New changelist"
+              onClick={() => {
+                const name = prompt("Changelist name")?.trim();
+                if (name) createList.mutate(name);
+              }}
+            >
+              <FolderPlus size={12} />
+            </Button>
+          </div>
+
           <div ref={changesScroll} className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-1">
             {changes.length === 0 && (
               <p className="px-2 py-1 text-xs text-ink-faint">Working tree clean.</p>
             )}
-            {changes.map((f) => (
-              <div
-                key={f.path}
-                className={cn(
-                  "group flex items-center gap-1.5 rounded-md px-1.5 py-0.5",
-                  changeSelected === f.path ? "bg-surface-3" : "hover:bg-surface-2",
-                )}
-              >
-                <input
-                  type="checkbox"
-                  checked={!unchecked.has(f.path)}
-                  onChange={() => toggleCheck(f.path)}
-                  className="shrink-0 accent-(--color-accent)"
-                />
-                <span
-                  className={cn(
-                    "w-3 shrink-0 text-center font-mono text-[10px] font-bold",
-                    STATUS_TONE[f.status[0] ?? ""] ?? "text-ink-muted",
-                  )}
-                >
-                  {f.status}
-                </span>
-                <button
-                  onClick={() => setSelected({ type: "change", path: f.path })}
-                  className="min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-[11px]"
-                  title={f.path}
-                >
-                  <span className="text-ink">{f.path.split("/").pop()}</span>
-                  {f.path.includes("/") && (
-                    <span className="text-ink-faint">
-                      {"  "}
-                      {f.path.slice(0, f.path.lastIndexOf("/"))}
-                    </span>
-                  )}
-                </button>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
-                  title="Rollback — discard changes to this file"
-                  onClick={() => {
-                    if (confirm(`Discard local changes to ${f.path}? This cannot be undone.`)) {
-                      revert.mutate([f.path]);
-                    }
+
+            {groups.map((g) => {
+              // The default group is always a drop target so a file can come
+              // back out of a changelist; custom ones vanish when deleted.
+              const empty = g.files.length === 0;
+              if (empty && g.id === "default" && lists.length === 0) return null;
+              return (
+                <div
+                  key={g.id}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dragOver !== g.id) setDragOver(g.id);
                   }}
+                  onDragLeave={() => setDragOver((cur) => (cur === g.id ? null : cur))}
+                  onDrop={onDropInto(g.id === "default" ? null : g.id)}
                 >
-                  <RotateCcw size={11} />
-                </Button>
+                  {groupHeader(
+                    g.id,
+                    g.name,
+                    g.files,
+                    g.custom ? (
+                      <span className="flex shrink-0 items-center opacity-0 group-hover/hdr:opacity-100">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-5 w-5"
+                          title="Rename changelist"
+                          onClick={() => {
+                            const name = prompt("Changelist name", g.name)?.trim();
+                            if (name && name !== g.name) renameList.mutate({ id: g.id, name });
+                          }}
+                        >
+                          <Pencil size={10} />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-5 w-5"
+                          title="Delete changelist (files are not touched)"
+                          onClick={() => deleteList.mutate(g.id)}
+                        >
+                          <Trash2 size={10} />
+                        </Button>
+                      </span>
+                    ) : null,
+                  )}
+                  {!collapsed.has(g.id) && (
+                    <div className="pl-3">
+                      {g.files.map((f) => fileRow(f, g.id))}
+                      {empty && (
+                        <p className="px-2 py-0.5 text-[10.5px] text-ink-faint">
+                          Drag files here.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {untracked.length > 0 && (
+              <div>
+                {groupHeader(
+                  "unversioned",
+                  "Unversioned Files",
+                  untracked,
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-5 shrink-0 px-1.5 text-[10px]"
+                    title="Add every unversioned file to VCS"
+                    onClick={() => addToVcs.mutate(untracked.map((f) => f.path))}
+                  >
+                    Add all
+                  </Button>,
+                )}
+                {!collapsed.has("unversioned") && (
+                  <div className="pl-3">{untracked.map((f) => fileRow(f, "unversioned"))}</div>
+                )}
               </div>
-            ))}
+            )}
           </div>
 
           <div className="space-y-1.5 border-t border-hairline p-2">
@@ -435,6 +964,14 @@ export function DiffTab({ project }: { project: Project }) {
             )}
           </div>
         </div>
+
+        <Splitter
+          axis="y"
+          size={changesHeight}
+          onResize={setChangesHeight}
+          min={140}
+          max={700}
+        />
 
         {/* Bottom: project files ⟷ history */}
         <div className="flex items-center gap-1 px-3 pt-1.5 pb-0.5">
@@ -499,6 +1036,8 @@ export function DiffTab({ project }: { project: Project }) {
         </div>
       </div>
 
+      <Splitter axis="x" size={colWidth} onResize={setColWidth} min={220} max={640} />
+
       {/* ── Right: diff / file viewer / commit ────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
         {selected && selected.type !== "commit" && (
@@ -516,30 +1055,51 @@ export function DiffTab({ project }: { project: Project }) {
             >
               <LocateFixed size={12} />
             </Button>
-            {selected.type === "file" && selected.path.toLowerCase().endsWith(".md") && (
+            {selected.type === "file" && (
               <div className="ml-auto flex items-center gap-1">
-                <Button
-                  size="sm"
-                  variant={!mdSource ? "primary" : "ghost"}
-                  onClick={() => setMdSource(false)}
-                  title="Rendered preview"
-                >
-                  <Eye size={12} /> Preview
-                </Button>
-                <Button
-                  size="sm"
-                  variant={mdSource ? "primary" : "ghost"}
-                  onClick={() => setMdSource(true)}
-                  title="Raw source with line numbers"
-                >
-                  <Code size={12} /> Source
-                </Button>
+                {fileContent && !editable && (
+                  <span className="text-[10.5px] text-ink-faint">
+                    {fileContent.binary ? "binary — read only" : "truncated at 1 MB — read only"}
+                  </span>
+                )}
+                {selected.path.toLowerCase().endsWith(".md") && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant={!mdSource ? "primary" : "ghost"}
+                      onClick={() => setMdSource(false)}
+                      title="Rendered preview"
+                    >
+                      <Eye size={12} /> Preview
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={mdSource ? "primary" : "ghost"}
+                      onClick={() => setMdSource(true)}
+                      title="Editable source"
+                    >
+                      <Code size={12} /> Source
+                    </Button>
+                  </>
+                )}
+                {/* No Save / unsaved / Discard chrome on purpose: it appeared and
+                    vanished as you typed, shifting the header around. Saving is
+                    automatic, so the only thing worth interrupting for is the
+                    conflict banner below. */}
               </div>
             )}
             {selected.type === "change" && (
               <>
                 <Badge>{changes.find((f) => f.path === selected.path)?.status ?? ""}</Badge>
                 <div className="ml-auto flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title="Open this file in the editor"
+                    onClick={() => setSelected({ type: "file", path: selected.path })}
+                  >
+                    <Pencil size={12} /> Edit
+                  </Button>
                   <Button
                     size="sm"
                     variant={sideBySide ? "primary" : "ghost"}
@@ -617,6 +1177,49 @@ export function DiffTab({ project }: { project: Project }) {
             fileContent ? (
               fileSelected.toLowerCase().endsWith(".md") && !mdSource && !fileContent.binary ? (
                 <MarkdownView source={fileContent.content} />
+              ) : editable ? (
+                <div className="flex h-full min-h-0 flex-col">
+                  {conflicted && (
+                    <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-3 py-1.5">
+                      <span className="min-w-0 flex-1 text-[11px] text-warn">
+                        This file changed on disk while you were editing it.
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Throw away your edits and load the version on disk"
+                        onClick={() => dropBuffer(fileSelected)}
+                      >
+                        Reload
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        title="Keep your edits and overwrite what is on disk"
+                        onClick={() => commitEdit(fileContent.hash)}
+                      >
+                        Overwrite
+                      </Button>
+                    </div>
+                  )}
+                  <div className="min-h-0 flex-1">
+                    <Suspense
+                      fallback={<p className="p-4 text-xs text-ink-faint">Loading editor…</p>}
+                    >
+                      {/* Keyed on the path ALONE. Including the content hash meant
+                          every autosave changed the key and remounted the editor,
+                          throwing caret and scroll position back to the top.
+                          Content updates are pushed in as a transaction instead. */}
+                      <FileEditor
+                        key={fileSelected}
+                        path={fileSelected}
+                        doc={editorText}
+                        onChange={onEditorChange}
+                        onSave={() => commitEdit()}
+                      />
+                    </Suspense>
+                  </div>
+                </div>
               ) : (
                 <FileView file={fileContent} />
               )

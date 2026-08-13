@@ -141,9 +141,12 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
           </button>
           {isLocal && (
             <button
-              onClick={() => {
-                if (confirm(`Delete branch "${name}"?`)) doOp("delete-branch", name);
-              }}
+              // No confirm dialog: git itself refuses `branch -d` on anything not
+              // fully merged and that error surfaces as a notice, so the case worth
+              // guarding is already guarded — a prompt only slows down tidying up.
+              // `run.mutate` instead of `doOp` keeps the popup open, because
+              // clearing out stale branches is something you do several at a time.
+              onClick={() => run.mutate({ op: "delete-branch", branch: name })}
               title={`Delete ${name}`}
               className="cursor-pointer rounded p-0.5 text-ink-faint hover:text-err"
             >

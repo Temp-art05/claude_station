@@ -499,3 +499,40 @@ export const workHistory = sqliteTable(
   },
   (t) => [index("idx_work_history_project").on(t.projectId)],
 );
+
+/**
+ * Android Studio-style changelists. Git has no such concept — it is an IDE-side
+ * grouping of pending changes — so Station stores it. Scoped to one repo path of
+ * one project, because the same file path means different things in two repos.
+ */
+export const gitChangelists = sqliteTable(
+  "git_changelists",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** Which entry of project_paths this list belongs to. */
+    pathId: text("path_id").notNull(),
+    name: text("name").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_git_changelists_scope").on(t.projectId, t.pathId)],
+);
+
+/**
+ * Only files that were actually dragged somewhere get a row — everything else is
+ * implicitly in the default group. Keeps this table proportional to what the user
+ * organised, not to the size of the repo.
+ */
+export const gitChangelistFiles = sqliteTable(
+  "git_changelist_files",
+  {
+    id: text("id").primaryKey(),
+    changelistId: text("changelist_id")
+      .notNull()
+      .references(() => gitChangelists.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+  },
+  (t) => [uniqueIndex("idx_git_changelist_files_unique").on(t.changelistId, t.path)],
+);

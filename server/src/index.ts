@@ -31,6 +31,7 @@ import { killAll as killAllPtys } from "./services/pty-manager";
 import { chatWs } from "./ws/chat-ws";
 import { workflowWs } from "./ws/workflow-ws";
 import { commandWs } from "./ws/command-ws";
+import { gitWs } from "./ws/git-ws";
 import { terminalWs } from "./ws/terminal-ws";
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
@@ -94,6 +95,7 @@ terminalWs(app);
 commandWs(app);
 chatWs(app);
 workflowWs(app);
+gitWs(app);
 
 // Prod mode: serve the built web app from the same port.
 const webDist = join(REPO_ROOT, "web/dist");
