@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { Plus, RotateCw, X } from "lucide-react";
 import type { EnvSet, Project, TerminalKind } from "@claude-station/shared";
@@ -29,12 +29,17 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   const restart = useRestartTerminal(project.id);
 
   const onScreen = usePanelActive();
-  // "Work with Claude" deep-links land here as ?terminal=<id>&seed=<text> (claude kind only).
+  // "Work with Claude" deep-links land here as ?terminal=<id>&seed=<text>.
+  //
+  // Read from the URL on every render rather than once at mount: this panel is
+  // kept alive behind other pages, so a link from GitHub or Jira arrives at a
+  // component that never remounts, and a mount-time read would honour only the
+  // first link of the session. Only the Claude panel owns these params, and
+  // never while hidden — it would be answering for the page on screen.
   const [params, setParams] = useSearchParams();
-  const [seedTarget] = useState(() => (kind === "claude" ? params.get("terminal") : null));
-  const [seed, setSeed] = useState<string | null>(() =>
-    kind === "claude" ? params.get("seed") : null,
-  );
+  const deepLinked = kind === "claude" && onScreen;
+  const seedTarget = deepLinked ? params.get("terminal") : null;
+  const seed = deepLinked ? params.get("seed") : null;
 
   // Keyed by kind: the Claude tab and the Terminals tab each keep their own.
   const ui = (...parts: string[]) => projectKey(project.id, "terminals", kind, ...parts);
@@ -47,20 +52,18 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
     : (project.paths[0]?.id ?? "");
   const envSetId = envSets.some((e) => e.id === storedEnvSetId) ? storedEnvSetId : "";
 
-  // A deep link outranks whatever was selected last time — but only once, so a
-  // later click on another terminal still wins.
+  // A deep link outranks whatever was selected last time — but it only fires on
+  // the arriving link, so a later click on another terminal still wins.
   useEffect(() => {
     if (seedTarget) setSelectedId(seedTarget);
   }, [seedTarget, setSelectedId]);
 
-  // Strip the one-shot params so a reload or tab switch never replays the seed.
+  // One-shot: the params go once the prompt is actually in the CLI, so a reload
+  // or a tab switch never types it a second time — and an arrival that never
+  // reaches a running terminal keeps its seed instead of dropping it silently.
   // Functional form: ?tab= may be written in the same tick, and a snapshot-based
   // write here would silently roll it back.
-  useEffect(() => {
-    // Never from a kept-alive pane that isn't on screen — it would be editing
-    // the URL of whatever page the user is actually looking at.
-    if (!onScreen) return;
-    if (!params.has("terminal") && !params.has("seed")) return;
+  const clearSeed = useCallback(() => {
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -70,7 +73,7 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
       },
       { replace: true },
     );
-  }, [onScreen, params, setParams]);
+  }, [setParams]);
 
   const live = terminals.filter((t) => t.status !== "exited");
   // Derived, not synced: the selection falls back to the first live tab.
@@ -201,7 +204,7 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
             key={active.id}
             terminalId={active.id}
             seedText={seed && active.id === seedTarget ? seed : undefined}
-            onSeedSent={() => setSeed(null)}
+            onSeedSent={clearSeed}
           />
         )}
       </div>
