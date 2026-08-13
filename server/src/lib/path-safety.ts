@@ -18,6 +18,11 @@ export function tooLarge(message: string): Error & { statusCode: number } {
   return Object.assign(new Error(message), { statusCode: 413 });
 }
 
+/** The caller's view of the resource is stale — someone else wrote it first. */
+export function conflict(message: string): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode: 409 });
+}
+
 /** Expand `~`, resolve relative input against the repo, then canonicalise. */
 export function expandPath(input: string): string {
   const trimmed = input.trim();

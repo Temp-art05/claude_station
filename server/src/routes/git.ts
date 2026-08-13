@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
+import { resolveTree } from "../services/git-paths";
 import {
+  addFiles,
   abortInProgress,
   branchInfo,
   branches,
@@ -13,6 +15,7 @@ import {
   commitFiles,
   commitPatch,
   deleteBranch,
+  deleteUntracked,
   diff,
   fetchAll,
   isGitRepo,
@@ -26,32 +29,10 @@ import {
   revertFiles,
   revertHunk,
   status,
+  writeTreeFile,
 } from "../services/git";
 
 const idParam = z.object({ id: z.string() });
-
-/** Resolve which working tree to inspect: a session's worktree, or a project path. */
-function resolveTree(projectId: string, query: { pathId?: string; sessionId?: string }): string {
-  if (query.sessionId) {
-    const session = db
-      .select()
-      .from(schema.chatSessions)
-      .where(eq(schema.chatSessions.id, query.sessionId))
-      .get();
-    if (!session) throw badRequest("Session not found");
-    return session.worktreePath ?? session.cwd;
-  }
-  const paths = db
-    .select()
-    .from(schema.projectPaths)
-    .where(eq(schema.projectPaths.projectId, projectId))
-    .all();
-  const chosen = query.pathId
-    ? paths.find((p) => p.id === query.pathId)
-    : (paths.find((p) => p.isDefault) ?? paths[0]);
-  if (!chosen) throw badRequest("No path to inspect");
-  return chosen.path;
-}
 
 const treeQuery = z.object({
   pathId: z.string().optional(),
@@ -89,6 +70,38 @@ export function gitRoutes(app: FastifyInstance): void {
     const cwd = resolveTree(id, q);
     assertPathAllowed(`${cwd}/${q.file}`, id);
     return readTreeFile(cwd, q.file, q.rev);
+  });
+
+  /**
+   * Save an edit from the Diff tab's editor. `baseHash` is what the editor loaded;
+   * a mismatch means someone else (very possibly one of this app's own agents)
+   * wrote the file first, and the answer is 409 rather than an overwrite.
+   */
+  app.put<{ Params: { id: string } }>("/api/projects/:id/git/file", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const body = z
+      .object({
+        pathId: z.string().optional(),
+        sessionId: z.string().optional(),
+        file: z.string().min(1),
+        content: z.string().max(2_000_000),
+        baseHash: z.string().min(1),
+      })
+      .parse(req.body);
+    const cwd = resolveTree(id, body);
+    assertPathAllowed(`${cwd}/${body.file}`, id);
+    const result = writeTreeFile(cwd, body.file, body.content, body.baseHash);
+    db.insert(schema.workHistory)
+      .values({
+        id: newId(),
+        projectId: id,
+        kind: "git_file_edited",
+        refId: body.sessionId ?? null,
+        summary: `Edited ${body.file}`,
+        createdAt: nowIso(),
+      })
+      .run();
+    return result;
   });
 
   // ── Branches / history / hunk ops ─────────────────────────────────────────
@@ -253,6 +266,170 @@ export function gitRoutes(app: FastifyInstance): void {
     const q = treeQuery.parse(req.query ?? {});
     const cwd = resolveTree(id, q);
     return { cwd, patch: diff(cwd, q.file) };
+  });
+
+  /** "Add to VCS" for untracked files — one file or the whole group. */
+  app.post<{ Params: { id: string } }>("/api/projects/:id/git/add", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const body = z
+      .object({
+        files: z.array(z.string().min(1)).min(1),
+        pathId: z.string().optional(),
+        sessionId: z.string().optional(),
+      })
+      .parse(req.body);
+    const cwd = resolveTree(id, body);
+    for (const file of body.files) assertPathAllowed(`${cwd}/${file}`, id);
+    addFiles(cwd, body.files);
+    return { added: body.files.length };
+  });
+
+  /** Delete unversioned files from disk (the Unversioned Files group's Rollback). */
+  app.post<{ Params: { id: string } }>("/api/projects/:id/git/delete-files", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const body = z
+      .object({
+        files: z.array(z.string().min(1)).min(1),
+        pathId: z.string().optional(),
+        sessionId: z.string().optional(),
+      })
+      .parse(req.body);
+    const cwd = resolveTree(id, body);
+    for (const file of body.files) assertPathAllowed(`${cwd}/${file}`, id);
+    const deleted = deleteUntracked(cwd, body.files);
+    db.insert(schema.workHistory)
+      .values({
+        id: newId(),
+        projectId: id,
+        kind: "git_deleted",
+        refId: body.sessionId ?? null,
+        summary: `Deleted ${deleted} unversioned file(s) in ${cwd}`,
+        createdAt: nowIso(),
+      })
+      .run();
+    return { deleted };
+  });
+
+  // ── Changelists (Station-side grouping; git has no equivalent) ─────────────
+
+  /** Lists plus their file mappings, for one repo path of this project. */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/git/changelists", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const q = z.object({ pathId: z.string().default("") }).parse(req.query ?? {});
+    const lists = db
+      .select()
+      .from(schema.gitChangelists)
+      .where(
+        and(
+          eq(schema.gitChangelists.projectId, id),
+          eq(schema.gitChangelists.pathId, q.pathId),
+        ),
+      )
+      .all();
+    if (lists.length === 0) return { changelists: [] };
+    const files = db
+      .select()
+      .from(schema.gitChangelistFiles)
+      .where(
+        inArray(
+          schema.gitChangelistFiles.changelistId,
+          lists.map((l) => l.id),
+        ),
+      )
+      .all();
+    return {
+      changelists: lists.map((l) => ({
+        id: l.id,
+        name: l.name,
+        files: files.filter((f) => f.changelistId === l.id).map((f) => f.path),
+      })),
+    };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/projects/:id/git/changelists", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const body = z
+      .object({ pathId: z.string().default(""), name: z.string().min(1).max(120) })
+      .parse(req.body);
+    const row = {
+      id: newId(),
+      projectId: id,
+      pathId: body.pathId,
+      name: body.name.trim(),
+      createdAt: nowIso(),
+    };
+    db.insert(schema.gitChangelists).values(row).run();
+    reply.code(201);
+    return { ...row, files: [] };
+  });
+
+  app.patch<{ Params: { id: string; clId: string } }>(
+    "/api/projects/:id/git/changelists/:clId",
+    async (req) => {
+      const { clId } = z.object({ id: z.string(), clId: z.string() }).parse(req.params);
+      const body = z.object({ name: z.string().min(1).max(120) }).parse(req.body);
+      db.update(schema.gitChangelists)
+        .set({ name: body.name.trim() })
+        .where(eq(schema.gitChangelists.id, clId))
+        .run();
+      return { ok: true };
+    },
+  );
+
+  /** Deleting a list only drops the grouping — the files themselves are untouched. */
+  app.delete<{ Params: { id: string; clId: string } }>(
+    "/api/projects/:id/git/changelists/:clId",
+    async (req, reply) => {
+      const { clId } = z.object({ id: z.string(), clId: z.string() }).parse(req.params);
+      db.delete(schema.gitChangelists).where(eq(schema.gitChangelists.id, clId)).run();
+      reply.code(204);
+    },
+  );
+
+  /**
+   * Move files into a changelist, or back to the default group with `clId: null`.
+   * Old mappings are cleared first so a file is never in two lists at once.
+   */
+  app.post<{ Params: { id: string } }>("/api/projects/:id/git/changelist-files", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const body = z
+      .object({
+        pathId: z.string().default(""),
+        clId: z.string().nullable(),
+        paths: z.array(z.string().min(1)).min(1),
+      })
+      .parse(req.body);
+    const scoped = db
+      .select()
+      .from(schema.gitChangelists)
+      .where(
+        and(eq(schema.gitChangelists.projectId, id), eq(schema.gitChangelists.pathId, body.pathId)),
+      )
+      .all();
+    if (body.clId && !scoped.some((l) => l.id === body.clId)) {
+      throw badRequest("Changelist not found in this repo");
+    }
+    if (scoped.length > 0) {
+      db.delete(schema.gitChangelistFiles)
+        .where(
+          and(
+            inArray(
+              schema.gitChangelistFiles.changelistId,
+              scoped.map((l) => l.id),
+            ),
+            inArray(schema.gitChangelistFiles.path, body.paths),
+          ),
+        )
+        .run();
+    }
+    if (body.clId) {
+      for (const path of body.paths) {
+        db.insert(schema.gitChangelistFiles)
+          .values({ id: newId(), changelistId: body.clId, path })
+          .run();
+      }
+    }
+    return { moved: body.paths.length };
   });
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/git/revert", async (req) => {

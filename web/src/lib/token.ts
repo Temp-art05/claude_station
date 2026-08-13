@@ -56,7 +56,10 @@ export function onTokenRejected(listener: Listener): () => void {
 }
 
 /** WS handshakes can't send headers, so the token rides in the query string. */
-export function wsUrl(path: string): string {
+export function wsUrl(path: string, params?: Record<string, string>): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}${path}?t=${encodeURIComponent(token)}`;
+  // Built through URLSearchParams so callers needing their own query values
+  // don't have to hand-splice onto the `t=` this always appends.
+  const qs = new URLSearchParams({ t: token, ...params });
+  return `${proto}//${window.location.host}${path}?${qs.toString()}`;
 }

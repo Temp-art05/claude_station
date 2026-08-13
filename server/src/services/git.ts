@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WORKTREES_DIR } from "../lib/data-dir";
-import { badRequest } from "../lib/path-safety";
+import { badRequest, conflict, tooLarge } from "../lib/path-safety";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
@@ -93,6 +94,53 @@ function untrackedPatch(cwd: string, file: string): string {
   }
 }
 
+/**
+ * Stage untracked files ("Add to VCS" in the Unversioned Files group).
+ *
+ * Note this is a convenience, not a precondition: `commit()` below already does
+ * `git add -A` on whatever was ticked, so an untracked file commits fine without
+ * ever being added here. Adding just moves it into the tracked group.
+ */
+export function addFiles(cwd: string, files: string[]): void {
+  if (files.length === 0) return;
+  try {
+    git(cwd, ["add", "--", ...files]);
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr ?? "";
+    const stdout = (err as { stdout?: string }).stdout ?? "";
+    // Most common cause by far: the path is covered by .gitignore. git says so
+    // clearly, so pass its own words through instead of inventing a message.
+    throw badRequest(`git add failed: ${(stderr || stdout).trim().slice(0, 500)}`);
+  }
+}
+
+/**
+ * Delete unversioned files from disk — the Unversioned Files group's counterpart
+ * to Rollback. An untracked file has no committed version to restore, so removing
+ * it is the only "undo" there is.
+ *
+ * Every path is re-checked against `git status` here rather than trusting the
+ * caller: this deletes real files with no way back, and a stale UI or a wrong
+ * pathId must not be able to wipe something git is tracking.
+ */
+export function deleteUntracked(cwd: string, files: string[]): number {
+  if (files.length === 0) return 0;
+  const untracked = new Set(
+    status(cwd)
+      .filter((f) => f.status === "??")
+      .map((f) => f.path),
+  );
+  for (const file of files) {
+    if (!untracked.has(file)) {
+      throw badRequest(
+        `Refusing to delete "${file}": it is not an unversioned file. Use Rollback to discard changes to tracked files.`,
+      );
+    }
+  }
+  for (const file of files) rmSync(join(cwd, file), { recursive: true, force: true });
+  return files.length;
+}
+
 /** Discard local changes to specific files — always confirmed in the UI first. */
 export function revertFiles(cwd: string, files: string[]): void {
   if (files.length === 0) return;
@@ -133,6 +181,16 @@ export interface FileRead {
   content: string;
   truncated: boolean;
   binary: boolean;
+  /**
+   * sha256 of the bytes on disk, or "" when there is nothing editable (binary, or
+   * a file with no HEAD version). The editor sends it back on save so a write can
+   * be refused when something else — an agent, an IDE — got there first.
+   */
+  hash: string;
+}
+
+function sha256(buf: Buffer): string {
+  return createHash("sha256").update(buf).digest("hex");
 }
 
 /** A file as it is on disk (rev=worktree) or as HEAD knows it (rev=head). */
@@ -142,7 +200,8 @@ export function readTreeFile(cwd: string, file: string, rev: "worktree" | "head"
     try {
       buf = execFileSync("git", ["show", `HEAD:${file}`], { cwd, maxBuffer: 32 * 1024 * 1024 });
     } catch {
-      return { content: "", truncated: false, binary: false }; // new file — no HEAD version
+      // new file — no HEAD version
+      return { content: "", truncated: false, binary: false, hash: "" };
     }
   } else {
     const abs = join(cwd, file);
@@ -152,13 +211,56 @@ export function readTreeFile(cwd: string, file: string, rev: "worktree" | "head"
     buf = readFileSync(abs);
   }
   const head = buf.subarray(0, 8192);
-  if (head.includes(0)) return { content: "", truncated: false, binary: true };
+  if (head.includes(0)) return { content: "", truncated: false, binary: true, hash: "" };
   const truncated = buf.byteLength > FILE_CAP;
   return {
     content: buf.subarray(0, FILE_CAP).toString("utf8"),
     truncated,
     binary: false,
+    // Hash of the WHOLE file, not the truncated slice — otherwise a >1MB file
+    // would look unchanged to the guard below while its tail differs.
+    hash: sha256(buf),
   };
+}
+
+/**
+ * Save an edit made in the Diff tab.
+ *
+ * `baseHash` is what the editor loaded. Anything else on disk means someone wrote
+ * the file in the meantime — most likely one of this very app's agents — so the
+ * write is refused instead of silently burying their work.
+ */
+export function writeTreeFile(
+  cwd: string,
+  file: string,
+  content: string,
+  baseHash: string,
+): { hash: string } {
+  const abs = join(cwd, file);
+  if (!existsSync(abs) || !statSync(abs).isFile()) throw badRequest(`Not a file: ${file}`);
+  const current = readFileSync(abs);
+  if (current.subarray(0, 8192).includes(0)) throw badRequest("Refusing to edit a binary file");
+  if (current.byteLength > FILE_CAP) {
+    throw badRequest("File is larger than 1 MB — edit it in a real editor");
+  }
+  const next = Buffer.from(content, "utf8");
+  if (next.byteLength > FILE_CAP) throw tooLarge("Content exceeds the 1 MB limit");
+  const currentHash = sha256(current);
+  if (currentHash !== baseHash) {
+    throw conflict("File changed on disk since it was opened — reload before saving");
+  }
+  // Write beside the target then rename: a crash mid-write leaves the original
+  // intact rather than half a source file. Same directory so rename stays atomic
+  // (across filesystems it would degrade to a copy).
+  const tmp = `${abs}.station-tmp-${process.pid}`;
+  try {
+    writeFileSync(tmp, next);
+    renameSync(tmp, abs);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+  return { hash: sha256(next) };
 }
 
 /** Stage exactly the picked files and commit them. */
