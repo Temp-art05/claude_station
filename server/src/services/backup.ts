@@ -17,6 +17,7 @@ import { CLAUDE_SKILLS_LINK_DIR, DATA_DIR, DB_PATH, SKILLS_DIR } from "../lib/da
 import { REPO_ROOT } from "../lib/repo-root";
 import { badRequest } from "../lib/path-safety";
 import { sqlite } from "../db";
+import { releaseAllWorktrees } from "./sessions";
 
 const EXPORT_VERSION = 1;
 /** Directories that travel with an export. worktrees/logs/.token stay home. */
@@ -89,6 +90,11 @@ export function importArchive(archive: Buffer): { backupDir: string; note: strin
     // Rewrite absolute paths recorded under the OLD data dir to this machine's.
     rewritePaths(dbFile, manifest.dataDir, DATA_DIR);
 
+    // Hand back the worktrees this machine's sessions hold while their rows still
+    // exist to name them. Once the database below is replaced, nothing points at
+    // these paths, and git would keep their branches checked out for good.
+    const released = releaseAllWorktrees();
+
     // Move current data aside — reversible by hand if anything goes wrong.
     // Kept inside the data dir: next to it means the repo root, where the
     // snapshot lands in git status and in every lint/tsc glob.
@@ -118,7 +124,11 @@ export function importArchive(archive: Buffer): { backupDir: string; note: strin
 
     return {
       backupDir,
-      note: "Restart the server now — the running instance still holds the previous database.",
+      note:
+        "Restart the server now — the running instance still holds the previous database." +
+        (released.kept.length > 0
+          ? ` ${released.kept.length} worktree(s) were kept because they still hold uncommitted work: ${released.kept.join(", ")}`
+          : ""),
     };
   } finally {
     rmSync(staging, { recursive: true, force: true });

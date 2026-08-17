@@ -954,8 +954,13 @@ export function DiffTab({ project }: { project: Project }) {
             {notice && (
               <p
                 className={cn(
-                  "truncate text-[10.5px]",
-                  notice.tone === "ok" ? "text-ok" : "text-err",
+                  "text-[10.5px]",
+                  // A success line is short, so clipping it is fine. git's failures
+                  // carry the fix in their tail ("run 'git branch -D …'"), which a
+                  // single truncated line hid completely.
+                  notice.tone === "ok"
+                    ? "truncate text-ok"
+                    : "line-clamp-4 break-words whitespace-pre-wrap text-err",
                 )}
                 title={notice.text}
               >

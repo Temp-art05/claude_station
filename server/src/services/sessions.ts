@@ -5,7 +5,78 @@ import { setting } from "../lib/config";
 import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
 import { agentDefinition } from "./agents";
-import { createWorktree } from "./git";
+import {
+  createWorktree,
+  isGitRepo,
+  listWorktrees,
+  pruneOrphanWorktrees,
+  removeWorktree,
+  worktreeHoldsWork,
+} from "./git";
+
+/**
+ * Give up every worktree the sessions in the current database own. Called just
+ * before an import replaces that database: afterwards no row remembers these
+ * paths, so git would keep their branches checked out with nothing left to
+ * release them. Worktrees holding work are left in place and reported.
+ */
+export function releaseAllWorktrees(): { removed: string[]; kept: string[] } {
+  const removed: string[] = [];
+  const kept: string[] = [];
+  const owned = db
+    .select({ cwd: schema.chatSessions.cwd, worktreePath: schema.chatSessions.worktreePath })
+    .from(schema.chatSessions)
+    .all()
+    .filter((s): s is { cwd: string; worktreePath: string } => !!s.worktreePath);
+
+  for (const { cwd, worktreePath } of owned) {
+    try {
+      if (!isGitRepo(cwd)) continue;
+      const tree = listWorktrees(cwd).find((t) => t.path === worktreePath);
+      if (!tree) continue; // already gone from git's point of view
+      if (worktreeHoldsWork(cwd, tree)) {
+        kept.push(worktreePath);
+        continue;
+      }
+      removeWorktree(cwd, worktreePath);
+      removed.push(worktreePath);
+    } catch {
+      /* repo unreadable — leave it for the boot reconcile to retry */
+    }
+  }
+  return { removed, kept };
+}
+
+/**
+ * Clear out worktrees left behind by sessions that no longer exist. Runs at boot
+ * because the leak is silent: git keeps the orphan's branch checked out, so that
+ * branch can't be switched to or deleted, and nothing in the UI hints at why.
+ *
+ * Returns what it removed and what it deliberately left alone.
+ */
+export function reconcileWorktreesOnBoot(): { removed: string[]; kept: string[] } {
+  const live = new Set(db.select({ id: schema.chatSessions.id }).from(schema.chatSessions).all().map((s) => s.id));
+  const isLive = (sessionId: string) => live.has(sessionId);
+
+  const removed: string[] = [];
+  const kept: string[] = [];
+  // Several projects can point at one repo; each repo only needs looking at once.
+  const repos = new Set(
+    db.select({ path: schema.projectPaths.path }).from(schema.projectPaths).all().map((p) => p.path),
+  );
+  for (const repo of repos) {
+    // A path that moved or was deleted must not take the whole boot down with it.
+    try {
+      if (!isGitRepo(repo)) continue;
+      const result = pruneOrphanWorktrees(repo, isLive);
+      removed.push(...result.removed);
+      kept.push(...result.kept);
+    } catch {
+      /* unreadable repo — nothing to reconcile */
+    }
+  }
+  return { removed, kept };
+}
 
 /** Shared by the chat routes and the "Work with Claude" entry points. */
 export function createChatSession(projectId: string, input: ChatSessionInput) {

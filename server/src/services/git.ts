@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { WORKTREES_DIR } from "../lib/data-dir";
-import { badRequest, conflict, tooLarge } from "../lib/path-safety";
+import { badRequest, conflict, isInside, tooLarge } from "../lib/path-safety";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
@@ -41,6 +41,115 @@ export function removeWorktree(repoPath: string, worktreePath: string): void {
       /* best effort */
     }
   }
+}
+
+export interface WorktreeInfo {
+  path: string;
+  head: string | null;
+  /** Short branch name, or null when the worktree is detached. */
+  branch: string | null;
+  /** True when this worktree is the repo's own main checkout. */
+  isMain: boolean;
+}
+
+/** Every worktree git knows about, main checkout first. */
+export function listWorktrees(repoPath: string): WorktreeInfo[] {
+  const out = git(repoPath, ["worktree", "list", "--porcelain"]);
+  const trees: WorktreeInfo[] = [];
+  for (const block of out.split("\n\n")) {
+    const lines = block.split("\n").filter(Boolean);
+    const path = lines.find((l) => l.startsWith("worktree "))?.slice(9);
+    if (!path) continue;
+    const head = lines.find((l) => l.startsWith("HEAD "))?.slice(5) ?? null;
+    const ref = lines.find((l) => l.startsWith("branch "))?.slice(7) ?? null;
+    trees.push({
+      path,
+      head,
+      branch: ref?.replace(/^refs\/heads\//, "") ?? null,
+      isMain: trees.length === 0,
+    });
+  }
+  return trees;
+}
+
+/**
+ * Whether removing this worktree would destroy something. True for uncommitted
+ * changes, and for commits no other ref can reach — those would survive only in
+ * the reflog. Errors count as "yes": we never guess in favour of deleting.
+ */
+export function worktreeHoldsWork(repoPath: string, tree: WorktreeInfo): boolean {
+  try {
+    if (git(tree.path, ["status", "--porcelain"]).trim()) return true;
+    if (!tree.head) return true;
+    const containing = git(repoPath, [
+      "branch",
+      "--all",
+      "--contains",
+      tree.head,
+      "--format=%(refname)",
+    ])
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .filter((ref) => ref !== `refs/heads/${tree.branch}`);
+    return containing.length === 0;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Drop worktrees this app created for sessions that no longer exist. A worktree
+ * outlives its session whenever the session row goes away without the archive or
+ * delete path running — a database import is the usual way (see backup.ts) — and
+ * git then keeps that worktree's branch checked out forever, so the branch can be
+ * neither switched to nor deleted.
+ *
+ * Only touches paths inside WORKTREES_DIR: worktrees the user made elsewhere are
+ * none of our business. Anything holding work is reported, never removed.
+ */
+/**
+ * Drop one of this app's worktrees because the user asked — the escape hatch for a
+ * branch git refuses to release. Anything outside WORKTREES_DIR is rejected:
+ * worktrees the user set up elsewhere are theirs, not ours to delete. Work in
+ * progress needs a second, explicit `force`.
+ */
+export function releaseWorktree(repoPath: string, worktreePath?: string, force = false): string {
+  if (!worktreePath) throw badRequest("worktreePath is required to remove a worktree");
+  const target = resolve(worktreePath);
+  if (!isInside(target, WORKTREES_DIR)) {
+    throw badRequest(`Not a worktree this app manages: ${target}`);
+  }
+  const tree = listWorktrees(repoPath).find((t) => t.path === target);
+  if (!tree) throw badRequest(`No worktree registered at ${target}`);
+  if (tree.isMain) throw badRequest("Refusing to remove the repository's main checkout");
+  if (!force && worktreeHoldsWork(repoPath, tree)) {
+    throw conflict(
+      `Worktree still holds work (uncommitted changes, or commits on no other branch): ${target}`,
+    );
+  }
+  removeWorktree(repoPath, target);
+  return `Removed worktree ${target}${tree.branch ? ` (freed ${tree.branch})` : ""}\n`;
+}
+
+export function pruneOrphanWorktrees(
+  repoPath: string,
+  isLiveSession: (sessionId: string) => boolean,
+): { removed: string[]; kept: string[] } {
+  const removed: string[] = [];
+  const kept: string[] = [];
+  for (const tree of listWorktrees(repoPath)) {
+    if (tree.isMain || !isInside(tree.path, WORKTREES_DIR)) continue;
+    // The directory name is the id of the session the worktree was made for.
+    if (isLiveSession(basename(tree.path))) continue;
+    if (worktreeHoldsWork(repoPath, tree)) {
+      kept.push(tree.path);
+      continue;
+    }
+    removeWorktree(repoPath, tree.path);
+    removed.push(tree.path);
+  }
+  return { removed, kept };
 }
 
 export interface GitFileChange {

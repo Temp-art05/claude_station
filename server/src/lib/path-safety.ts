@@ -42,7 +42,8 @@ export function resolveDirectory(input: string): string {
   return realpathSync(abs);
 }
 
-function isInside(child: string, parent: string): boolean {
+/** True when `child` is `parent` itself or sits under it — no string prefixes. */
+export function isInside(child: string, parent: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
