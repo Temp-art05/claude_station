@@ -120,6 +120,12 @@ data/logs/<runId>.log       full build logs
 data/worktrees/<sessionId>  per-session git checkouts
 ```
 
+A session's worktree is removed when the session is archived or deleted. If one ever outlives its
+session — a database import is the usual way — boot clears it out, because git keeps an orphan's
+branch checked out and that branch can then be neither switched to nor deleted. A worktree with
+uncommitted work is never removed automatically; it is logged instead, and the branch popup offers
+to release it once you say so.
+
 Move it with `CLAUDE_STATION_DATA`. The only path written outside the repo is the skills symlink,
 because that is where Claude Code looks for user-level skills (`CLAUDE_SKILLS_DIR` to change it).
 

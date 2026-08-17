@@ -14,6 +14,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { branchAncestors, buildBranchTree, type BranchNode } from "@claude-station/shared";
+import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +27,7 @@ interface Branches {
 }
 
 type Op =
+  | "remove-worktree"
   | "checkout"
   | "create-branch"
   | "delete-branch"
@@ -54,6 +57,18 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
   const [newName, setNewName] = useState("");
   /** Explicit open/closed per folder path; absent = the default for that folder. */
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
+  /** Branch git refused to delete because its commits aren't merged anywhere. */
+  const [unmerged, setUnmerged] = useState<string | null>(null);
+  /**
+   * A worktree of ours is holding the branch, so git refuses the op. `retry` is
+   * the op to run again once the worktree is gone; `holdsWork` flips on when the
+   * server reports the worktree isn't empty, turning this into a second ask.
+   */
+  const [blocking, setBlocking] = useState<{
+    worktreePath: string;
+    retry: { op: Op; branch?: string };
+    holdsWork: boolean;
+  } | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
   const branchesKey = ["git-branches", projectId, pathId];
@@ -73,7 +88,7 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
   }, [open]);
 
   const run = useMutation({
-    mutationFn: (body: { op: Op; branch?: string; force?: boolean }) =>
+    mutationFn: (body: { op: Op; branch?: string; force?: boolean; worktreePath?: string }) =>
       api.post<{ ok: boolean; output: string }>(`/api/projects/${projectId}/git/op`, {
         ...body,
         pathId,
@@ -83,9 +98,47 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
       void qc.invalidateQueries({ queryKey: branchesKey });
       void qc.invalidateQueries({ queryKey: ["git-log", projectId, pathId] });
       onChanged();
+      // The worktree is gone — run whatever it was blocking.
+      if (vars.op === "remove-worktree" && blocking) {
+        const retry = blocking.retry;
+        setBlocking(null);
+        run.mutate(retry);
+      }
     },
-    onError: (err: unknown) =>
-      onNotice("err", err instanceof Error ? err.message : String(err)),
+    onError: (err: unknown, vars) => {
+      const message = err instanceof Error ? err.message : String(err);
+
+      // git refuses `branch -d` when a branch's commits live nowhere else, and
+      // tells you to rerun with -D. Worth keeping as a speed bump, but until now
+      // it was a dead end: nothing in the UI could pass force, so a backup branch
+      // — which by definition holds unmerged commits — could never be cleaned up.
+      if (vars.op === "delete-branch" && vars.branch && !vars.force && /not fully merged/i.test(message)) {
+        setUnmerged(vars.branch);
+        return;
+      }
+
+      // The removal we offered was refused because the worktree isn't empty. Ask
+      // again, this time saying what is at stake.
+      if (vars.op === "remove-worktree" && /still holds work/i.test(message)) {
+        setBlocking((prev) => (prev ? { ...prev, holdsWork: true } : prev));
+        return;
+      }
+
+      // A branch checked out in one of our worktrees can be neither switched to
+      // nor deleted. git names the path; offer to release it, but only when it is
+      // ours — a worktree the user made elsewhere is not ours to remove.
+      const held = /already used by worktree at '([^']+)'/.exec(message);
+      if (held?.[1] && held[1].includes("/data/worktrees/")) {
+        setBlocking({
+          worktreePath: held[1],
+          retry: { op: vars.op, branch: vars.branch },
+          holdsWork: false,
+        });
+        return;
+      }
+
+      onNotice("err", message);
+    },
   });
 
   const doOp = (op: Op, branch?: string, force?: boolean) => {
@@ -312,6 +365,84 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
             )}
           </div>
         </div>
+      )}
+
+      {blocking && (
+        <Dialog
+          open
+          onClose={() => setBlocking(null)}
+          title="A worktree is holding this branch"
+          className="max-w-lg"
+        >
+          <div className="space-y-3">
+            <p className="text-sm text-ink-muted">
+              This branch is checked out in a worktree Claude Station made for a session, so git
+              won't let you switch to it or delete it:
+            </p>
+            <p className="rounded-md border border-hairline bg-white/4 px-2 py-1.5 font-mono text-[11px] break-all text-ink-muted">
+              {blocking.worktreePath}
+            </p>
+            {blocking.holdsWork ? (
+              <p className="text-sm text-err">
+                That worktree still has uncommitted changes, or commits that exist on no other
+                branch. Removing it now throws them away.
+              </p>
+            ) : (
+              <p className="text-sm text-ink-muted">
+                It has nothing unsaved. Removing it frees the branch and then retries.
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setBlocking(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant={blocking.holdsWork ? "danger" : "primary"}
+                disabled={run.isPending}
+                onClick={() =>
+                  run.mutate({
+                    op: "remove-worktree",
+                    worktreePath: blocking.worktreePath,
+                    force: blocking.holdsWork,
+                  })
+                }
+              >
+                {blocking.holdsWork ? "Remove and lose that work" : "Remove worktree"}
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+      )}
+
+      {unmerged && (
+        <Dialog
+          open
+          onClose={() => setUnmerged(null)}
+          title="Branch is not fully merged"
+          className="max-w-md"
+        >
+          <div className="space-y-3">
+            <p className="text-sm text-ink-muted">
+              <span className="font-mono text-ink">{unmerged}</span> has commits that aren't on any
+              other branch. Deleting it leaves them reachable only through the reflog.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setUnmerged(null)}>
+                Keep it
+              </Button>
+              <Button
+                variant="danger"
+                disabled={run.isPending}
+                onClick={() => {
+                  run.mutate({ op: "delete-branch", branch: unmerged, force: true });
+                  setUnmerged(null);
+                }}
+              >
+                Delete anyway
+              </Button>
+            </div>
+          </div>
+        </Dialog>
       )}
     </div>
   );

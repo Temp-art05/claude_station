@@ -26,6 +26,7 @@ import {
   push,
   readTreeFile,
   rebase,
+  releaseWorktree,
   revertFiles,
   revertHunk,
   status,
@@ -175,8 +176,11 @@ export function gitRoutes(app: FastifyInstance): void {
           "merge-squash",
           "rebase",
           "abort",
+          "remove-worktree",
         ]),
         branch: z.string().optional(),
+        /** Only for remove-worktree — must be a worktree this app created. */
+        worktreePath: z.string().optional(),
         force: z.boolean().default(false),
       })
       .parse(req.body);
@@ -198,6 +202,7 @@ export function gitRoutes(app: FastifyInstance): void {
       case "merge-squash": output = merge(cwd, need(body.branch), true); break;
       case "rebase": output = rebase(cwd, need(body.branch)); break;
       case "abort": output = abortInProgress(cwd); break;
+      case "remove-worktree": output = releaseWorktree(cwd, body.worktreePath, body.force); break;
     }
     db.insert(schema.workHistory)
       .values({

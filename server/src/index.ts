@@ -26,6 +26,7 @@ import { terminalRoutes } from "./routes/terminals";
 import { workflowRoutes } from "./routes/workflows";
 import { seedGlobalMemories } from "./services/memory";
 import { backfillChatSearch, ensureSearchTables } from "./services/search";
+import { reconcileWorktreesOnBoot } from "./services/sessions";
 import { reconcileRunsOnBoot } from "./services/workflow-runner";
 import { killAllRuns } from "./services/commands";
 import { killAll as killAllPtys } from "./services/pty-manager";
@@ -72,6 +73,15 @@ seedGlobalMemories();
 const interruptedSteps = reconcileRunsOnBoot();
 if (interruptedSteps > 0) {
   app.log.warn(`${interruptedSteps} workflow step(s) interrupted by a restart — resume from the UI`);
+}
+// A worktree whose session is gone keeps its branch checked out, which makes that
+// branch impossible to switch to or delete until the worktree is dropped.
+const worktrees = reconcileWorktreesOnBoot();
+if (worktrees.removed.length > 0) {
+  app.log.info(`Removed ${worktrees.removed.length} orphaned worktree(s): ${worktrees.removed.join(", ")}`);
+}
+for (const path of worktrees.kept) {
+  app.log.warn(`Orphaned worktree kept — it still holds work: ${path}`);
 }
 
 app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
