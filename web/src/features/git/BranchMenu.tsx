@@ -4,6 +4,8 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   ChevronDown,
+  ChevronRight,
+  Folder,
   GitBranch,
   GitMerge,
   ListRestart,
@@ -11,6 +13,7 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
+import { branchAncestors, buildBranchTree, type BranchNode } from "@claude-station/shared";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +52,8 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  /** Explicit open/closed per folder path; absent = the default for that folder. */
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
   const boxRef = useRef<HTMLDivElement | null>(null);
 
   const branchesKey = ["git-branches", projectId, pathId];
@@ -89,9 +94,24 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
   };
 
   const current = data?.current ?? "…";
-  const q = filter.toLowerCase();
-  const local = (data?.local ?? []).filter((b) => b.name.toLowerCase().includes(q));
-  const remote = (data?.remote ?? []).filter((b) => b.toLowerCase().includes(q));
+  const q = filter.trim().toLowerCase();
+  // Filtering happens on full names, so `version/4` still finds version/4.0.0 even
+  // though the row itself only shows the last segment.
+  const localNames = (data?.local ?? [])
+    .map((b) => b.name)
+    .filter((name) => name.toLowerCase().includes(q));
+  const remoteNames = (data?.remote ?? []).filter((name) => name.toLowerCase().includes(q));
+  const localTree = buildBranchTree(localNames);
+  const remoteTree = buildBranchTree(remoteNames);
+
+  // Folders start closed, except the ones the current branch lives in. Typing a
+  // search opens everything (overrides are dropped on each keystroke) so a match is
+  // never hidden behind a collapsed folder — but a folder can still be collapsed by
+  // hand while searching.
+  const currentFolders = new Set(branchAncestors(current));
+  const isOpen = (path: string) => openFolders[path] ?? (q ? true : currentFolders.has(path));
+  const toggleFolder = (path: string) =>
+    setOpenFolders((prev) => ({ ...prev, [path]: !isOpen(path) }));
 
   const topAction = (icon: React.ReactNode, label: string, onClick: () => void) => (
     <button
@@ -104,24 +124,32 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
     </button>
   );
 
-  const branchRow = (name: string, isCurrent: boolean, isLocal: boolean) => (
+  /** `label` is what the row shows; `name` is the full ref every op runs against. */
+  const branchRow = (
+    name: string,
+    label: string,
+    isCurrent: boolean,
+    isLocal: boolean,
+    depth: number,
+  ) => (
     <div
       key={name}
+      style={{ paddingLeft: 8 + depth * 12 }}
       className={cn(
-        "group flex items-center gap-1 rounded-md px-2 py-0.5",
+        "group flex items-center gap-1 rounded-md pr-2 py-0.5",
         isCurrent ? "bg-accent/10 text-accent" : "hover:bg-surface-2",
       )}
     >
       <button
         onClick={() => !isCurrent && doOp("checkout", name)}
         disabled={isCurrent || run.isPending}
-        title={isCurrent ? "Current branch" : `Checkout ${name}`}
+        title={isCurrent ? `Current branch — ${name}` : `Checkout ${name}`}
         className={cn(
           "min-w-0 flex-1 truncate py-0.5 text-left font-mono text-[11px]",
           !isCurrent && "cursor-pointer",
         )}
       >
-        {name}
+        {label}
       </button>
       {!isCurrent && (
         <span className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -158,6 +186,33 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
     </div>
   );
 
+  const nodeRows = (nodes: BranchNode[], isLocal: boolean, depth = 0): React.ReactNode[] =>
+    nodes.map((node) => {
+      if (node.kind === "leaf") {
+        return branchRow(node.name, node.label, node.name === current, isLocal, depth);
+      }
+      const expanded = isOpen(node.path);
+      return (
+        <div key={`dir:${node.path}`}>
+          <button
+            onClick={() => toggleFolder(node.path)}
+            style={{ paddingLeft: 8 + depth * 12 }}
+            className="flex w-full cursor-pointer items-center gap-1 rounded-md py-0.5 pr-2 text-left text-ink-muted hover:bg-surface-2 hover:text-ink"
+            title={`${expanded ? "Collapse" : "Expand"} ${node.path}`}
+          >
+            <ChevronRight
+              size={11}
+              className={cn("shrink-0 transition-transform", expanded && "rotate-90")}
+            />
+            <Folder size={11} className="shrink-0 text-ink-faint" />
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{node.label}</span>
+            <span className="shrink-0 text-[10px] text-ink-faint">{node.count}</span>
+          </button>
+          {expanded && nodeRows(node.children, isLocal, depth + 1)}
+        </div>
+      );
+    });
+
   return (
     <div ref={boxRef} className="relative">
       <button
@@ -189,7 +244,17 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
           <input
             autoFocus
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setOpenFolders({});
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              // Escape clears a search first, and only closes the popup when there
+              // is nothing left to clear.
+              if (filter) setFilter("");
+              else setOpen(false);
+            }}
             placeholder="Search branches…"
             className="mb-1.5 h-7 w-full rounded-md border border-edge bg-surface px-2 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
           />
@@ -230,16 +295,21 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
           </div>
 
           <div className="max-h-64 overflow-y-auto">
-            <p className="px-2 py-0.5 text-[10px] font-bold tracking-wide text-ink-faint uppercase">
-              Local
-            </p>
-            {local.map((b) => branchRow(b.name, b.name === current, true))}
-            {remote.length > 0 && (
+            {localNames.length > 0 && (
+              <p className="px-2 py-0.5 text-[10px] font-bold tracking-wide text-ink-faint uppercase">
+                Local
+              </p>
+            )}
+            {nodeRows(localTree, true)}
+            {remoteNames.length > 0 && (
               <p className="px-2 py-0.5 pt-1.5 text-[10px] font-bold tracking-wide text-ink-faint uppercase">
                 Remote
               </p>
             )}
-            {remote.map((b) => branchRow(b, false, false))}
+            {nodeRows(remoteTree, false)}
+            {localNames.length === 0 && remoteNames.length === 0 && (
+              <p className="px-2 py-1 text-[11px] text-ink-faint">No branch matches “{filter}”</p>
+            )}
           </div>
         </div>
       )}

@@ -351,17 +351,44 @@ export function branches(cwd: string): Branches {
   return { current, local, remote, inProgress };
 }
 
-/** Switch branches; a remote name (origin/x) checks out a tracking local x. */
+function refExists(cwd: string, fullRef: string): boolean {
+  try {
+    git(cwd, ["show-ref", "--verify", "--quiet", fullRef]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function remoteNames(cwd: string): string[] {
+  try {
+    return git(cwd, ["remote"]).split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Switch branches. A remote name (origin/x) checks out a tracking local x; a local
+ * branch is switched to as-is. Which one it is comes from looking the ref up, never
+ * from the shape of the name: `version/4.0.0` is a perfectly ordinary local branch,
+ * and guessing "anything with a slash is remote" used to turn a click on it into
+ * `switch -c 4.0.0 --track version/4.0.0` — a brand new branch instead of a checkout.
+ */
 export function checkout(cwd: string, branch: string, create = false): string {
   if (create) return gitOr400(cwd, ["switch", "-c", branch], "create branch");
-  const remoteMatch = /^[^/]+\/(.+)$/.exec(branch);
-  if (remoteMatch) {
-    const local = remoteMatch[1]!;
-    const hasLocal = git(cwd, ["branch", "--list", local]).trim() !== "";
-    return hasLocal
+  // Local wins over a same-named remote shorthand, matching plain `git switch`.
+  if (refExists(cwd, `refs/heads/${branch}`)) return gitOr400(cwd, ["switch", branch], "checkout");
+  if (refExists(cwd, `refs/remotes/${branch}`)) {
+    // Strip the actual remote name, not the first path segment — the rest of the
+    // ref is the local branch name (origin/feature/x → feature/x).
+    const remote = remoteNames(cwd).find((r) => branch.startsWith(`${r}/`));
+    const local = remote ? branch.slice(remote.length + 1) : branch;
+    return refExists(cwd, `refs/heads/${local}`)
       ? gitOr400(cwd, ["switch", local], "checkout")
       : gitOr400(cwd, ["switch", "-c", local, "--track", branch], "checkout");
   }
+  // Neither — let git produce the error message for whatever this is.
   return gitOr400(cwd, ["switch", branch], "checkout");
 }
 
