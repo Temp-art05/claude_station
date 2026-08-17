@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
 import { Brain, Download, Pin, PinOff, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import type { ProjectMemory, ProjectMemoryInput } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
@@ -17,26 +18,33 @@ const SOURCE_LABEL: Record<ProjectMemory["source"], string> = {
   claude: "claude",
 };
 
+/** Where a scope's notes live. A null projectId means the global store. */
+export const memoryBase = (projectId: string | null) =>
+  projectId ? `/api/projects/${projectId}/memory` : "/api/memory/global";
+
 /**
- * Durable notes that ride along with every session in this project. Pinned ones
- * go into the prompt in full; the rest are titles Claude can pull on demand,
- * so a big memory bank doesn't eat the context window.
+ * Durable notes that ride along with every session. With a projectId they belong
+ * to that project; with null they are the global rules every project gets.
+ * Pinned ones go into the prompt in full; the rest are titles Claude can pull on
+ * demand, so a big memory bank doesn't eat the context window.
  */
-export function MemoryTab({ projectId }: { projectId: string }) {
+export function MemoryTab({ projectId }: { projectId: string | null }) {
   const qc = useQueryClient();
-  const key = ["memory", projectId];
+  const scope = projectId ?? "global";
+  const key = ["memory", scope];
+  const base = memoryBase(projectId);
   const fileRef = useRef<HTMLInputElement | null>(null);
   // Stored as an id, not the record: a memory saved here last week would come
   // back stale and quietly overwrite whatever the server has now.
   const [editingId, setEditingId] = useUiState<string | null>(
-    projectKey(projectId, "memory", "editing"),
+    projectKey(scope, "memory", "editing"),
     null,
   );
   const [error, setError] = useState<string | null>(null);
 
   const { data: memories = [] } = useQuery({
     queryKey: key,
-    queryFn: () => api.get<ProjectMemory[]>(`/api/projects/${projectId}/memory`),
+    queryFn: () => api.get<ProjectMemory[]>(base),
   });
 
   // Resolved against the live list, so an id whose memory was deleted while we
@@ -49,8 +57,7 @@ export function MemoryTab({ projectId }: { projectId: string }) {
   const invalidate = () => qc.invalidateQueries({ queryKey: ["memory"] });
 
   const importFile = useMutation({
-    mutationFn: (file: File) =>
-      uploadFile<ProjectMemory>(`/api/projects/${projectId}/memory/import`, file),
+    mutationFn: (file: File) => uploadFile<ProjectMemory>(`${base}/import`, file),
     onSuccess: invalidate,
     onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
   });
@@ -70,12 +77,22 @@ export function MemoryTab({ projectId }: { projectId: string }) {
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <p className="text-sm text-ink-muted">
-            Context that isn't in the code: conventions, decisions, gotchas. Claude reads pinned
-            notes every session and can save new ones itself.
+            {projectId
+              ? "Context that isn't in the code: conventions, decisions, gotchas. Claude reads pinned notes every session and saves new ones as it works."
+              : "Rules that hold in every project — how you want work done, not what a repo contains. These ride along with every session, on top of each project's own notes."}
           </p>
           {memories.length > 0 && (
             <p className="mt-1 text-[11px] text-ink-faint">
               {pinnedCount} pinned · {memories.length - pinnedCount} on demand
+            </p>
+          )}
+          {projectId && (
+            <p className="mt-1 text-[11px] text-ink-faint">
+              Rules that apply to every project live in{" "}
+              <Link to="/memory" className="text-accent hover:underline">
+                global memory
+              </Link>
+              .
             </p>
           )}
         </div>
@@ -110,8 +127,9 @@ export function MemoryTab({ projectId }: { projectId: string }) {
           <Brain size={26} className="text-ink-faint" />
           <p className="text-sm font-medium">No memory yet</p>
           <p className="max-w-md text-xs text-ink-muted">
-            Good first notes: which module owns what, why an odd workaround exists, the release
-            checklist, naming conventions Claude keeps getting wrong.
+            {projectId
+              ? "Good first notes: which module owns what, why an odd workaround exists, the release checklist, naming conventions Claude keeps getting wrong."
+              : "Good first notes: when a task is big enough to need a plan, how you want branches and commits handled, what Claude should always ask before doing."}
           </p>
         </Card>
       ) : (
@@ -189,7 +207,7 @@ function MemoryEditor({
   memory,
   onClose,
 }: {
-  projectId: string;
+  projectId: string | null;
   memory?: ProjectMemory;
   onClose: () => void;
 }) {
@@ -201,7 +219,7 @@ function MemoryEditor({
     discard,
     clear: clearDraft,
   } = useRestorableDraft<ProjectMemoryInput>(
-    projectKey(projectId, "memoryEditor", memory?.id ?? "new"),
+    projectKey(projectId ?? "global", "memoryEditor", memory?.id ?? "new"),
     {
       title: memory?.title ?? "",
       body: memory?.body ?? "",
@@ -213,9 +231,7 @@ function MemoryEditor({
 
   const save = useMutation({
     mutationFn: (input: ProjectMemoryInput) =>
-      memory
-        ? api.patch(`/api/memory/${memory.id}`, input)
-        : api.post(`/api/projects/${projectId}/memory`, input),
+      memory ? api.patch(`/api/memory/${memory.id}`, input) : api.post(memoryBase(projectId), input),
     onSuccess: () => {
       clearDraft(); // saved — nothing left unsaved to restore
       void qc.invalidateQueries({ queryKey: ["memory"] });

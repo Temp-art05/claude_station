@@ -100,8 +100,8 @@ secret are masked in the UI.
 | **Jira** | Cloud and self-hosted (Server/DC, Bearer PAT, API v2): my-issues + JQL, ADF→markdown detail, comment / transition / log work from the UI. |
 | **GitHub** | PRs, issues, branches, releases and a read-only file browser through your existing `gh` login. |
 | **Knowledge** | Docs and spreadsheets per project, or a global library organised in folders and attached to projects by reference. `.xlsx` is flattened to CSV per sheet so Claude reads it reliably. Skills are symlinked into `~/.claude/skills`. |
-| **Claude's own tools** (MCP) | `jira_*`, `excel_*`, `knowledge_search`, `list_project_commands`, `run_project_command`, `read_command_log`, `memory_*`. Every mutating call goes through the approval modal. |
-| **Project memory** | Conventions, decisions and gotchas that aren't in the code. Pinned notes go into every session prompt in full; the rest are titles Claude fetches on demand. |
+| **Claude's own tools** (MCP) | `jira_*`, `excel_*`, `knowledge_search`, `list_project_commands`, `run_project_command`, `read_command_log`, `memory_*`. Every mutating call goes through the approval modal, except memory writes — those are this app's own notes, reviewable in the Memory tab. |
+| **Memory** | Conventions, decisions and gotchas that aren't in the code. Claude writes these as it works — when you correct it, when a decision is settled, when a gotcha costs it time — and reads them next session. Global notes apply to every project, on top of each project's own. Pinned notes go into the prompt in full; the rest are titles Claude fetches on demand. |
 | **Search** | SQLite FTS5 across chat history and imported knowledge. |
 | **History / Doctor** | Audit feed of everything the app and Claude did; versions, login state, PTY health and data-dir writability. |
 

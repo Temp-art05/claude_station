@@ -8,13 +8,43 @@ import {
   deleteMemory,
   getMemory,
   importMemoryMarkdown,
+  listGlobalMemories,
   listMemories,
   updateMemory,
 } from "../services/memory";
 
 const idParam = z.object({ id: z.string() });
 
+/** Pulls the uploaded file out of a multipart request, or fails loudly. */
+async function uploadedFile(req: unknown): Promise<{ filename: string; body: string }> {
+  const part = await (
+    req as {
+      file: (o?: { limits?: { fileSize?: number } }) => Promise<
+        { filename: string; toBuffer(): Promise<Buffer> } | undefined
+      >;
+    }
+  ).file({ limits: { fileSize: 4 * 1024 * 1024 } });
+  if (!part) throw badRequest("No file in request");
+  return { filename: part.filename, body: (await part.toBuffer()).toString("utf8") };
+}
+
 export function memoryRoutes(app: FastifyInstance): void {
+  // ── Global notes (no project) ──────────────────────────────────────────────
+  // Registered before /api/memory/:id so "global" isn't parsed as an id.
+  app.get("/api/memory/global", async () => listGlobalMemories());
+
+  app.post("/api/memory/global", async (req, reply) => {
+    const input = projectMemoryInputSchema.parse(req.body);
+    reply.code(201);
+    return createMemory(null, input);
+  });
+
+  app.post("/api/memory/global/import", async (req, reply) => {
+    const { filename, body } = await uploadedFile(req);
+    reply.code(201);
+    return importMemoryMarkdown(null, filename, body);
+  });
+
   app.get<{ Params: { id: string } }>("/api/projects/:id/memory", async (req) => {
     const { id } = idParam.parse(req.params);
     return listMemories(id);
@@ -30,17 +60,9 @@ export function memoryRoutes(app: FastifyInstance): void {
   /** Import a markdown note; the first `# heading` becomes the title. */
   app.post<{ Params: { id: string } }>("/api/projects/:id/memory/import", async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const part = await (
-      req as unknown as {
-        file: (o?: { limits?: { fileSize?: number } }) => Promise<
-          { filename: string; toBuffer(): Promise<Buffer> } | undefined
-        >;
-      }
-    ).file({ limits: { fileSize: 4 * 1024 * 1024 } });
-    if (!part) throw badRequest("No file in request");
-    const memory = importMemoryMarkdown(id, part.filename, (await part.toBuffer()).toString("utf8"));
+    const { filename, body } = await uploadedFile(req);
     reply.code(201);
-    return memory;
+    return importMemoryMarkdown(id, filename, body);
   });
 
   app.patch<{ Params: { id: string } }>("/api/memory/:id", async (req) => {

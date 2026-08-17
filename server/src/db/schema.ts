@@ -241,17 +241,18 @@ export const projectKnowledge = sqliteTable(
 );
 
 /**
- * Durable per-project notes handed to Claude on top of the code: conventions,
- * decisions, gotchas. Pinned ones go into the prompt in full; the rest are
- * listed by title and fetched on demand through the memory_get tool.
+ * Durable notes handed to Claude on top of the code: conventions, decisions,
+ * gotchas. Pinned ones go into the prompt in full; the rest are listed by title
+ * and fetched on demand through the memory_get tool.
+ *
+ * A null projectId means the note is global — a rule that holds in every
+ * workspace, so it rides along with every session rather than one project's.
  */
 export const projectMemories = sqliteTable(
   "project_memories",
   {
     id: text("id").primaryKey(),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     body: text("body").notNull(),
     tags: text("tags"), // JSON string[]

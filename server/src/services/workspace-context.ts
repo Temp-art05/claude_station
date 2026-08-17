@@ -61,14 +61,16 @@ export function buildWorkspaceContext(projectId: string): string {
   }
 
   const cap = setting("prompt.knowledgeIndexBytes");
-  const memory = memoryPromptSection(projectId, cap);
-  if (memory) lines.push("", memory);
 
-  const text = lines.filter((l) => l !== undefined).join("\n");
-  // Memory has its own cap; this one bounds the whole block.
+  // Truncate the repo/knowledge index on its own, then append memory. Memory
+  // carries the rule that tells Claude to keep writing notes, so it must not be
+  // what a long knowledge listing pushes off the end.
+  let text = lines.filter((l) => l !== undefined).join("\n");
   const totalCap = cap * 2;
-  if (Buffer.byteLength(text, "utf8") <= totalCap) return text;
+  if (Buffer.byteLength(text, "utf8") > totalCap) {
+    const head = Buffer.from(text, "utf8").subarray(0, totalCap).toString("utf8");
+    text = `${head}\n\n…(index truncated — use knowledge_search instead of assuming)`;
+  }
 
-  const head = Buffer.from(text, "utf8").subarray(0, totalCap).toString("utf8");
-  return `${head}\n\n…(context truncated — use knowledge_search / memory_get instead of assuming)`;
+  return `${text}\n\n${memoryPromptSection(projectId, cap)}`;
 }

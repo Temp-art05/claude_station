@@ -210,6 +210,11 @@ function buildOptions(session: ReturnType<typeof loadSession>): Options {
   };
 }
 
+/** Memory tools that run without an approval modal — everything but delete. */
+const MEMORY_TOOLS_NO_PROMPT = new Set(
+  ["list", "get", "search", "write", "update"].map((op) => `mcp__station__memory_${op}`),
+);
+
 /** Bridge the SDK's approval callback to the browser modal (or a policy denial). */
 function requestPermission(
   sessionId: string,
@@ -224,6 +229,15 @@ function requestPermission(
   // deadlock exactly the case they exist for — a step running with nobody
   // watching the session. They touch no files and no external service.
   if (toolName.startsWith("mcp__station__workflow_")) {
+    return Promise.resolve({ behavior: "allow" });
+  }
+
+  // Memory writes go to this app's own database — no file, no repo, no external
+  // service — and the Memory tab is there to review or undo them. Prompting for
+  // each one is what kept the store empty: a session with nobody watching gets a
+  // flat deny below, so notes were only ever saved when the user was looking.
+  // Deleting is the exception: it destroys something the user may have written.
+  if (MEMORY_TOOLS_NO_PROMPT.has(toolName)) {
     return Promise.resolve({ behavior: "allow" });
   }
 

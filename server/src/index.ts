@@ -24,6 +24,7 @@ import { searchRoutes } from "./routes/search";
 import { settingsRoutes } from "./routes/settings";
 import { terminalRoutes } from "./routes/terminals";
 import { workflowRoutes } from "./routes/workflows";
+import { seedGlobalMemories } from "./services/memory";
 import { backfillChatSearch, ensureSearchTables } from "./services/search";
 import { reconcileRunsOnBoot } from "./services/workflow-runner";
 import { killAllRuns } from "./services/commands";
@@ -64,6 +65,8 @@ registerAuth(app);
 // FTS5 tables + triggers live outside drizzle's schema.
 ensureSearchTables();
 backfillChatSearch();
+// Built-in global memory notes — inserted once each, then left alone.
+seedGlobalMemories();
 // A step that was mid-flight when the process died is marked interrupted, never
 // resumed blind: it may already have edited files or commented on a ticket.
 const interruptedSteps = reconcileRunsOnBoot();

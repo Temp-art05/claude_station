@@ -1044,7 +1044,8 @@ export const WORKFLOW_PRESETS: (WorkflowInput & { label: string })[] = [
 
 export const projectMemorySchema = z.object({
   id: z.string(),
-  projectId: z.string(),
+  /** Null means global: the note applies to every project, not just one. */
+  projectId: z.string().nullable(),
   title: z.string(),
   body: z.string(),
   tags: z.array(z.string()).nullable(),

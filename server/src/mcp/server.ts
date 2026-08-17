@@ -17,7 +17,15 @@ import {
   searchIssues,
   transitionIssue,
 } from "../services/jira";
-import { createMemory, getMemory, listMemories, searchMemories } from "../services/memory";
+import {
+  createMemory,
+  deleteMemory,
+  getMemory,
+  listGlobalMemories,
+  listMemories,
+  searchMemories,
+  updateMemory,
+} from "../services/memory";
 import { search } from "../services/search";
 import {
   artifactDir,
@@ -51,6 +59,18 @@ export function stationMcpServer(
   const workflowTools = workflowRunStepId
     ? buildWorkflowTools(projectId, workflowRunStepId)
     : [];
+
+  /**
+   * A memory this session may read or change: its own project's, or a global
+   * one. Ids belong to a single table, so without this a session could edit
+   * another project's notes by guessing an id.
+   */
+  const inScope = (id: string) => {
+    const found = getMemory(id);
+    if (!found) return null;
+    return found.projectId === null || found.projectId === projectId ? found : null;
+  };
+
   return createSdkMcpServer({
     name: "station",
     version: "0.1.0",
@@ -191,16 +211,18 @@ export function stationMcpServer(
         async (args) => json(search(args.query, args.scope ?? "all", 20)),
       ),
 
-      // ── Project memory ────────────────────────────────────────────────────
+      // ── Memory ────────────────────────────────────────────────────────────
       tool(
         "memory_list",
-        "List this project's memory notes (titles only). Pinned ones are already in your context.",
+        "List the memory notes in scope (titles only): this project's plus the global ones. " +
+          "Pinned notes are already in your context.",
         {},
         async () =>
           json(
-            listMemories(projectId).map((m) => ({
+            [...listGlobalMemories(), ...listMemories(projectId)].map((m) => ({
               id: m.id,
               title: m.title,
+              scope: m.projectId === null ? "global" : "project",
               pinned: m.pinned,
               tags: m.tags,
             })),
@@ -212,33 +234,37 @@ export function stationMcpServer(
         { id: z.string().optional(), title: z.string().optional() },
         async (args) => {
           const found = args.id
-            ? getMemory(args.id)
-            : (listMemories(projectId).find(
+            ? inScope(args.id)
+            : ([...listGlobalMemories(), ...listMemories(projectId)].find(
                 (m) => m.title.toLowerCase() === (args.title ?? "").toLowerCase(),
               ) ?? null);
-          if (!found || found.projectId !== projectId) return text("No such memory.");
+          if (!found) return text("No such memory.");
           return text(`# ${found.title}\n\n${found.body}`);
         },
       ),
       tool(
         "memory_search",
-        "Search this project's memory notes by keyword.",
+        "Search memory notes by keyword — this project's and the global ones.",
         { query: z.string() },
         async (args) => json(searchMemories(projectId, args.query)),
       ),
       tool(
         "memory_write",
         "Save something worth remembering next session: a convention, a decision, a gotcha. " +
-          "Keep it short and durable — not a task log. Pin it only if every session needs it.",
+          "Keep it short and durable — not a task log. Search first and update instead of " +
+          "saving a near-duplicate. Use scope 'global' for a rule that holds in every project. " +
+          "Pin it only if every session needs it.",
         {
           title: z.string(),
           body: z.string(),
           tags: z.array(z.string()).optional(),
           pinned: z.boolean().optional(),
+          scope: z.enum(["project", "global"]).optional(),
         },
         async (args) => {
+          const global = args.scope === "global";
           const created = createMemory(
-            projectId,
+            global ? null : projectId,
             {
               title: args.title,
               body: args.body,
@@ -247,7 +273,44 @@ export function stationMcpServer(
             },
             "claude",
           );
-          return text(`Saved memory "${created.title}"${created.pinned ? " (pinned)" : ""}.`);
+          return text(
+            `Saved ${global ? "global " : ""}memory "${created.title}"` +
+              `${created.pinned ? " (pinned)" : ""}.`,
+          );
+        },
+      ),
+      tool(
+        "memory_update",
+        "Rewrite an existing memory note — use this to merge a new detail into a note that " +
+          "already covers the topic, instead of adding a second one. Only the fields you pass change.",
+        {
+          id: z.string(),
+          title: z.string().optional(),
+          body: z.string().optional(),
+          tags: z.array(z.string()).optional(),
+          pinned: z.boolean().optional(),
+        },
+        async (args) => {
+          if (!inScope(args.id)) return text("No such memory.");
+          const updated = updateMemory(args.id, {
+            ...(args.title !== undefined ? { title: args.title } : {}),
+            ...(args.body !== undefined ? { body: args.body } : {}),
+            ...(args.tags !== undefined ? { tags: args.tags } : {}),
+            ...(args.pinned !== undefined ? { pinned: args.pinned } : {}),
+          });
+          return text(`Updated memory "${updated.title}".`);
+        },
+      ),
+      tool(
+        "memory_delete",
+        "Delete a memory note that is wrong or no longer true. Prefer memory_update when the " +
+          "note is merely out of date.",
+        { id: z.string() },
+        async (args) => {
+          const found = inScope(args.id);
+          if (!found) return text("No such memory.");
+          deleteMemory(args.id);
+          return text(`Deleted memory "${found.title}".`);
         },
       ),
 
