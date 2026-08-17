@@ -9,7 +9,7 @@ import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed } from "../lib/path-safety";
 import { envVarsFor } from "../services/env-sets";
 import * as pty from "../services/pty-manager";
-import { claudeCommand, createTerminal } from "../services/terminals";
+import { claudeCommand, createTerminal, removeTerminalContext } from "../services/terminals";
 
 const idParam = z.object({ id: z.string() });
 
@@ -63,6 +63,7 @@ export function terminalRoutes(app: FastifyInstance): void {
     const { id } = idParam.parse(req.params);
     const existing = db.select().from(schema.terminals).where(eq(schema.terminals.id, id)).get();
     pty.kill(id);
+    removeTerminalContext(id);
     db.update(schema.terminals)
       .set({ status: "exited", closedAt: nowIso(), pid: null })
       .where(eq(schema.terminals.id, id))
@@ -107,8 +108,13 @@ export function terminalRoutes(app: FastifyInstance): void {
       cwd,
       env,
       // App-agent terminals re-run their start command; claude tabs resume the CLI.
+      // The workspace context is rebuilt here, not reused: paths may have been added
+      // or relabelled since this tab was first opened.
       command:
-        existing.command ?? (existing.kind === "claude" ? claudeCommand(true) : undefined),
+        existing.command ??
+        (existing.kind === "claude"
+          ? claudeCommand(true, { projectId: existing.projectId, terminalId: id, cwd })
+          : undefined),
     });
     db.update(schema.terminals)
       .set({ status: "running", pid, closedAt: null })
