@@ -5,6 +5,7 @@ import {
   Ticket,
   GitPullRequest,
   BookOpen,
+  Brain,
   Bot,
   Workflow,
   KeyRound,
@@ -26,6 +27,7 @@ const NAV = [
   { to: "/jira", label: "Jira", icon: Ticket },
   { to: "/github", label: "GitHub", icon: GitPullRequest },
   { to: "/knowledge", label: "Knowledge", icon: BookOpen },
+  { to: "/memory", label: "Memory", icon: Brain },
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/workflows", label: "Workflows", icon: Workflow },
   { to: "/env", label: "Env", icon: KeyRound },
@@ -36,8 +38,8 @@ const NAV = [
 /** Nav is grouped so the daily surfaces sit apart from the configuration ones. */
 const GROUPS: { label?: string; items: typeof NAV }[] = [
   { items: NAV.slice(0, 3) },
-  { label: "Library", items: NAV.slice(3, 6) },
-  { label: "Setup", items: NAV.slice(6) },
+  { label: "Library", items: NAV.slice(3, 7) },
+  { label: "Setup", items: NAV.slice(7) },
 ];
 
 export function AppShell() {

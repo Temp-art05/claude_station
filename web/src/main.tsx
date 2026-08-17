@@ -9,6 +9,7 @@ import { EnvPage } from "@/pages/EnvPage";
 import { JiraPage } from "@/pages/JiraPage";
 import { GitHubPage } from "@/pages/GitHubPage";
 import { KnowledgePage } from "@/pages/KnowledgePage";
+import { MemoryPage } from "@/pages/MemoryPage";
 import { AgentsPage } from "@/pages/AgentsPage";
 import { WorkflowsPage } from "@/pages/WorkflowsPage";
 import { SearchPage } from "@/pages/SearchPage";
@@ -33,6 +34,7 @@ const router = createBrowserRouter([
       { path: "jira", element: <JiraPage /> },
       { path: "github", element: <GitHubPage /> },
       { path: "knowledge", element: <KnowledgePage /> },
+      { path: "memory", element: <MemoryPage /> },
       { path: "agents", element: <AgentsPage /> },
       { path: "workflows", element: <WorkflowsPage /> },
       { path: "search", element: <SearchPage /> },
