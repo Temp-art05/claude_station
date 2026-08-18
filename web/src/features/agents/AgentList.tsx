@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Ban, Bot, Download, Pencil, Trash2, Wrench } from "lucide-react";
+import { useConfirm } from "@/components/ui/confirm";
+import { Ban, Bot, Download, Pencil, Trash2, Wrench } from "@/components/ui/icons";
 import type { Agent } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function AgentList({ agents, projectId, editable = true }: Props) {
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<Agent | null>(null);
   const del = useDeleteAgent();
   const toggle = useToggleProjectAgent(projectId ?? "");
@@ -72,39 +74,39 @@ export function AgentList({ agents, projectId, editable = true }: Props) {
 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-[15px] font-bold text-ok">{agent.name}</span>
+                    <span className="font-mono m3-title-sm font-bold text-ok">{agent.name}</span>
                     {agent.enabledGlobally && <Badge tone="accent">global</Badge>}
                     {agent.model && <Badge>{agent.model}</Badge>}
                     {agent.maxTurns && <Badge>{agent.maxTurns} turns</Badge>}
                     {agent.background && <Badge>background</Badge>}
                     {agent.source === "imported" && <Badge>imported</Badge>}
                   </div>
-                  <p className="mt-1 text-[13px] text-white">{agent.description}</p>
+                  <p className="mt-1 m3-body-sm text-white">{agent.description}</p>
 
                   {(agent.tools?.length || agent.disallowedTools?.length) && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1">
                       {agent.tools?.map((tool) => (
                         <span
                           key={tool}
-                          className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent"
+                          className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1.5 py-0.5 font-mono m3-label-sm text-accent"
                         >
-                          <Wrench size={9} />
+                          <Wrench size={16} />
                           {tool.replace("mcp__station__", "")}
                         </span>
                       ))}
                       {agent.disallowedTools?.map((tool) => (
                         <span
                           key={tool}
-                          className="inline-flex items-center gap-0.5 rounded bg-err/10 px-1.5 py-0.5 font-mono text-[10px] text-err"
+                          className="inline-flex items-center gap-0.5 rounded bg-err/10 px-1.5 py-0.5 font-mono m3-label-sm text-err"
                         >
-                          <Ban size={9} />
+                          <Ban size={16} />
                           {tool.replace("mcp__station__", "")}
                         </span>
                       ))}
                     </div>
                   )}
                   {!agent.tools?.length && !agent.disallowedTools?.length && (
-                    <p className="mt-1.5 text-[12px] text-ink-muted">
+                    <p className="mt-1.5 m3-label-md text-ink-muted">
                       Inherits every tool from the session.
                     </p>
                   )}
@@ -115,12 +117,10 @@ export function AgentList({ agents, projectId, editable = true }: Props) {
                     <a
                       href={fileUrl(`/api/agents/${agent.id}/export`)}
                       download
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink"
-                      title={
-                        agent.bundleDir ? "Export bundle as .zip" : "Export as .agent.md"
-                      }
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-white/6 hover:text-ink"
+                      title={agent.bundleDir ? "Export bundle as .zip" : "Export as .agent.md"}
                     >
-                      <Download size={14} />
+                      <Download size={16} />
                     </a>
                     <Button
                       size="icon"
@@ -128,17 +128,21 @@ export function AgentList({ agents, projectId, editable = true }: Props) {
                       onClick={() => setEditing(agent)}
                       aria-label="Edit agent"
                     >
-                      <Pencil size={14} />
+                      <Pencil size={16} />
                     </Button>
                     <Button
                       size="icon"
                       variant="ghost"
                       onClick={() => {
-                        if (confirm(`Delete agent "${agent.name}"?`)) del.mutate(agent.id);
+                        void confirm({
+                          title: `Delete agent "${agent.name}"?`,
+                          confirmLabel: "Delete",
+                          tone: "danger",
+                        }).then((ok) => ok && del.mutate(agent.id));
                       }}
                       aria-label="Delete agent"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={16} />
                     </Button>
                   </div>
                 )}
@@ -149,12 +153,7 @@ export function AgentList({ agents, projectId, editable = true }: Props) {
       </div>
 
       {editing && (
-        <AgentEditor
-          key={editing.id}
-          open
-          agent={editing}
-          onClose={() => setEditing(null)}
-        />
+        <AgentEditor key={editing.id} open agent={editing} onClose={() => setEditing(null)} />
       )}
     </>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ShieldQuestionMark } from "lucide-react";
+import { ShieldQuestionMark } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./useChatSocket";
 
@@ -24,15 +24,13 @@ export function PermissionPrompt({ request, onRespond }: Props) {
   return (
     <div className="border-t border-warn/30 bg-warn/5 px-4 py-3">
       <div className="mb-2 flex items-center gap-2">
-        <ShieldQuestionMark size={14} className="text-warn" />
+        <ShieldQuestionMark size={16} className="text-warn" />
         <span className="text-sm font-medium">
           Allow <code className="font-mono">{request.toolName}</code>?
         </span>
-        <span className="ml-auto font-mono text-[11px] text-ink-faint">
-          auto-deny in {left}s
-        </span>
+        <span className="ml-auto font-mono m3-label-sm text-ink-faint">auto-deny in {left}s</span>
       </div>
-      <pre className="scroll-x mb-2.5 max-h-40 overflow-auto rounded-md bg-base px-2.5 py-2 font-mono text-[10.5px] text-ink-muted">
+      <pre className="scroll-x mb-2.5 max-h-40 overflow-auto rounded-md bg-base px-2.5 py-2 font-mono m3-label-sm text-ink-muted">
         {JSON.stringify(request.input, null, 2)}
       </pre>
       <div className="flex gap-2">

@@ -9,7 +9,7 @@ import {
   Send,
   StopCircle,
   X,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import {
   PERMISSION_MODE_CHOICES,
   type ChatSession,
@@ -17,6 +17,7 @@ import {
   type PermissionMode,
   type Project,
 } from "@claude-station/shared";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
@@ -106,7 +107,10 @@ export function ChatTab({ project, envSets, pinnedSessionId }: Props) {
   const submit = () => {
     const text = draft.trim();
     if (!text || chat.running) return;
-    chat.send(text, attachments.map((a) => a.id));
+    chat.send(
+      text,
+      attachments.map((a) => a.id),
+    );
     setDraft("");
     setAttachments([]);
   };
@@ -126,106 +130,96 @@ export function ChatTab({ project, envSets, pinnedSessionId }: Props) {
   return (
     <div className="flex h-full min-h-0">
       {!pinnedSessionId && (
-      <div className="w-64 shrink-0 overflow-y-auto border-r border-hairline p-3">
-        <div className="mb-2 space-y-2">
-          <Button
-            size="sm"
-            variant="primary"
-            className="w-full"
-            onClick={() => createSession.mutate()}
-            disabled={createSession.isPending || project.paths.length === 0}
-          >
-            <MessageSquarePlus size={14} /> New session
-          </Button>
-          <select
-            value={pathId}
-            onChange={(e) => setPathId(e.target.value)}
-            className="h-7 w-full rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-          >
-            {project.paths.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={envSetId}
-            onChange={(e) => setEnvSetId(e.target.value)}
-            className="h-7 w-full rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-          >
-            <option value="">No env set</option>
-            {envSets.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={mode}
-            onChange={(e) => setMode(e.target.value as PermissionMode)}
-            className="h-7 w-full rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-          >
-            {PERMISSION_MODE_CHOICES.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-ink-muted">
-            <input
-              type="checkbox"
-              checked={useWorktree}
-              onChange={(e) => setUseWorktree(e.target.checked)}
-              className="accent-(--color-accent)"
-            />
-            own git worktree
-          </label>
-        </div>
-
-        <div className="space-y-0.5">
-          {openSessions.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setActiveId(s.id)}
-              className={cn(
-                "group flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors cursor-pointer",
-                activeId === s.id ? "bg-surface-3 text-ink" : "text-ink-muted hover:bg-surface-2",
-              )}
+        <div className="w-64 shrink-0 overflow-y-auto border-r border-hairline p-3.5">
+          <div className="mb-2 space-y-2">
+            <Button
+              size="sm"
+              variant="primary"
+              className="w-full"
+              onClick={() => createSession.mutate()}
+              disabled={createSession.isPending || project.paths.length === 0}
             >
-              <span
+              <MessageSquarePlus size={16} /> New session
+            </Button>
+            <Select
+              className="w-full"
+              value={pathId}
+              onChange={setPathId}
+              options={project.paths.map((p) => ({ value: p.id, label: p.label }))}
+            />
+            <Select
+              className="w-full"
+              value={envSetId}
+              onChange={setEnvSetId}
+              options={[
+                { value: "", label: "No env set" },
+                ...envSets.map((s) => ({ value: s.id, label: s.name })),
+              ]}
+            />
+            <Select
+              className="w-full"
+              value={mode}
+              onChange={(v) => setMode(v as PermissionMode)}
+              options={PERMISSION_MODE_CHOICES.map((m) => ({ value: m, label: m }))}
+            />
+            <label className="flex cursor-pointer items-center gap-1.5 m3-label-sm text-ink-muted">
+              <input
+                type="checkbox"
+                checked={useWorktree}
+                onChange={(e) => setUseWorktree(e.target.checked)}
+                className="accent-(--color-accent)"
+              />
+              own git worktree
+            </label>
+          </div>
+
+          <div className="space-y-0.5">
+            {openSessions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setActiveId(s.id)}
                 className={cn(
-                  "h-1.5 w-1.5 shrink-0 rounded-full",
-                  s.status === "running"
-                    ? "bg-warn animate-status"
-                    : s.status === "error"
-                      ? "bg-err"
-                      : "bg-ink-faint",
+                  "state-layer m3-body-sm group flex w-full cursor-pointer items-center gap-2 rounded-pill px-3 py-2 text-left",
+                  "transition-[background-color,color] duration-200 ease-emphasized",
+                  activeId === s.id
+                    ? "bg-secondary-container text-on-secondary-container"
+                    : "text-ink-muted hover:text-ink",
                 )}
-              />
-              <span className="min-w-0 flex-1 truncate">{s.title}</span>
-              {s.worktreePath && <GitBranch size={11} className="shrink-0 text-accent" />}
-              <Archive
-                size={11}
-                className="shrink-0 opacity-0 group-hover:opacity-60 hover:opacity-100"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  archive.mutate(s.id);
-                }}
-              />
-            </button>
-          ))}
-          {openSessions.length === 0 && (
-            <p className="px-2 py-1 text-[11px] text-ink-faint">No sessions yet.</p>
-          )}
+              >
+                <span
+                  className={cn(
+                    "size-1.5 shrink-0 rounded-full",
+                    s.status === "running"
+                      ? "bg-warn animate-status"
+                      : s.status === "error"
+                        ? "bg-err"
+                        : "bg-ink-faint",
+                  )}
+                />
+                <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                {s.worktreePath && <GitBranch size={16} className="shrink-0 text-primary" />}
+                <Archive
+                  size={16}
+                  className="shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-60 hover:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    archive.mutate(s.id);
+                  }}
+                />
+              </button>
+            ))}
+            {openSessions.length === 0 && (
+              <p className="m3-body-sm px-3 py-1.5 text-ink-faint">No sessions yet.</p>
+            )}
+          </div>
         </div>
-      </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         {!activeId ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
-            <p className="text-sm text-ink-muted">Start a session to talk to Claude.</p>
-            <p className="max-w-sm text-xs text-ink-faint">
+            <p className="m3-title-md">Start a session to talk to Claude.</p>
+            <p className="m3-body-sm max-w-sm text-ink-faint">
               It runs in the selected repo with your workspace description, paths and commands as
               context.
             </p>
@@ -237,26 +231,26 @@ export function ChatTab({ project, envSets, pinnedSessionId }: Props) {
                 <MessageView key={entry.seq} entry={entry} />
               ))}
               {chat.streaming && (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-muted">
+                <p className="m3-body-md whitespace-pre-wrap leading-relaxed text-ink-muted">
                   {chat.streaming}
-                  <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 bg-accent animate-status" />
+                  <span className="animate-status ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 rounded-xs bg-primary" />
                 </p>
               )}
               {chat.entries.length === 0 && !chat.running && (
-                <p className="text-xs text-ink-faint">
+                <p className="m3-body-sm text-ink-faint">
                   Try: “which repo here is the BE source, and what does it do?”
                 </p>
               )}
             </div>
 
             {chat.error && (
-              <div className="border-t border-err/30 bg-err/5 px-4 py-2 text-xs text-err">
+              <div className="m3-body-sm border-t border-err/30 bg-err/8 px-4 py-2.5 text-err">
                 {chat.error}
               </div>
             )}
 
             {chat.lastResult && (
-              <div className="flex items-center gap-3 border-t border-edge px-4 py-1.5 text-[11px] text-ink-faint">
+              <div className="m3-label-md flex items-center gap-3 border-t border-hairline px-4 py-2.5 text-ink-faint">
                 {chat.lastResult.isError && <Badge tone="err">error</Badge>}
                 {chat.lastResult.durationMs !== null && (
                   <span>{(chat.lastResult.durationMs / 1000).toFixed(1)}s</span>
@@ -275,25 +269,23 @@ export function ChatTab({ project, envSets, pinnedSessionId }: Props) {
               />
             )}
 
-            <div className="border-t border-edge p-3">
+            <div className="border-t border-hairline p-3.5">
               {(attachments.length > 0 || uploadError) && (
                 <div className="mb-2 flex flex-wrap items-center gap-1.5">
                   {attachments.map((a) => (
                     <span
                       key={a.id}
-                      className="inline-flex items-center gap-1 rounded-md bg-surface-3 px-1.5 py-0.5 text-[11px]"
+                      className="m3-label-md inline-flex items-center gap-1.5 rounded-pill bg-surface-3 px-2.5 py-1"
                     >
                       {a.originalFilename}
                       <X
-                        size={10}
+                        size={16}
                         className="cursor-pointer text-ink-faint hover:text-ink"
-                        onClick={() =>
-                          setAttachments((prev) => prev.filter((x) => x.id !== a.id))
-                        }
+                        onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
                       />
                     </span>
                   ))}
-                  {uploadError && <span className="text-[11px] text-err">{uploadError}</span>}
+                  {uploadError && <span className="m3-label-sm text-err">{uploadError}</span>}
                 </div>
               )}
               <div className="flex items-end gap-2">
@@ -303,7 +295,7 @@ export function ChatTab({ project, envSets, pinnedSessionId }: Props) {
                   onClick={() => fileRef.current?.click()}
                   title="Attach a screenshot or file"
                 >
-                  <Paperclip size={15} />
+                  <Paperclip size={16} />
                 </Button>
                 <input
                   ref={fileRef}
@@ -334,18 +326,20 @@ export function ChatTab({ project, envSets, pinnedSessionId }: Props) {
                     }
                   }}
                   placeholder={
-                    chat.running ? "Claude is working…" : "Ask or assign a task…  (⌘↵, paste images)"
+                    chat.running
+                      ? "Claude is working…"
+                      : "Ask or assign a task…  (⌘↵, paste images)"
                   }
                   className="min-h-[56px]"
                   disabled={chat.running}
                 />
                 {chat.running ? (
                   <Button variant="danger" onClick={chat.interrupt}>
-                    <StopCircle size={15} /> Stop
+                    <StopCircle size={16} /> Stop
                   </Button>
                 ) : (
                   <Button variant="primary" onClick={submit} disabled={!draft.trim()}>
-                    <Send size={15} />
+                    <Send size={16} />
                   </Button>
                 )}
               </div>

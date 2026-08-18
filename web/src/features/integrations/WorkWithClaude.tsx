@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
-import { Sparkles } from "lucide-react";
+import { Select } from "@/components/ui/select";
+import { Sparkles } from "@/components/ui/icons";
 import type { Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -55,43 +56,39 @@ export function WorkWithClaude({ endpoint, label = "Work on this with Claude" }:
   return (
     <>
       <Button size="sm" variant="primary" onClick={() => setOpen(true)}>
-        <Sparkles size={13} /> {label}
+        <Sparkles size={16} /> {label}
       </Button>
       <Dialog open={open} onClose={() => setOpen(false)} title="Open a Claude terminal">
         <div className="space-y-3">
           <div>
             <Label>Project</Label>
-            <select
+            <Select
+              size="md"
+              className="w-full"
               value={projectId}
-              onChange={(e) => {
-                setProjectId(e.target.value);
+              onChange={(v) => {
+                setProjectId(v);
                 setPathId("");
               }}
-              className="h-9 w-full rounded-md border border-edge bg-surface px-2 text-sm text-ink"
-            >
-              <option value="">Choose a project…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "", label: "Choose a project…" },
+                ...projects.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
           </div>
           {project && (
             <div>
               <Label>Working directory</Label>
-              <select
+              <Select
+                size="md"
+                className="w-full"
                 value={pathId}
-                onChange={(e) => setPathId(e.target.value)}
-                className="h-9 w-full rounded-md border border-edge bg-surface px-2 text-sm text-ink"
-              >
-                <option value="">Default path</option>
-                {project.paths.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
+                onChange={setPathId}
+                options={[
+                  { value: "", label: "Default path" },
+                  ...project.paths.map((p) => ({ value: p.id, label: p.label })),
+                ]}
+              />
             </div>
           )}
           <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">

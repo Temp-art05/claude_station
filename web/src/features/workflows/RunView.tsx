@@ -12,7 +12,7 @@ import {
   RotateCw,
   SkipForward,
   Terminal,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import type { WorkflowRun, WorkflowRunStepStatus } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
@@ -113,7 +113,7 @@ export function RunView({
           {run.status}
         </Badge>
         <span className="text-sm font-semibold">{run.title}</span>
-        <span className="text-[11px] text-ink-faint">
+        <span className="m3-label-sm text-ink-faint">
           {run.runSteps.filter((s) => s.status === "done" || s.status === "skipped").length}/
           {run.steps.length} steps
         </span>
@@ -124,12 +124,12 @@ export function RunView({
         )}
         {!finished && (
           <Button size="sm" variant="danger" className="ml-auto" onClick={() => cancel.mutate()}>
-            <Ban size={13} /> Cancel run
+            <Ban size={16} /> Cancel run
           </Button>
         )}
       </div>
       {run.goal && (
-        <p className="rounded-md border border-edge bg-surface px-3 py-2 text-xs text-ink-muted">
+        <p className="m3-body-sm liquid rounded-lg px-3.5 py-2.5 text-ink-muted">
           <span className="font-medium text-ink">Goal:</span> {run.goal}
         </p>
       )}
@@ -137,7 +137,7 @@ export function RunView({
       {open.length > 0 && (
         <Card className="border-warn/40 bg-warn/5">
           <div className="mb-2 flex items-center gap-2">
-            <CirclePause size={14} className="text-warn" />
+            <CirclePause size={16} className="text-warn" />
             <span className="text-sm font-semibold">Waiting on you</span>
           </div>
           <div className="space-y-3">
@@ -202,16 +202,16 @@ export function RunView({
               <div className="flex items-start gap-3">
                 <div className="mt-1 flex w-6 shrink-0 flex-col items-center gap-1">
                   <span className={cn("h-2 w-2 rounded-full", DOT[status])} />
-                  <span className="font-mono text-[10px] text-ink-faint">{i + 1}</span>
+                  <span className="font-mono m3-label-sm text-ink-faint">{i + 1}</span>
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-sm font-semibold">{step.title}</span>
-                    <span className="font-mono text-[10.5px] text-ink-faint">{step.key}</span>
+                    <span className="font-mono m3-label-sm text-ink-faint">{step.key}</span>
                     <Badge tone={step.type === "agent" ? "accent" : "default"}>{step.type}</Badge>
-                    {status === "done" && <CircleCheck size={12} className="text-ok" />}
+                    {status === "done" && <CircleCheck size={16} className="text-ok" />}
                     {(status === "failed" || status === "interrupted") && (
-                      <CircleAlert size={12} className="text-err" />
+                      <CircleAlert size={16} className="text-err" />
                     )}
                     {rs && rs.attempt > 1 && <Badge>attempt {rs.attempt}</Badge>}
                     {step.permissionMode && step.permissionMode !== "default" && (
@@ -225,17 +225,17 @@ export function RunView({
                     {rs?.sessionId && (
                       <Link
                         to={`/projects/${projectId}?tab=agent:${rs.sessionId}`}
-                        className="inline-flex items-center gap-1 rounded-pill border border-hairline px-2 py-0.5 text-[10.5px] text-ink-muted hover:text-ink"
+                        className="inline-flex items-center gap-1 rounded-pill border border-hairline px-2 py-0.5 m3-label-sm text-ink-muted hover:text-ink"
                       >
-                        <Terminal size={10} /> open session
+                        <Terminal size={16} /> open session
                       </Link>
                     )}
                     {rs?.commandRunId && (
                       <Link
                         to={`/projects/${projectId}?tab=commands`}
-                        className="inline-flex items-center gap-1 rounded-pill border border-hairline px-2 py-0.5 text-[10.5px] text-ink-muted hover:text-ink"
+                        className="inline-flex items-center gap-1 rounded-pill border border-hairline px-2 py-0.5 m3-label-sm text-ink-muted hover:text-ink"
                       >
-                        <Terminal size={10} /> command log
+                        <Terminal size={16} /> command log
                       </Link>
                     )}
                     {artifacts.map((a) => (
@@ -244,10 +244,10 @@ export function RunView({
                         href={fileUrl(`/api/workflow-runs/${runId}/artifacts/${a.id}`)}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1 rounded-pill border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10.5px] text-accent"
+                        className="inline-flex items-center gap-1 rounded-pill border border-accent/30 bg-accent/10 px-2 py-0.5 m3-label-sm text-accent"
                       >
-                        <FileText size={10} /> {a.title}
-                        <Download size={9} />
+                        <FileText size={16} /> {a.title}
+                        <Download size={16} />
                       </a>
                     ))}
                   </div>
@@ -262,7 +262,7 @@ export function RunView({
                       onClick={() => retry.mutate(step.key)}
                       aria-label="Retry step"
                     >
-                      <RotateCcw size={13} />
+                      <RotateCcw size={16} />
                     </Button>
                     <Button
                       size="icon"
@@ -271,7 +271,7 @@ export function RunView({
                       onClick={() => skip.mutate(step.key)}
                       aria-label="Skip step"
                     >
-                      <SkipForward size={13} />
+                      <SkipForward size={16} />
                     </Button>
                   </div>
                 )}
@@ -298,7 +298,7 @@ export function RunView({
                 })
               }
             >
-              <RotateCw size={13} /> Restart
+              <RotateCw size={16} /> Restart
             </Button>
           </div>
           <div className="h-[46vh] min-h-[300px] overflow-hidden rounded-lg border border-edge">

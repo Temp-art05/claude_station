@@ -1,14 +1,24 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { useMutation } from "@tanstack/react-query";
-import { ChevronLeft, Import, Play, Terminal, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import {
+  ChevronLeft,
+  Import,
+  Play,
+  Terminal,
+  Trash2,
+  Workflow as WorkflowIcon,
+} from "@/components/ui/icons";
 import type { EnvSet, Project } from "@claude-station/shared";
+import { useConfirm } from "@/components/ui/confirm";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { projectKey, useUiState } from "@/lib/uiStore";
+import { FilterChip } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 import { RunView } from "./RunView";
 import {
@@ -27,6 +37,7 @@ interface Props {
 }
 
 export function WorkflowsTab({ project, envSets }: Props) {
+  const confirm = useConfirm();
   const { data: workflows = [] } = useWorkflows(project.id);
   const { data: runs = [] } = useRuns(project.id);
   const deleteRun = useDeleteRun(project.id);
@@ -50,7 +61,7 @@ export function WorkflowsTab({ project, envSets }: Props) {
     return (
       <div className="h-full overflow-y-auto px-6 py-4">
         <Button size="sm" variant="ghost" className="mb-3" onClick={() => setOpenRun(null)}>
-          <ChevronLeft size={14} /> All workflows
+          <ChevronLeft size={16} /> All workflows
         </Button>
         <RunView
           runId={openRun}
@@ -71,7 +82,7 @@ export function WorkflowsTab({ project, envSets }: Props) {
         </p>
         <div className="flex shrink-0 gap-2">
           <Button variant="ghost" onClick={() => setImportOpen(true)}>
-            <Import size={14} /> Import workflows
+            <Import size={16} /> Import workflows
           </Button>
           <Link to="/workflows">
             <Button variant="ghost">Manage library →</Button>
@@ -88,30 +99,28 @@ export function WorkflowsTab({ project, envSets }: Props) {
             feature, and a bugfix driven from a Jira issue.
           </p>
           <Button variant="primary" onClick={() => setImportOpen(true)}>
-            <Import size={14} /> Import workflows
+            <Import size={16} /> Import workflows
           </Button>
         </Card>
       ) : (
         <div className="mb-5 space-y-2">
           {imported.map((w) => (
             <Card key={w.id} className="flex items-start gap-3 p-3">
-              <WorkflowIcon size={15} className="mt-0.5 shrink-0 text-accent" />
+              <WorkflowIcon size={16} className="mt-0.5 shrink-0 text-accent" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="font-mono text-sm">{w.name}</span>
                   {w.folder && <Badge tone="accent">{w.folder}</Badge>}
                   <Badge>{w.steps.length} steps</Badge>
                 </div>
-                {w.description && (
-                  <p className="mt-0.5 text-xs text-ink-muted">{w.description}</p>
-                )}
+                {w.description && <p className="mt-0.5 text-xs text-ink-muted">{w.description}</p>}
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {w.steps.map((s) => (
                     <span
                       key={s.key}
                       title={`${s.type}${s.agentName ? ` · ${s.agentName}` : ""}${s.condition ? ` · if ${s.condition}` : ""}`}
                       className={cn(
-                        "rounded-pill border px-1.5 py-0.5 font-mono text-[10px]",
+                        "rounded-pill border px-1.5 py-0.5 font-mono m3-label-sm",
                         s.type === "agent"
                           ? "border-accent/30 bg-accent/10 text-accent"
                           : s.type === "command"
@@ -125,7 +134,7 @@ export function WorkflowsTab({ project, envSets }: Props) {
                 </div>
               </div>
               <Button size="sm" variant="primary" onClick={() => setStartFor(w.id)}>
-                <Play size={12} /> Run
+                <Play size={16} /> Run
               </Button>
               <RemoveButton projectId={project.id} workflowId={w.id} />
             </Card>
@@ -144,7 +153,7 @@ export function WorkflowsTab({ project, envSets }: Props) {
                 tabIndex={0}
                 onClick={() => setOpenRun(r.id)}
                 onKeyDown={(e) => e.key === "Enter" && setOpenRun(r.id)}
-                className="glass flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-xs hover:border-hairline-strong"
+                className="liquid liquid-interactive m3-body-sm flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-left"
               >
                 <span
                   className={cn(
@@ -170,7 +179,7 @@ export function WorkflowsTab({ project, envSets }: Props) {
                 >
                   {r.status === "awaiting_input" ? "needs you" : r.status}
                 </Badge>
-                <span className="shrink-0 font-mono text-[10.5px] text-ink-faint">
+                <span className="shrink-0 font-mono m3-label-sm text-ink-faint">
                   {r.completedSteps}/{r.totalSteps}
                 </span>
                 {["done", "failed", "cancelled"].includes(r.status) && (
@@ -179,13 +188,16 @@ export function WorkflowsTab({ project, envSets }: Props) {
                     disabled={deleteRun.isPending}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (window.confirm(`Delete run "${r.title}"? Its artifacts go too.`)) {
-                        deleteRun.mutate(r.id);
-                      }
+                      void confirm({
+                        title: `Delete run "${r.title}"?`,
+                        body: "Its artifacts go too.",
+                        confirmLabel: "Delete run",
+                        tone: "danger",
+                      }).then((ok) => ok && deleteRun.mutate(r.id));
                     }}
                     className="shrink-0 text-ink-faint hover:text-err disabled:opacity-50"
                   >
-                    <Trash2 size={12} />
+                    <Trash2 size={16} />
                   </button>
                 )}
               </div>
@@ -194,9 +206,7 @@ export function WorkflowsTab({ project, envSets }: Props) {
         </>
       )}
 
-      {importOpen && (
-        <ImportDialog projectId={project.id} onClose={() => setImportOpen(false)} />
-      )}
+      {importOpen && <ImportDialog projectId={project.id} onClose={() => setImportOpen(false)} />}
       {startFor && (
         <StartDialog
           project={project}
@@ -224,7 +234,7 @@ function RemoveButton({ projectId, workflowId }: { projectId: string; workflowId
       onClick={() => remove.mutate(workflowId)}
       aria-label="Remove workflow"
     >
-      <Trash2 size={14} />
+      <Trash2 size={16} />
     </Button>
   );
 }
@@ -246,30 +256,17 @@ function ImportDialog({ projectId, onClose }: { projectId: string; onClose: () =
           Workflows stay in the library — importing makes them runnable in this project.
         </p>
         <div className="flex flex-wrap gap-1.5">
-          <button
-            onClick={() => setFolder(null)}
-            className={cn(
-              "cursor-pointer rounded-pill border px-2.5 py-1 text-xs",
-              folder === null
-                ? "border-accent/40 bg-accent/12 text-accent"
-                : "border-hairline text-ink-muted hover:text-ink",
-            )}
-          >
+          <FilterChip onClick={() => setFolder(null)} selected={folder === null}>
             all
-          </button>
+          </FilterChip>
           {folders.map((f) => (
-            <button
+            <FilterChip
               key={f.folder}
               onClick={() => setFolder(f.folder)}
-              className={cn(
-                "cursor-pointer rounded-pill border px-2.5 py-1 text-xs",
-                folder === f.folder
-                  ? "border-accent/40 bg-accent/12 text-accent"
-                  : "border-hairline text-ink-muted hover:text-ink",
-              )}
+              selected={folder === f.folder}
             >
               {f.folder || "unfiled"} · {f.count}
-            </button>
+            </FilterChip>
           ))}
         </div>
 
@@ -298,8 +295,10 @@ function ImportDialog({ projectId, onClose }: { projectId: string; onClose: () =
         </div>
 
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-ink-faint">
-            {folder === null ? "Pick a folder to import it whole." : `Import all of "${folder || "unfiled"}".`}
+          <span className="m3-label-sm text-ink-faint">
+            {folder === null
+              ? "Pick a folder to import it whole."
+              : `Import all of "${folder || "unfiled"}".`}
           </span>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>
@@ -364,38 +363,32 @@ function StartDialog({
             onChange={(e) => setGoal(e.target.value)}
             rows={3}
             autoFocus
-            placeholder={'VD: "Lên plan + impl feature v1.5.0 trong spec" — mọi step đều thấy goal này'}
-            className="w-full rounded-md border border-edge bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
+            placeholder={
+              'VD: "Lên plan + impl feature v1.5.0 trong spec" — mọi step đều thấy goal này'
+            }
+            className="w-full rounded-md px-3.5 py-2 text-sm placeholder:text-ink-faint border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none"
           />
         </div>
         <div>
           <Label>Working directory</Label>
-          <select
+          <Select
+            className="w-full"
             value={pathId}
-            onChange={(e) => setPathId(e.target.value)}
-            className="h-9 w-full px-2 text-sm"
-          >
-            {project.paths.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+            onChange={setPathId}
+            options={project.paths.map((p) => ({ value: p.id, label: p.label }))}
+          />
         </div>
         <div>
           <Label>Env set</Label>
-          <select
+          <Select
+            className="w-full"
             value={envSetId}
-            onChange={(e) => setEnvSetId(e.target.value)}
-            className="h-9 w-full px-2 text-sm"
-          >
-            <option value="">none</option>
-            {envSets.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+            onChange={setEnvSetId}
+            options={[
+              { value: "", label: "none" },
+              ...envSets.map((s) => ({ value: s.id, label: s.name })),
+            ]}
+          />
         </div>
         <label className="flex cursor-pointer items-start gap-2 text-sm">
           <input
@@ -406,7 +399,7 @@ function StartDialog({
           />
           <span>
             Own git worktree
-            <span className="block text-[10.5px] text-ink-faint">
+            <span className="block m3-label-sm text-ink-faint">
               Every step of the run works in its own checkout, so it can't collide with your other
               sessions.
             </span>
@@ -432,7 +425,7 @@ function StartDialog({
             title="Mở màn run với stepper + terminal Claude bên dưới — bạn điều khiển từng step bằng chat (skip / confirm / đổi hướng), stepper tự nhảy theo"
             onClick={() => claudeRun.mutate()}
           >
-            <Terminal size={13} /> {claudeRun.isPending ? "Opening…" : "Run with Claude terminal"}
+            <Terminal size={16} /> {claudeRun.isPending ? "Opening…" : "Run with Claude terminal"}
           </Button>
           <Button
             variant="primary"

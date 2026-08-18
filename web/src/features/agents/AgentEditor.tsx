@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Wrench, Ban } from "lucide-react";
+import { Select } from "@/components/ui/select";
+import { Wrench, Ban } from "@/components/ui/icons";
 import {
   AGENT_TOOL_CHOICES,
   agentModelSchema,
@@ -93,7 +94,10 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
       return next.length ? next : null;
     };
     if (state === "inherit") {
-      patch({ tools: [...(draft.tools ?? []), tool], disallowedTools: without(draft.disallowedTools) });
+      patch({
+        tools: [...(draft.tools ?? []), tool],
+        disallowedTools: without(draft.disallowedTools),
+      });
     } else if (state === "allow") {
       patch({
         tools: without(draft.tools),
@@ -137,26 +141,20 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
               className="font-mono text-xs"
               disabled={!!agent && agent.source === "imported"}
             />
-            <p className="mt-1 text-[10.5px] text-ink-faint">
+            <p className="mt-1 m3-label-sm text-ink-faint">
               The name Claude delegates to. Lowercase and dashes.
             </p>
           </div>
           <div>
             <Label>Model</Label>
-            <select
+            <Select
+              size="md"
+              className="w-full"
               value={draft.model ?? "inherit"}
-              onChange={(e) =>
-                patch({ model: e.target.value === "inherit" ? null : e.target.value })
-              }
-              className="h-9 w-full rounded-md border border-edge bg-surface px-2 text-sm text-ink"
-            >
-              {MODELS.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-[10.5px] text-ink-faint">
+              onChange={(v) => patch({ model: v === "inherit" ? null : v })}
+              options={MODELS.map((m) => ({ value: m, label: m }))}
+            />
+            <p className="mt-1 m3-label-sm text-ink-faint">
               A cheaper model is fine for narrow agents.
             </p>
           </div>
@@ -168,7 +166,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
               onChange={(e) => patch({ maxTurns: Number(e.target.value) || null })}
               placeholder="unlimited"
             />
-            <p className="mt-1 text-[10.5px] text-ink-faint">Caps a runaway loop.</p>
+            <p className="mt-1 m3-label-sm text-ink-faint">Caps a runaway loop.</p>
           </div>
         </div>
 
@@ -179,7 +177,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
             onChange={(e) => patch({ description: e.target.value })}
             placeholder="Use when a build or test command fails…"
           />
-          <p className="mt-1 text-[10.5px] text-ink-faint">
+          <p className="mt-1 m3-label-sm text-ink-faint">
             This is the only thing the main agent reads when deciding to delegate — describe the
             trigger, not the personality.
           </p>
@@ -198,12 +196,12 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
         <div>
           <div className="mb-1.5 flex items-center justify-between">
             <Label className="mb-0">Tools</Label>
-            <div className="flex items-center gap-3 text-[10.5px] text-ink-faint">
+            <div className="flex items-center gap-3 m3-label-sm text-ink-faint">
               <span className="inline-flex items-center gap-1">
-                <Wrench size={10} className="text-accent" /> allow
+                <Wrench size={16} className="text-accent" /> allow
               </span>
               <span className="inline-flex items-center gap-1">
-                <Ban size={10} className="text-err" /> deny
+                <Ban size={16} className="text-err" /> deny
               </span>
               <span>click to cycle · nothing selected = inherit everything</span>
             </div>
@@ -216,7 +214,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
                   key={tool}
                   onClick={() => cycleTool(tool)}
                   className={cn(
-                    "cursor-pointer rounded-md border px-2 py-1 font-mono text-[10.5px] transition-colors",
+                    "cursor-pointer rounded-md border px-2 py-1 font-mono m3-label-sm transition-colors",
                     state === "allow" && "border-accent/50 bg-accent/10 text-accent",
                     state === "deny" && "border-err/50 bg-err/10 text-err line-through",
                     state === "inherit" && "border-edge text-ink-faint hover:text-ink-muted",
@@ -237,7 +235,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
             onChange={(e) => patch({ viewPath: e.target.value || null })}
             placeholder="agent-views/my-agent.html — relative to the data dir"
           />
-          <p className="mt-1 text-[10.5px] text-ink-faint">
+          <p className="mt-1 m3-label-sm text-ink-faint">
             Point this at your own .html and the agent's tab renders it instead of the chat view.
             Leave empty for the default.
           </p>
@@ -252,7 +250,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
               onChange={(e) => patch({ viewUrl: e.target.value || null })}
               placeholder="http://127.0.0.1:4747/?token=…"
             />
-            <p className="mt-1 text-[10.5px] text-ink-faint">
+            <p className="mt-1 m3-label-sm text-ink-faint">
               For app agents: the running app's own web UI, embedded in the workspace tab.
             </p>
           </div>
@@ -264,7 +262,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
               onChange={(e) => patch({ startCommand: e.target.value || null })}
               placeholder="./start.sh"
             />
-            <p className="mt-1 text-[10.5px] text-ink-faint">
+            <p className="mt-1 m3-label-sm text-ink-faint">
               Runs in a Station terminal at the agent's bundle folder when you press Start.
             </p>
           </div>
@@ -279,7 +277,7 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
           />
           <span>
             Available in every project
-            <span className="block text-[10.5px] text-ink-faint">
+            <span className="block m3-label-sm text-ink-faint">
               Leave off to pick projects individually on this page or in the project's Agents tab.
             </span>
           </span>
@@ -294,7 +292,10 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
           <Button
             variant="primary"
             disabled={
-              !draft.name.trim() || !draft.description.trim() || !draft.prompt.trim() || save.isPending
+              !draft.name.trim() ||
+              !draft.description.trim() ||
+              !draft.prompt.trim() ||
+              save.isPending
             }
             onClick={submit}
           >

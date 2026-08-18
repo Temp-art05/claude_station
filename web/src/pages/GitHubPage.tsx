@@ -1,9 +1,19 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, ExternalLink, File, Folder, GitPullRequest, Trash2 } from "lucide-react";
+import {
+  ChevronRight,
+  ExternalLink,
+  File,
+  Folder,
+  GitPullRequest,
+  Trash2,
+} from "@/components/ui/icons";
 import { normalizeGithubRepo } from "@claude-station/shared";
+import { useConfirm } from "@/components/ui/confirm";
+import { Select } from "@/components/ui/select";
 import { Badge, Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { EmptyState, PageHeader } from "@/components/ui/page-header";
+import { Button, IconButton } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
@@ -168,16 +178,15 @@ export function GitHubPage() {
   if (config && repos.length === 0) {
     return (
       <div className="mx-auto max-w-2xl px-6 py-6">
-        <h1 className="mb-1 text-lg font-semibold">GitHub</h1>
-        <Card className="mt-4 text-sm text-ink-muted">
-          No repos configured. Add <code className="font-mono">owner/name</code> entries (or full
-          GitHub URLs) in{" "}
-          <a href="/settings" className="text-accent">
+        <PageHeader title="GitHub" icon={GitPullRequest} />
+        <EmptyState icon={GitPullRequest} title="No repos configured">
+          Add <code className="font-mono">owner/name</code> entries (or full GitHub URLs) in{" "}
+          <a href="/settings" className="text-primary underline decoration-primary/40">
             Settings
           </a>
           . Data comes from the <code className="font-mono">gh</code> CLI, so it uses your existing
           login.
-        </Card>
+        </EmptyState>
       </div>
     );
   }
@@ -186,59 +195,54 @@ export function GitHubPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-5">
-      <div className="mb-3 flex items-center gap-3">
-        <h1 className="text-lg font-semibold">GitHub</h1>
-        <select
-          value={repo}
-          onChange={(e) => changeRepo(e.target.value)}
-          className="h-8 rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-        >
-          {repos.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      </div>
-
+      <PageHeader
+        title="GitHub"
+        icon={GitPullRequest}
+        className="mb-4"
+        actions={
+          <Select
+            size="md"
+            className="max-w-[20rem]"
+            value={repo}
+            onChange={changeRepo}
+            aria-label="Repository"
+            options={repos.map((r) => ({ value: r, label: r }))}
+          />
+        }
+      />
       {enabled && (
-        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
           {GH_SHORTCUTS.map((s) => (
             <a
               key={s.label}
               href={`https://github.com/${owner}/${name}${s.path}`}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1 rounded-md border border-edge bg-surface px-2 py-1 text-xs text-ink-muted hover:text-ink"
+              className="state-layer m3-label-md flex h-8 items-center gap-1.5 rounded-pill border border-outline/40 px-3 font-semibold text-ink-muted transition-colors duration-200 ease-emphasized hover:border-outline/70 hover:text-ink"
             >
               {s.label}
-              <ExternalLink size={10} />
+              <ExternalLink size={16} />
             </a>
           ))}
         </div>
       )}
 
-      <Tabs tabs={TABS} value={tab} onChange={setTab} className="mb-3" />
+      <Tabs tabs={TABS} value={tab} onChange={setTab} className="mb-4" />
 
       {error && (
-        <p className="mb-3 text-xs text-err">
+        <p className="m3-body-sm mb-3 text-err">
           {error instanceof Error ? error.message : "gh request failed"}
         </p>
       )}
 
       {tab === "pulls" && selectedPr !== null && enabled && (
-        <PrDetail
-          owner={owner!}
-          name={name!}
-          number={selectedPr}
-          onBack={closePr}
-        />
+        <PrDetail owner={owner!} name={name!} number={selectedPr} onBack={closePr} />
       )}
 
       {tab === "pulls" && selectedPr === null && enabled && (
         <div className="mb-2 flex justify-end">
           <Button size="sm" variant="primary" onClick={() => setNewPrOpen(true)}>
-            <GitPullRequest size={12} /> New pull request
+            <GitPullRequest size={16} /> New pull request
           </Button>
         </div>
       )}
@@ -258,12 +262,14 @@ export function GitHubPage() {
           pulls.data?.map((pr) => {
             const review = reviewBadge(pr);
             return (
-              <Card key={pr.number} className="p-3">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-accent">#{pr.number}</span>
+              <Card key={pr.number} className="p-3.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="m3-label-md shrink-0 rounded-pill bg-primary/14 px-2 py-0.5 font-mono font-semibold text-primary">
+                    #{pr.number}
+                  </span>
                   <button
                     onClick={() => setPr(String(pr.number))}
-                    className="min-w-0 flex-1 truncate text-left text-sm hover:text-accent"
+                    className="m3-title-sm min-w-0 flex-1 cursor-pointer truncate text-left transition-colors duration-150 hover:text-primary"
                   >
                     {pr.title}
                   </button>
@@ -277,19 +283,20 @@ export function GitHubPage() {
                     href={pr.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-ink-faint hover:text-ink"
+                    className="text-ink-faint transition-colors duration-150 hover:text-ink"
+                    title="Open on GitHub"
                   >
-                    <ExternalLink size={12} />
+                    <ExternalLink size={16} />
                   </a>
                 </div>
-                <div className="mt-1.5 flex items-center gap-2 text-[10.5px] text-ink-faint">
+                <div className="m3-label-sm mt-2 flex items-center gap-2.5 text-ink-faint">
                   <span
-                    className="text-[12.5px] font-bold tracking-tight"
+                    className="m3-label-md font-bold tracking-tight"
                     style={{ color: authorColor(pr.author) }}
                   >
                     {pr.author}
                   </span>
-                  <span className="font-mono">
+                  <span className="truncate font-mono">
                     {pr.headRefName} → {pr.baseRefName}
                   </span>
                   <div className="ml-auto">
@@ -305,22 +312,25 @@ export function GitHubPage() {
 
         {tab === "issues" &&
           issues.data?.map((issue) => (
-            <Card key={issue.number} className="p-3">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs text-accent">#{issue.number}</span>
-                <span className="min-w-0 flex-1 truncate text-sm">{issue.title}</span>
+            <Card key={issue.number} className="p-3.5">
+              <div className="flex items-center gap-2.5">
+                <span className="m3-label-md shrink-0 rounded-pill bg-primary/14 px-2 py-0.5 font-mono font-semibold text-primary">
+                  #{issue.number}
+                </span>
+                <span className="m3-title-sm min-w-0 flex-1 truncate">{issue.title}</span>
                 <a
                   href={issue.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-ink-faint hover:text-ink"
+                  className="text-ink-faint transition-colors duration-150 hover:text-ink"
+                  title="Open on GitHub"
                 >
-                  <ExternalLink size={12} />
+                  <ExternalLink size={16} />
                 </a>
               </div>
-              <div className="mt-1.5 flex items-center gap-2 text-[10.5px] text-ink-faint">
+              <div className="m3-label-sm mt-2 flex items-center gap-2.5 text-ink-faint">
                 <span
-                  className="text-[12.5px] font-bold tracking-tight"
+                  className="m3-label-md font-bold tracking-tight"
                   style={{ color: authorColor(issue.author) }}
                 >
                   {issue.author}
@@ -403,33 +413,25 @@ function NewPrDialog({
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
           <span>base</span>
-          <select
+          <Select
+            className="font-mono"
             value={baseValue}
-            onChange={(e) => setBase(e.target.value)}
-            className="h-7 rounded-md border border-edge bg-surface px-2 font-mono text-xs text-ink"
-          >
-            {names.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            onChange={setBase}
+            aria-label="Base branch"
+            options={names.map((n) => ({ value: n, label: n }))}
+          />
           <span>←</span>
           <span>compare</span>
-          <select
+          <Select
+            className="font-mono"
             value={head}
-            onChange={(e) => setHead(e.target.value)}
-            className="h-7 rounded-md border border-edge bg-surface px-2 font-mono text-xs text-ink"
-          >
-            <option value="">choose a branch…</option>
-            {names
-              .filter((n) => n !== baseValue)
-              .map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-          </select>
+            onChange={setHead}
+            aria-label="Compare branch"
+            options={[
+              { value: "", label: "choose a branch…" },
+              ...names.filter((n) => n !== baseValue).map((n) => ({ value: n, label: n })),
+            ]}
+          />
           {branches.isLoading && <span className="text-ink-faint">loading branches…</span>}
         </div>
 
@@ -468,7 +470,7 @@ function NewPrDialog({
             Cancel
           </Button>
           <Button size="sm" variant="primary" disabled={!canCreate} onClick={() => create.mutate()}>
-            <GitPullRequest size={12} />{" "}
+            <GitPullRequest size={16} />{" "}
             {draft ? "Create draft pull request" : "Create pull request"}
           </Button>
         </div>
@@ -478,6 +480,7 @@ function NewPrDialog({
 }
 
 function BranchesTab({ owner, name }: { owner: string; name: string }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { data, error, isFetching } = useQuery({
     queryKey: ["gh-branches", owner, name],
@@ -491,7 +494,9 @@ function BranchesTab({ owner, name }: { owner: string; name: string }) {
   });
 
   if (error) {
-    return <p className="text-xs text-err">{error instanceof Error ? error.message : "Failed"}</p>;
+    return (
+      <p className="m3-body-sm text-err">{error instanceof Error ? error.message : "Failed"}</p>
+    );
   }
   return (
     <>
@@ -503,33 +508,38 @@ function BranchesTab({ owner, name }: { owner: string; name: string }) {
       {data?.branches.map((b) => {
         const undeletable = b.protected || b.name === data.defaultBranch;
         return (
-          <Card key={b.name} className="p-3">
-            <div className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate font-mono text-xs">{b.name}</span>
+          <Card key={b.name} className="p-3 pr-2">
+            <div className="flex items-center gap-2.5">
+              <span className="m3-body-sm min-w-0 flex-1 truncate font-mono">{b.name}</span>
               {b.name === data.defaultBranch && <Badge tone="accent">default</Badge>}
               {b.protected && <Badge>protected</Badge>}
-              <span className="font-mono text-[10.5px] text-ink-faint">{b.sha}</span>
+              <span className="m3-label-sm font-mono text-ink-faint">{b.sha}</span>
               <a
                 href={`https://github.com/${owner}/${name}/tree/${b.name}`}
                 target="_blank"
                 rel="noreferrer"
                 className="text-ink-faint hover:text-ink"
               >
-                <ExternalLink size={12} />
+                <ExternalLink size={16} />
               </a>
               {!undeletable && (
-                <button
+                <IconButton
+                  dense
                   title="Delete branch"
+                  aria-label={`Delete branch ${b.name}`}
                   disabled={remove.isPending}
                   onClick={() => {
-                    if (window.confirm(`Delete branch "${b.name}" on ${owner}/${name}?`)) {
-                      remove.mutate(b.name);
-                    }
+                    void confirm({
+                      title: `Delete branch "${b.name}"?`,
+                      body: `On ${owner}/${name}. This cannot be undone.`,
+                      confirmLabel: "Delete branch",
+                      tone: "danger",
+                    }).then((ok) => ok && remove.mutate(b.name));
                   }}
-                  className="text-ink-faint hover:text-err disabled:opacity-50"
+                  className="hover:text-err"
                 >
-                  <Trash2 size={12} />
-                </button>
+                  <Trash2 size={16} />
+                </IconButton>
               )}
             </div>
           </Card>
@@ -549,26 +559,30 @@ function ReleasesTab({ owner, name }: { owner: string; name: string }) {
   });
 
   if (error) {
-    return <p className="text-xs text-err">{error instanceof Error ? error.message : "Failed"}</p>;
+    return (
+      <p className="m3-body-sm text-err">{error instanceof Error ? error.message : "Failed"}</p>
+    );
   }
   return (
     <>
       {data?.map((r) => (
-        <Card key={r.tagName} className="p-3">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-accent">{r.tagName}</span>
-            <span className="min-w-0 flex-1 truncate text-sm">{r.name}</span>
+        <Card key={r.tagName} className="p-3.5">
+          <div className="flex items-center gap-2.5">
+            <span className="m3-label-md shrink-0 rounded-pill bg-primary/14 px-2 py-0.5 font-mono font-semibold text-primary">
+              {r.tagName}
+            </span>
+            <span className="m3-title-sm min-w-0 flex-1 truncate">{r.name}</span>
             {r.isLatest && <Badge tone="accent">latest</Badge>}
             {r.isDraft && <Badge>draft</Badge>}
             {r.isPrerelease && <Badge>pre-release</Badge>}
-            <span className="text-[10.5px] text-ink-faint">{fmtDate(r.publishedAt)}</span>
+            <span className="m3-label-sm text-ink-faint">{fmtDate(r.publishedAt)}</span>
             <a
               href={r.url}
               target="_blank"
               rel="noreferrer"
               className="text-ink-faint hover:text-ink"
             >
-              <ExternalLink size={12} />
+              <ExternalLink size={16} />
             </a>
           </div>
         </Card>
@@ -604,27 +618,23 @@ function CodeTab({ owner, name }: { owner: string; name: string }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <Select
+          className="font-mono"
           value={branch}
-          onChange={(e) => {
-            setRef(e.target.value);
+          onChange={(v) => {
+            setRef(v);
             setPath("");
           }}
-          className="h-7 rounded-md border border-edge bg-surface px-2 font-mono text-xs text-ink"
-        >
-          {branches.data?.branches.map((b) => (
-            <option key={b.name} value={b.name}>
-              {b.name}
-            </option>
-          ))}
-        </select>
+          aria-label="Branch"
+          options={(branches.data?.branches ?? []).map((b) => ({ value: b.name, label: b.name }))}
+        />
         <div className="flex items-center gap-1 font-mono text-xs text-ink-muted">
           <button onClick={() => setPath("")} className="hover:text-ink">
             {name}
           </button>
           {crumbs.map((c, i) => (
             <span key={i} className="flex items-center gap-1">
-              <ChevronRight size={10} />
+              <ChevronRight size={16} />
               <button
                 onClick={() => setPath(crumbs.slice(0, i + 1).join("/"))}
                 className="hover:text-ink"
@@ -648,16 +658,16 @@ function CodeTab({ owner, name }: { owner: string; name: string }) {
             <button
               key={e.path}
               onClick={() => setPath(e.path)}
-              className="flex w-full items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-left text-xs text-ink hover:border-accent/40"
+              className="state-layer m3-body-sm flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-outline/40 px-3.5 py-2 text-left text-ink transition-colors duration-200 ease-emphasized hover:border-primary/40"
             >
               {e.type === "dir" ? (
-                <Folder size={12} className="shrink-0 text-accent" />
+                <Folder size={16} className="shrink-0 text-accent" />
               ) : (
-                <File size={12} className="shrink-0 text-ink-faint" />
+                <File size={16} className="shrink-0 text-ink-faint" />
               )}
               <span className="min-w-0 flex-1 truncate font-mono">{e.name}</span>
               {e.type === "file" && (
-                <span className="text-[10.5px] text-ink-faint">{fmtSize(e.size)}</span>
+                <span className="m3-label-sm text-ink-faint">{fmtSize(e.size)}</span>
               )}
             </button>
           ))}
@@ -669,17 +679,17 @@ function CodeTab({ owner, name }: { owner: string; name: string }) {
 
       {contents.data?.type === "file" && (
         <Card className="p-0">
-          <div className="flex items-center gap-2 border-b border-edge px-3 py-2 text-xs text-ink-muted">
-            <File size={12} />
+          <div className="flex items-center gap-2.5 border-b border-hairline px-3.5 py-2.5 text-xs text-ink-muted">
+            <File size={16} />
             <span className="min-w-0 flex-1 truncate font-mono">{contents.data.path}</span>
-            <span className="text-[10.5px] text-ink-faint">{fmtSize(contents.data.size)}</span>
+            <span className="m3-label-sm text-ink-faint">{fmtSize(contents.data.size)}</span>
             <a
               href={`https://github.com/${owner}/${name}/blob/${branch}/${contents.data.path}`}
               target="_blank"
               rel="noreferrer"
               className="text-ink-faint hover:text-ink"
             >
-              <ExternalLink size={12} />
+              <ExternalLink size={16} />
             </a>
           </div>
           {contents.data.text === null ? (
@@ -689,7 +699,7 @@ function CodeTab({ owner, name }: { owner: string; name: string }) {
           ) : (
             <>
               {contents.data.truncated && (
-                <p className="px-3 pt-2 text-[10.5px] text-warn">
+                <p className="px-3 pt-2 m3-label-sm text-warn">
                   Showing the first 200 KB — open on GitHub for the full file.
                 </p>
               )}

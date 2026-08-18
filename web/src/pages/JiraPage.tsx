@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ExternalLink, RefreshCw, Ticket } from "@/components/ui/icons";
+import { Button, IconButton } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
+import { EmptyState, PageHeader } from "@/components/ui/page-header";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { globalKey, useUiState } from "@/lib/uiStore";
@@ -46,7 +47,12 @@ export function JiraPage() {
     queryFn: () => api.get<{ configured: boolean; baseUrl?: string }>("/api/jira/status"),
   });
 
-  const { data: issues = [], isFetching, refetch, error } = useQuery({
+  const {
+    data: issues = [],
+    isFetching,
+    refetch,
+    error,
+  } = useQuery({
     queryKey: ["jira-issues", debouncedJql],
     queryFn: () =>
       api.get<JiraIssue[]>(
@@ -101,14 +107,14 @@ export function JiraPage() {
   if (status && !status.configured) {
     return (
       <div className="mx-auto max-w-2xl px-6 py-6">
-        <h1 className="mb-1 text-lg font-semibold">Jira</h1>
-        <Card className="mt-4 text-sm text-ink-muted">
-          Not configured yet. Add your Jira base URL, email and API token in{" "}
-          <a href="/settings" className="text-accent">
+        <PageHeader title="Jira" icon={Ticket} />
+        <EmptyState icon={Ticket} title="Not configured yet">
+          Add your Jira base URL, email and API token in{" "}
+          <a href="/settings" className="text-primary underline decoration-primary/40">
             Settings
           </a>
           .
-        </Card>
+        </EmptyState>
       </div>
     );
   }
@@ -116,12 +122,21 @@ export function JiraPage() {
   return (
     <div className="flex h-full min-h-0">
       <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mb-4 flex items-center gap-2">
-          <h1 className="text-lg font-semibold">Jira</h1>
-          <Button size="sm" variant="ghost" onClick={() => void refetch()} disabled={isFetching}>
-            <RefreshCw size={13} />
-          </Button>
-        </div>
+        <PageHeader
+          title="Jira"
+          icon={Ticket}
+          className="mb-4"
+          actions={
+            <IconButton
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              aria-label="Refresh issues"
+              title="Refresh issues"
+            >
+              <RefreshCw size={20} className={isFetching ? "animate-status" : undefined} />
+            </IconButton>
+          }
+        />
 
         <Input
           value={jql}
@@ -150,7 +165,7 @@ export function JiraPage() {
                 <span className="min-w-0 flex-1 truncate text-sm">{issue.summary}</span>
                 <Badge>{issue.status}</Badge>
               </div>
-              <div className="mt-1 flex gap-2 text-[10.5px] text-ink-faint">
+              <div className="mt-1 flex gap-2 m3-label-sm text-ink-faint">
                 <span>{issue.issueType}</span>
                 {issue.priority && <span>{issue.priority}</span>}
                 {issue.assignee && <span>{issue.assignee}</span>}
@@ -164,15 +179,20 @@ export function JiraPage() {
       </div>
 
       {selected && detail && (
-        <aside className="w-[420px] shrink-0 overflow-y-auto border-l border-edge px-5 py-5">
+        <aside className="w-[420px] shrink-0 overflow-y-auto border-l border-hairline px-6 py-5">
           <div className="mb-1 flex items-center gap-2">
             <span className="font-mono text-xs text-accent">{detail.key}</span>
-            <a href={detail.url} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink">
-              <ExternalLink size={12} />
+            <a
+              href={detail.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-ink-faint hover:text-ink"
+            >
+              <ExternalLink size={16} />
             </a>
             <Badge className="ml-auto">{detail.status}</Badge>
           </div>
-          <h2 className="mb-3 text-sm font-medium">{detail.summary}</h2>
+          <h2 className="m3-title-sm mb-3">{detail.summary}</h2>
 
           <div className="mb-4">
             <WorkWithClaude endpoint={`/api/jira/issues/${detail.key}/work-with-claude`} />
@@ -196,7 +216,7 @@ export function JiraPage() {
                 </Button>
               ))}
               {transitions.length === 0 && (
-                <span className="text-[11px] text-ink-faint">No transitions available.</span>
+                <span className="m3-label-sm text-ink-faint">No transitions available.</span>
               )}
             </div>
           </div>

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { KeyRound } from "lucide-react";
+import { KeyRound } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { verifyToken } from "@/lib/api";
@@ -76,19 +76,21 @@ export function TokenGate({ children }: { children: ReactNode }) {
   if (phase === "checking") {
     return (
       <div className="flex h-full items-center justify-center p-8">
-        <p className="text-xs text-ink-muted">Checking token…</p>
+        <p className="m3-body-sm text-ink-muted">Checking token…</p>
       </div>
     );
   }
 
   return (
     <div className="flex h-full items-center justify-center p-8">
-      <div className="w-full max-w-md rounded-lg border border-edge bg-surface p-6">
-        <div className="mb-3 flex items-center gap-2">
-          <KeyRound size={16} className="text-accent" />
-          <h1 className="text-sm font-semibold">API token required</h1>
+      <div className="liquid w-full max-w-md rounded-2xl p-7">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="grid size-11 place-items-center rounded-lg bg-primary-container/55 text-on-primary-container">
+            <KeyRound size={22} fill={1} />
+          </div>
+          <h1 className="m3-title-lg">API token required</h1>
         </div>
-        <p className="mb-4 text-xs leading-relaxed text-ink-muted">
+        <p className="m3-body-sm mb-5 leading-relaxed text-ink-muted">
           Open the link the server printed on start (it contains{" "}
           <code className="font-mono text-ink">?t=…</code>), or paste the contents of{" "}
           <code className="font-mono text-ink">data/.token</code> below.
@@ -101,11 +103,11 @@ export function TokenGate({ children }: { children: ReactNode }) {
             if (e.key === "Enter") void submit();
           }}
           placeholder="64 hex characters"
-          className="font-mono text-xs"
+          className="m3-body-sm font-mono"
           autoFocus
         />
-        {error && <p className="mt-2 text-xs text-err">{error}</p>}
-        <div className="mt-4 flex justify-end">
+        {error && <p className="m3-body-sm mt-2 text-err">{error}</p>}
+        <div className="mt-5 flex justify-end">
           <Button variant="primary" disabled={!value.trim() || busy} onClick={() => void submit()}>
             {busy ? "Checking…" : "Continue"}
           </Button>

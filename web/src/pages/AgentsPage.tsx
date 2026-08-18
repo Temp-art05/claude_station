@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { FolderUp, Plus, Upload } from "lucide-react";
+import { Bot, FolderUp, Plus, Upload } from "@/components/ui/icons";
 import { AGENT_PRESETS, type Agent, type AgentInput } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   directoryInputProps,
   filesFromDirectoryInput,
@@ -37,30 +38,30 @@ export function AgentsPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-6">
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-lg font-semibold">Agents</h1>
-          <p className="text-sm text-ink-muted">
-            Scoped helpers the main session delegates to. Each one gets its own prompt, tool
-            allowlist and model — so a build fixer can run gradle without ever touching Jira.
-          </p>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Button variant="ghost" onClick={() => fileRef.current?.click()}>
-            <Upload size={14} /> Import .md
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => dirRef.current?.click()}
-            disabled={importAgentFolder.isPending}
-            title="A folder with one agent .md plus companion files the agent can read"
-          >
-            <FolderUp size={14} /> {importAgentFolder.isPending ? "Importing…" : "Import folder"}
-          </Button>
-          <Button variant="primary" onClick={() => setCreating({} as AgentInput)}>
-            <Plus size={15} /> New agent
-          </Button>
-        </div>
+      <PageHeader
+        title="Agents"
+        icon={Bot}
+        supporting="Scoped helpers the main session delegates to. Each one gets its own prompt, tool allowlist and model — so a build fixer can run gradle without ever touching Jira."
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => fileRef.current?.click()}>
+              <Upload size={18} /> Import .md
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => dirRef.current?.click()}
+              disabled={importAgentFolder.isPending}
+              title="A folder with one agent .md plus companion files the agent can read"
+            >
+              <FolderUp size={18} /> {importAgentFolder.isPending ? "Importing…" : "Import folder"}
+            </Button>
+            <Button variant="primary" onClick={() => setCreating({} as AgentInput)}>
+              <Plus size={18} /> New agent
+            </Button>
+          </>
+        }
+      />
+      <div className="hidden">
         <input
           ref={fileRef}
           type="file"
@@ -98,8 +99,8 @@ export function AgentsPage() {
           <p className="mb-2 text-sm font-medium">Start from a preset</p>
           <p className="mb-3 text-xs text-ink-muted">
             These are wired to this app's own tools — the build fixer can run your{" "}
-            <code className="font-mono">xcodebuild</code> / <code className="font-mono">gradlew</code>{" "}
-            commands and read the log.
+            <code className="font-mono">xcodebuild</code> /{" "}
+            <code className="font-mono">gradlew</code> commands and read the log.
           </p>
           <div className="flex flex-wrap gap-2">
             {AGENT_PRESETS.map(({ label, ...preset }) => (

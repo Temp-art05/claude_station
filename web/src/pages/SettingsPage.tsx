@@ -1,10 +1,21 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, CircleAlert, CircleCheck, Download, RotateCcw, Upload } from "lucide-react";
+import {
+  Bell,
+  CircleAlert,
+  CircleCheck,
+  Download,
+  RotateCcw,
+  Settings as SettingsIcon,
+  Upload,
+} from "@/components/ui/icons";
 import { normalizeGithubRepo, type AppSettings } from "@claude-station/shared";
+import { useConfirm } from "@/components/ui/confirm";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { api } from "@/lib/api";
 import { resetUiState } from "@/lib/uiStore";
 import { fileUrl, uploadFile } from "@/lib/upload";
@@ -28,14 +39,14 @@ function Check({ ok, label, detail }: { ok: boolean; label: string; detail?: str
   return (
     <div className="flex items-start gap-2 py-1">
       {ok ? (
-        <CircleCheck size={14} className="mt-0.5 shrink-0 text-ok" />
+        <CircleCheck size={16} className="mt-0.5 shrink-0 text-ok" />
       ) : (
-        <CircleAlert size={14} className="mt-0.5 shrink-0 text-err" />
+        <CircleAlert size={16} className="mt-0.5 shrink-0 text-err" />
       )}
       <div className="min-w-0">
         <span className="text-sm">{label}</span>
         {detail && (
-          <p className="truncate font-mono text-[11px] text-ink-faint" title={detail}>
+          <p className="truncate font-mono m3-label-sm text-ink-faint" title={detail}>
             {detail}
           </p>
         )}
@@ -46,7 +57,10 @@ function Check({ ok, label, detail }: { ok: boolean; label: string; detail?: str
 
 export function SettingsPage() {
   const qc = useQueryClient();
-  const { data: doctor } = useQuery({ queryKey: ["doctor"], queryFn: () => api.get<Doctor>("/api/doctor") });
+  const { data: doctor } = useQuery({
+    queryKey: ["doctor"],
+    queryFn: () => api.get<Doctor>("/api/doctor"),
+  });
   const { data: settings } = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.get<AppSettings>("/api/settings"),
@@ -58,14 +72,19 @@ export function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
-      <h1 className="mb-1 text-lg font-semibold">Settings</h1>
-      <p className="mb-5 text-sm text-ink-muted">
-        Behaviour lives in the local DB and applies immediately. Ports and data paths come from{" "}
-        <code className="font-mono text-ink-muted">.env</code>.
-      </p>
+      <PageHeader
+        title="Settings"
+        icon={SettingsIcon}
+        supporting={
+          <>
+            Behaviour lives in the local DB and applies immediately. Ports and data paths come from{" "}
+            <code className="font-mono">.env</code>.
+          </>
+        }
+      />
 
       <Card className="mb-4">
-        <h2 className="mb-2 text-sm font-medium">Doctor</h2>
+        <h2 className="m3-title-sm mb-2">Doctor</h2>
         {!doctor && <p className="text-sm text-ink-muted">Checking…</p>}
         {doctor && (
           <>
@@ -73,12 +92,8 @@ export function SettingsPage() {
             <Check ok={doctor.claudeCli.ok} label="claude CLI" detail={doctor.claudeCli.detail} />
             <Check ok={doctor.gh.ok} label="gh CLI login" detail={doctor.gh.detail} />
             <Check ok={doctor.git.ok} label="git" detail={doctor.git.detail} />
-            <Check
-              ok={doctor.dataDirWritable}
-              label="data dir writable"
-              detail={doctor.dataDir}
-            />
-            <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 border-t border-edge pt-3 text-[11px] text-ink-faint">
+            <Check ok={doctor.dataDirWritable} label="data dir writable" detail={doctor.dataDir} />
+            <div className="m3-label-sm mt-4 grid grid-cols-2 gap-x-6 gap-y-1 border-t border-hairline pt-4 text-ink-faint">
               <span>node {doctor.node}</span>
               <span>agent-sdk {doctor.sdkVersion}</span>
               <span>port {doctor.port}</span>
@@ -93,7 +108,7 @@ export function SettingsPage() {
 
       {settings && (
         <Card className="space-y-4">
-          <h2 className="text-sm font-medium">Behaviour</h2>
+          <h2 className="m3-title-sm">Behaviour</h2>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -137,7 +152,7 @@ export function SettingsPage() {
             </div>
           </div>
 
-          <div className="space-y-2 border-t border-edge pt-3">
+          <div className="space-y-2 border-t border-hairline pt-4">
             {(
               [
                 ["concurrency.repoLock", "Block two sessions running in the same repo at once"],
@@ -178,11 +193,11 @@ function InterfaceStateSettings() {
 
   return (
     <Card className="mt-4 space-y-3">
-      <h2 className="text-sm font-medium">Interface state</h2>
+      <h2 className="m3-title-sm">Interface state</h2>
       <p className="text-xs text-ink-muted">
-        Open tabs, selected items, scroll positions and unsaved drafts are remembered per project
-        so switching away and back returns you where you were. Resetting clears all of it —
-        projects, files and settings are untouched.
+        Open tabs, selected items, scroll positions and unsaved drafts are remembered per project so
+        switching away and back returns you where you were. Resetting clears all of it — projects,
+        files and settings are untouched.
       </p>
       <div className="flex items-center gap-3">
         <Button
@@ -193,7 +208,7 @@ function InterfaceStateSettings() {
             setDone(true);
           }}
         >
-          <RotateCcw size={13} /> Reset interface state
+          <RotateCcw size={16} /> Reset interface state
         </Button>
         {done && <span className="text-xs text-ok">Cleared — reload to start fresh.</span>}
       </div>
@@ -214,7 +229,7 @@ function BrowserNotificationOptIn() {
       className="mt-1"
       onClick={() => void Notification.requestPermission().then(setPermission)}
     >
-      <Bell size={13} /> Allow browser notifications
+      <Bell size={16} /> Allow browser notifications
     </Button>
   );
 }
@@ -266,7 +281,7 @@ function JiraForm({ status }: { status: JiraStatus }) {
 
   return (
     <Card className="mt-4 space-y-3">
-      <h2 className="text-sm font-medium">Jira</h2>
+      <h2 className="m3-title-sm">Jira</h2>
       <p className="text-xs text-ink-muted">
         {isServer
           ? "Personal Access Token from your Jira profile (Profile → Personal Access Tokens)."
@@ -276,28 +291,36 @@ function JiraForm({ status }: { status: JiraStatus }) {
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Deployment</Label>
-          <select
+          <Select
+            size="md"
+            className="w-full"
             value={deployment}
-            onChange={(e) => setDeployment(e.target.value as "cloud" | "server")}
-            className="h-9 w-full rounded-md border border-edge bg-surface px-2 text-sm text-ink"
-          >
-            <option value="cloud">Jira Cloud (*.atlassian.net)</option>
-            <option value="server">Self-hosted (Server / Data Center)</option>
-          </select>
+            onChange={(v) => setDeployment(v as "cloud" | "server")}
+            options={[
+              { value: "cloud", label: "Jira Cloud (*.atlassian.net)" },
+              { value: "server", label: "Self-hosted (Server / Data Center)" },
+            ]}
+          />
         </div>
         <div>
           <Label>Base URL</Label>
           <Input
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={isServer ? "https://jira.yourcompany.com" : "https://yourteam.atlassian.net"}
+            placeholder={
+              isServer ? "https://jira.yourcompany.com" : "https://yourteam.atlassian.net"
+            }
             className="font-mono text-xs"
           />
         </div>
         {!isServer && (
           <div>
             <Label>Email</Label>
-            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
+            <Input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+            />
           </div>
         )}
         <div>
@@ -360,17 +383,17 @@ function GitHubForm({ initial }: { initial: string }) {
 
   return (
     <Card className="mt-4 space-y-3">
-      <h2 className="text-sm font-medium">GitHub</h2>
+      <h2 className="m3-title-sm">GitHub</h2>
       <p className="text-xs text-ink-muted">
-        One repo per line — <code className="font-mono">owner/name</code> or a full GitHub URL.
-        Auth comes from the <code className="font-mono">gh</code> CLI — no token stored here.
+        One repo per line — <code className="font-mono">owner/name</code> or a full GitHub URL. Auth
+        comes from the <code className="font-mono">gh</code> CLI — no token stored here.
       </p>
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={4}
         placeholder={"AperoVN/reelme-ios\nAperoVN/reelme-api"}
-        className="w-full rounded-md border border-edge bg-surface px-3 py-2 font-mono text-xs text-ink placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
+        className="m3-body-sm w-full rounded-md px-3.5 py-2 font-mono placeholder:text-ink-faint border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none"
       />
       <div className="flex justify-end">
         <Button size="sm" variant="primary" onClick={() => save.mutate()} disabled={save.isPending}>
@@ -383,6 +406,7 @@ function GitHubForm({ initial }: { initial: string }) {
 
 /** Whole-app export/import — move the station (and all its data) between machines. */
 function BackupSettings() {
+  const confirm = useConfirm();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [result, setResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
@@ -400,18 +424,18 @@ function BackupSettings() {
 
   return (
     <Card className="mt-4 space-y-3">
-      <h2 className="text-sm font-medium">Backup & migrate</h2>
+      <h2 className="m3-title-sm">Backup & migrate</h2>
       <p className="text-xs text-ink-muted">
         Export bundles the database, knowledge, skills, agent bundles and attachments into one
-        archive. Import it on another machine running this app — absolute paths inside the
-        database are rewritten to the new data dir, current data is moved aside (never deleted),
-        and skills are relinked. Worktrees, logs and the auth token stay machine-local; project
-        repo paths are kept as-is, fix them in each project if the new machine differs.
+        archive. Import it on another machine running this app — absolute paths inside the database
+        are rewritten to the new data dir, current data is moved aside (never deleted), and skills
+        are relinked. Worktrees, logs and the auth token stay machine-local; project repo paths are
+        kept as-is, fix them in each project if the new machine differs.
       </p>
       <div className="flex items-center gap-2">
         <a href={fileUrl("/api/export")}>
           <Button size="sm" variant="primary">
-            <Download size={13} /> Export data
+            <Download size={16} /> Export data
           </Button>
         </a>
         <Button
@@ -420,7 +444,7 @@ function BackupSettings() {
           disabled={doImport.isPending}
           onClick={() => fileRef.current?.click()}
         >
-          <Upload size={13} /> {doImport.isPending ? "Importing…" : "Import archive"}
+          <Upload size={16} /> {doImport.isPending ? "Importing…" : "Import archive"}
         </Button>
         <input
           ref={fileRef}
@@ -429,16 +453,18 @@ function BackupSettings() {
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (
-              file &&
-              confirm(
-                "Import this archive? Current data will be moved aside and replaced — you must restart the server afterwards.",
-              )
-            ) {
+            e.target.value = "";
+            if (!file) return;
+            void confirm({
+              title: "Import this archive?",
+              body: "Current data will be moved aside and replaced — you must restart the server afterwards.",
+              confirmLabel: "Import",
+              tone: "danger",
+            }).then((ok) => {
+              if (!ok) return;
               setResult(null);
               doImport.mutate(file);
-            }
-            e.target.value = "";
+            });
           }}
         />
       </div>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, Wrench } from "lucide-react";
+import { ChevronRight, Wrench } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import type { ChatEntry } from "./useChatSocket";
 
@@ -28,12 +28,12 @@ function RawToggle({ value }: { value: unknown }) {
     <div className="mt-1">
       <button
         onClick={() => setOpen(!open)}
-        className="cursor-pointer text-[10.5px] text-ink-faint hover:text-ink-muted"
+        className="cursor-pointer m3-label-sm text-ink-faint hover:text-ink-muted"
       >
         {open ? "hide raw" : "raw"}
       </button>
       {open && (
-        <pre className="scroll-x mt-1 max-h-64 overflow-auto rounded-md bg-base p-2 font-mono text-[10.5px] text-ink-faint">
+        <pre className="scroll-x m3-label-sm mt-1.5 max-h-64 overflow-auto rounded-lg bg-surface-container-lowest/70 p-3 font-mono text-ink-faint">
           {JSON.stringify(value, null, 2)}
         </pre>
       )}
@@ -44,20 +44,20 @@ function RawToggle({ value }: { value: unknown }) {
 function ToolUseCard({ block }: { block: Block }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-md border border-edge bg-surface">
+    <div className="liquid rounded-lg">
       <button
         onClick={() => setOpen(!open)}
-        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left"
+        className="state-layer flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left"
       >
-        <Wrench size={12} className="shrink-0 text-accent" />
-        <span className="font-mono text-[11.5px]">{block.name}</span>
+        <Wrench size={18} className="shrink-0 text-primary" />
+        <span className="font-mono m3-label-md">{block.name}</span>
         <ChevronRight
-          size={12}
+          size={16}
           className={cn("ml-auto text-ink-faint transition-transform", open && "rotate-90")}
         />
       </button>
       {open && (
-        <pre className="scroll-x max-h-72 overflow-auto border-t border-edge px-2.5 py-2 font-mono text-[10.5px] text-ink-muted">
+        <pre className="scroll-x m3-label-sm max-h-72 overflow-auto border-t border-hairline px-3.5 py-3 font-mono text-ink-muted">
           {JSON.stringify(block.input, null, 2)}
         </pre>
       )}
@@ -71,7 +71,7 @@ export function MessageView({ entry }: { entry: ChatEntry }) {
   if (message.type === "user_input") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-surface-3 px-3 py-2 text-sm">
+        <div className="m3-body-md max-w-[80%] rounded-xl rounded-br-sm bg-primary-container/50 px-3.5 py-2.5 whitespace-pre-wrap text-on-primary-container">
           {message.text}
         </div>
       </div>
@@ -84,7 +84,7 @@ export function MessageView({ entry }: { entry: ChatEntry }) {
 
   if (message.type === "system") {
     return (
-      <p className="text-[11px] text-ink-faint">
+      <p className="m3-label-sm text-ink-faint">
         session {message.subtype === "init" ? "started" : (message.subtype ?? "")}
       </p>
     );
@@ -93,7 +93,7 @@ export function MessageView({ entry }: { entry: ChatEntry }) {
   const blocks = blocksOf(entry.message);
   if (blocks.length === 0) {
     return (
-      <div className="text-[11px] text-ink-faint">
+      <div className="m3-label-sm text-ink-faint">
         {message.type}
         <RawToggle value={entry.message} />
       </div>
@@ -105,14 +105,17 @@ export function MessageView({ entry }: { entry: ChatEntry }) {
       {blocks.map((block, i) => {
         if (block.type === "text") {
           return (
-            <p key={i} className="whitespace-pre-wrap text-sm leading-relaxed">
+            <p key={i} className="m3-body-md whitespace-pre-wrap leading-relaxed">
               {block.text}
             </p>
           );
         }
         if (block.type === "thinking") {
           return (
-            <p key={i} className="border-l-2 border-think/40 pl-2.5 text-xs italic text-think/80">
+            <p
+              key={i}
+              className="m3-body-sm border-l-2 border-tertiary/40 pl-3 text-tertiary/85 italic"
+            >
               {block.thinking || "thinking…"}
             </p>
           );
@@ -127,7 +130,7 @@ export function MessageView({ entry }: { entry: ChatEntry }) {
             <pre
               key={i}
               className={cn(
-                "scroll-x max-h-52 overflow-auto rounded-md px-2.5 py-1.5 font-mono text-[10.5px]",
+                "scroll-x max-h-52 overflow-auto rounded-md px-2.5 py-1.5 font-mono m3-label-sm",
                 block.is_error ? "bg-err/10 text-err" : "bg-base text-ink-faint",
               )}
             >
@@ -136,7 +139,7 @@ export function MessageView({ entry }: { entry: ChatEntry }) {
           );
         }
         return (
-          <div key={i} className="text-[11px] text-ink-faint">
+          <div key={i} className="m3-label-sm text-ink-faint">
             {block.type}
             <RawToggle value={block} />
           </div>

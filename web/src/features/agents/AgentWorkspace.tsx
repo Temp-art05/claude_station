@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Play, RotateCw, Square, TerminalSquare } from "lucide-react";
+import { useConfirm } from "@/components/ui/confirm";
+import { Select } from "@/components/ui/select";
+import { ExternalLink, Play, RotateCw, Square, TerminalSquare } from "@/components/ui/icons";
 import type { Agent, ChatSession, EnvSet, Project, Terminal } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -43,7 +45,7 @@ export function AgentWorkspace({ project, envSets, session }: Props) {
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex items-center gap-2 border-b border-hairline px-4 py-2">
           <span className="font-mono text-xs text-accent">{agent.name}</span>
-          <span className="truncate font-mono text-[10.5px] text-ink-faint">{agent.viewPath}</span>
+          <span className="truncate font-mono m3-label-sm text-ink-faint">{agent.viewPath}</span>
           <a
             href={fileUrl(`/api/agents/${agent.id}/view`)}
             target="_blank"
@@ -51,7 +53,7 @@ export function AgentWorkspace({ project, envSets, session }: Props) {
             className="ml-auto"
           >
             <Button size="sm" variant="ghost">
-              <ExternalLink size={12} /> Open standalone
+              <ExternalLink size={16} /> Open standalone
             </Button>
           </a>
         </div>
@@ -78,6 +80,7 @@ function AppAgentView({
   envSets: EnvSet[];
   agent: Agent;
 }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   // Was a hand-rolled localStorage key; now it rides the same store as every
   // other remembered choice, so "reset UI state" and project deletion reach it.
@@ -127,27 +130,23 @@ function AppAgentView({
         <span className="font-mono text-xs text-accent">{agent.name}</span>
         <span
           className={cn(
-            "rounded-pill px-2 py-0.5 text-[10px] font-medium",
+            "rounded-pill px-2 py-0.5 m3-label-sm font-medium",
             appTerminal ? "bg-ok/15 text-ok" : "bg-white/8 text-ink-faint",
           )}
         >
           {appTerminal ? "running" : "stopped"}
         </span>
         {canStart && (
-          <select
+          <Select
             value={envSetId}
-            onChange={(e) => setEnvSetId(e.target.value)}
+            onChange={setEnvSetId}
             disabled={Boolean(appTerminal)}
-            className="h-7 px-2 text-[11px]"
             title="Env set injected when starting — overrides the bundle's .env"
-          >
-            <option value="">env: bundle .env only</option>
-            {envSets.map((s) => (
-              <option key={s.id} value={s.id}>
-                env: {s.name}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: "env: bundle .env only" },
+              ...envSets.map((s) => ({ value: s.id, label: `env: ${s.name}` })),
+            ]}
+          />
         )}
         <div className="ml-auto flex items-center gap-1.5">
           {canStart &&
@@ -156,14 +155,18 @@ function AppAgentView({
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  if (confirm(`Stop ${agent.name}?`)) stop.mutate(appTerminal.id);
+                  void confirm({
+                    title: `Stop ${agent.name}?`,
+                    confirmLabel: "Stop",
+                    tone: "danger",
+                  }).then((ok) => ok && stop.mutate(appTerminal.id));
                 }}
               >
-                <Square size={12} /> Stop
+                <Square size={16} /> Stop
               </Button>
             ) : (
               <Button size="sm" onClick={() => start.mutate()} disabled={start.isPending}>
-                <Play size={12} /> {start.isPending ? "Starting…" : "Start"}
+                <Play size={16} /> {start.isPending ? "Starting…" : "Start"}
               </Button>
             ))}
           <Button
@@ -172,7 +175,7 @@ function AppAgentView({
             onClick={() => setFrameNonce((n) => n + 1)}
             title="Reload the app UI"
           >
-            <RotateCw size={12} />
+            <RotateCw size={16} />
           </Button>
           <Button
             size="sm"
@@ -180,11 +183,11 @@ function AppAgentView({
             onClick={() => setShowTerminal((v) => !v)}
             title="Show / hide the app's terminal"
           >
-            <TerminalSquare size={12} /> Terminal
+            <TerminalSquare size={16} /> Terminal
           </Button>
           <a href={agent.viewUrl!} target="_blank" rel="noreferrer">
             <Button size="sm" variant="ghost">
-              <ExternalLink size={12} /> Open standalone
+              <ExternalLink size={16} /> Open standalone
             </Button>
           </a>
         </div>
