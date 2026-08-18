@@ -8,6 +8,7 @@
 const STATION_ONLY = new Set([
   "PORT",
   "WEB_PORT",
+  "STATION_HOST",
   "LOG_LEVEL",
   "CLAUDE_STATION_TOKEN",
   "CLAUDE_STATION_DATA",
