@@ -31,8 +31,11 @@ tên file, không phải suy ra `slug` (quy tắc slug của CLI không có tài
 
 ## Phạm vi (đã chốt)
 
-- Lịch sử = **row terminal đã đóng**, cả `kind=claude` và `kind=shell`. Không đụng Agent SDK
-  chat (`chat_sessions`) và không liệt kê transcript CLI chạy ngoài app.
+- Lịch sử = **row terminal không còn ai giữ**: `exited`, **và** `orphaned` mà session tmux
+  đã chết (row sót từ một process server trước — đó là việc đã xong, không phải tab sống).
+  `orphaned` mà tmux còn sống thì vẫn là tab (detached, có nút Reattach). Cả `kind=claude`
+  và `kind=shell`. Không đụng Agent SDK chat (`chat_sessions`) và không liệt kê transcript
+  CLI chạy ngoài app.
 - UI **inline trong tab Claude / Terminals**, giống mục "Recent runs" của tab Commands.
 - **Xoá không confirm**, và xoá **cả transcript jsonl của claude CLI** — không hoàn tác được.
   Nút vẫn đặt chế độ hiện-khi-hover như nút xoá command (`CommandsTab.tsx:213`) để giảm bấm
@@ -48,6 +51,11 @@ tên file, không phải suy ra `slug` (quy tắc slug của CLI không có tài
 | Tiếp tục (đã đóng hẳn) | cùng route → `claude --resume <uuid>` trong đúng cwd, fallback `claude --session-id <uuid>` nếu transcript mất |
 | Tiếp tục shell | shell mới ở đúng cwd + env set cũ (không có state để nối, giống hôm nay) |
 | Xoá một dòng | hard-delete row + `data/terminal-context/<id>.md` + `~/.claude/projects/*/<uuid>.jsonl` |
+
+Tab bar chỉ giữ `running` + `orphaned & tmuxAlive`. Trước đó mọi row `orphaned` đều hiện
+thành tab, nên một row chết hẳn từ lần restart trước cứ nằm đó mãi và chỉ mời "Restart" —
+đúng ca người dùng gặp: 4 row claude + 1 shell `orphaned` đọng lại, không ở tab nào có
+nghĩa mà cũng không vào History.
 
 Row cũ (không có UUID) vẫn tiếp tục được bằng đường `--continue` như hôm nay, và xoá thì chỉ
 xoá row — không có gì để trỏ tới transcript nào, và **đoán để xoá file là điều tuyệt đối không
@@ -84,8 +92,10 @@ làm**.
 6. **`server/src/routes/terminals.ts`**
    - `restart` (dòng ~88): đọc `existing.claudeSessionId` và truyền vào `claudeCommand(true, …)`.
      Bỏ được câu "resumes the last conversation in this directory" — giờ nó resume đúng session.
-   - `GET /api/projects/:id/terminal-history?kind=&limit=50` (mới): row `status = "exited"`,
-     `ORDER BY closedAt DESC`, kèm `transcript`. Endpoint riêng vì list terminal đang sống được
+   - `GET /api/projects/:id/terminal-history?kind=&limit=50` (mới): `status IN
+     ('exited','orphaned')`, bỏ row `orphaned` còn session tmux (thuộc tab bar), sắp theo
+     `coalesce(closedAt, createdAt) DESC` — row `orphaned` không có `closedAt`. Lọc trước,
+     `limit` sau, để việc bỏ row không làm trang trả về thiếu. Kèm `transcript`. Endpoint riêng vì list terminal đang sống được
      poll liên tục và một project lâu ngày có thể có hàng trăm row đã đóng.
    - `DELETE /api/terminals/:id/record` (mới): 409 nếu row đang `running`, hoặc `orphaned` mà
      `tmuxAlive` (đóng nó trước đã — xoá lịch sử không phải là cách giết một session đang chạy);
@@ -104,6 +114,9 @@ làm**.
      `transcript === false`; bấm dòng → `restart.mutate(id)` rồi chọn tab đó và tắt panel;
      icon thùng rác (hover) → `deleteRecord.mutate(id)`, không confirm.
    - Empty state hiện có thêm một câu trỏ sang History (câu tĩnh, không phụ thuộc số dòng).
+   - `live` (danh sách tab) đổi từ `status !== "exited"` sang `running || (orphaned && tmuxAlive)`.
+   - Dòng lịch sử `orphaned` mang badge "left from a restart" và hiện `opened <createdAt>`
+     thay cho `closed …`.
 
 9. **Docs** — `README.md` mục "Claude, in a real terminal": nói rõ mỗi tab Claude có session id
    riêng, tiếp tục là `--resume` đúng hội thoại đó, và xoá một dòng lịch sử là xoá luôn
@@ -150,6 +163,8 @@ Sửa: `server/src/db/schema.ts`, `shared/src/types.ts`, `server/src/lib/claude-
 ## Trạng thái
 
 Impl xong. `npm run check` pass (86 test, thêm 4 test cho `buildClaudeCommand` với `sessionId`).
+Đã verify trên dữ liệu thật qua API: project `iip555-reelme-ios` → History tab Claude 27 dòng
+(25 `exited` + 2 `orphaned`), tab bar 0 tab (trước đó 2 row `orphaned` chết vẫn hiện thành tab).
 Migration `server/drizzle/0014_productive_tarantula.sql` = `ALTER TABLE terminals ADD claude_session_id text`,
 tự chạy lúc boot. Còn lại là verify tay theo mục trên.
 

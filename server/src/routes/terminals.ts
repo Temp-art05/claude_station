@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { terminalInputSchema, terminalKindSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
@@ -196,6 +196,11 @@ export function terminalRoutes(app: FastifyInstance): void {
    * Closed sessions, newest first. Separate from the live list on purpose: that one
    * is polled while terminals run, and a long-lived project accumulates hundreds of
    * closed rows.
+   *
+   * "Closed" covers orphaned rows too, as long as nothing is holding them: a row
+   * left over from an earlier server process is finished work you may want to pick
+   * up, not a live tab. The exception is an orphaned row whose tmux session is
+   * still alive — that one is merely detached, and the tab bar owns it.
    */
   app.get<{ Params: { id: string } }>("/api/projects/:id/terminal-history", async (req) => {
     const { id } = idParam.parse(req.params);
@@ -209,19 +214,26 @@ export function terminalRoutes(app: FastifyInstance): void {
       .select()
       .from(schema.terminals)
       .where(
-        kind
-          ? and(
-              eq(schema.terminals.projectId, id),
-              eq(schema.terminals.status, "exited"),
-              eq(schema.terminals.kind, kind),
-            )
-          : and(eq(schema.terminals.projectId, id), eq(schema.terminals.status, "exited")),
+        and(
+          eq(schema.terminals.projectId, id),
+          inArray(schema.terminals.status, ["exited", "orphaned"]),
+          ...(kind ? [eq(schema.terminals.kind, kind)] : []),
+        ),
       )
-      .orderBy(desc(schema.terminals.closedAt))
-      .limit(limit)
+      // An orphaned row never got a closedAt — it stopped being watched rather than
+      // being closed — so order by whichever timestamp it does have.
+      .orderBy(desc(sql`coalesce(${schema.terminals.closedAt}, ${schema.terminals.createdAt})`))
       .all();
-    // Whether continuing will really resume, or just reopen in the same directory.
-    return rows.map((t) => ({ ...t, transcript: hasTranscript(t.claudeSessionId) }));
+
+    // Detached-but-alive rows belong to the tab bar, not here. Filtering happens
+    // after the query and the limit after that, so dropping them can't make the
+    // page come back short.
+    const alive = pty.tmuxEnabled() ? pty.sessionAliveIds() : new Set<string>();
+    return rows
+      .filter((t) => t.status === "exited" || !alive.has(t.id))
+      .slice(0, limit)
+      // Whether continuing will really resume, or just reopen in the same directory.
+      .map((t) => ({ ...t, transcript: hasTranscript(t.claudeSessionId) }));
   });
 
   /**

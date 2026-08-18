@@ -57,7 +57,9 @@ conversation, and the tab here lets go. Closing a tab with **×** is still a rea
 hand-off detaches. Terminal app is a setting (`Terminal` by default), and `npm run tmux:ls` /
 `npm run tmux:prune` show and clean up sessions nothing points at any more.
 
-**History** in the tab bar lists the sessions you closed. Each Claude tab owns its own CLI session
+**History** in the tab bar lists the sessions nothing holds any more — the ones you closed, plus
+the ones left over from an earlier server process. A tab is only a session something still has:
+running, or detached with its tmux session alive. Each Claude tab owns its own CLI session
 id (`claude --session-id`), so continuing one resumes *that* conversation — `claude --continue` would
 have picked whichever conversation in the directory was newest, which is the wrong one as soon as two
 tabs share a repo. The trash icon on a row deletes it for good: the row **and** the CLI's transcript

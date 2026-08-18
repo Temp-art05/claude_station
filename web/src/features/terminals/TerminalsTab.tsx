@@ -89,7 +89,13 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
     );
   }, [setParams]);
 
-  const live = terminals.filter((t) => t.status !== "exited");
+  // Tabs are the sessions something still holds: running, or detached with their
+  // tmux session alive. An orphaned row with nothing behind it is finished work —
+  // it belongs in History, where Continue reopens it, instead of sitting here as a
+  // tab that only ever offers to start over.
+  const live = terminals.filter(
+    (t) => t.status === "running" || (t.status === "orphaned" && t.tmuxAlive),
+  );
   // Derived, not synced: the selection falls back to the first live tab.
   const activeId =
     selectedId && live.some((t) => t.id === selectedId) ? selectedId : (live[0]?.id ?? null);
@@ -328,13 +334,16 @@ function HistoryPanel({
             >
               <div className="flex items-center gap-1.5">
                 <span className="truncate text-xs font-medium">{t.title}</span>
+                {t.status === "orphaned" && <Badge>left from a restart</Badge>}
                 {kind === "claude" && !t.transcript && <Badge tone="err">no transcript</Badge>}
               </div>
               <p className="truncate font-mono m3-label-sm text-ink-faint">
                 {t.cwd}
-                {t.closedAt && (
-                  <span className="ml-2">closed {new Date(t.closedAt).toLocaleString()}</span>
-                )}
+                <span className="ml-2">
+                  {t.closedAt
+                    ? `closed ${new Date(t.closedAt).toLocaleString()}`
+                    : `opened ${new Date(t.createdAt).toLocaleString()}`}
+                </span>
               </p>
             </button>
             <Button
