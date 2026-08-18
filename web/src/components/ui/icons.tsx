@@ -64,6 +64,7 @@ export const MessageSquarePlus = glyph("add_comment");
 export const ExternalLink = glyph("open_in_new");
 export const GripVertical = glyph("drag_indicator");
 export const Archive = glyph("archive");
+export const History = glyph("history");
 export const Rows3 = glyph("table_rows");
 export const Columns2 = glyph("splitscreen_left");
 

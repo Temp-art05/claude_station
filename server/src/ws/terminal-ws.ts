@@ -30,8 +30,17 @@ export function terminalWs(app: FastifyInstance): void {
           if (socket.readyState === socket.OPEN) socket.send(chunk);
         },
         onExit: (code) => {
+          // A tmux-backed PTY is only a client of the session. If the session is
+          // still there the process didn't die — we were detached (handoff to a
+          // real terminal, `prefix d`, or another client stealing it), so the row
+          // goes back to orphaned and Reattach brings it home.
+          const detached = pty.sessionAlive(id);
           db.update(schema.terminals)
-            .set({ status: "exited", closedAt: nowIso(), pid: null })
+            .set(
+              detached
+                ? { status: "orphaned", pid: null }
+                : { status: "exited", closedAt: nowIso(), pid: null },
+            )
             .where(eq(schema.terminals.id, id))
             .run();
           send({ t: "exit", code });

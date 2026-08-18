@@ -214,11 +214,23 @@ export const terminalSchema = z.object({
   kind: terminalKindSchema.default("shell"),
   /** Command the PTY was started with (app agents) — restart re-runs it. */
   command: z.string().nullable().default(null),
+  /** The `claude` CLI session id this tab owns; null for shells and legacy rows. */
+  claudeSessionId: z.string().nullable().default(null),
   status: z.enum(["running", "exited", "orphaned"]),
   createdAt: z.string(),
   closedAt: z.string().nullable(),
+  /** Computed on read: a tmux session still holds this terminal's process alive,
+   *  so "orphaned" means "nothing attached", not "output is gone". */
+  tmuxAlive: z.boolean().optional(),
 });
 export type Terminal = z.infer<typeof terminalSchema>;
+
+/** A closed terminal, as the History panel lists it. */
+export const terminalHistoryItemSchema = terminalSchema.extend({
+  /** The CLI transcript is still on disk, so continuing really resumes it. */
+  transcript: z.boolean(),
+});
+export type TerminalHistoryItem = z.infer<typeof terminalHistoryItemSchema>;
 
 export const terminalInputSchema = z.object({
   title: z.string().optional(),
@@ -1076,6 +1088,10 @@ export const appSettingsSchema = z.object({
   "log.toolTailBytes": z.number().int().min(512).default(8192),
   "prompt.knowledgeIndexBytes": z.number().int().min(512).default(8192),
   "terminal.scrollbackBytes": z.number().int().min(4096).default(204800),
+  /** macOS app name for "Open in Terminal" — passed to `open -a`. */
+  "terminal.app": z.string().default("Terminal"),
+  /** Run every PTY inside tmux, so a session can be handed to a real terminal. */
+  "terminal.tmux": z.boolean().default(true),
   "notifications.enabled": z.boolean().default(true),
   "git.useWorktreeDefault": z.boolean().default(false),
   "theme.mode": z.enum(["dark", "light"]).default("dark"),

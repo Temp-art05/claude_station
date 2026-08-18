@@ -1,5 +1,10 @@
 # PTY daemon: terminal sống sót qua server restart
 
+> **Trạng thái (2026-08-18): chưa impl, và phần lợi ích chính đã được giải quyết theo cách
+> khác.** `docs/plans/terminal-open-in-macos.md` cho mọi PTY chạy trong tmux, nên terminal
+> đã sống qua server restart (row thành `orphaned` + `tmuxAlive`, bấm Reattach là về).
+> Plan này chỉ còn cần nếu muốn bỏ hẳn phụ thuộc `tmux`.
+
 ## Mục tiêu
 
 Terminal (kể cả tab Claude) **không chết khi server Fastify restart**. Hôm nay mỗi lần

@@ -22,6 +22,8 @@
     "typecheck": "npm run typecheck -ws --if-present",
     "check": "npm run typecheck && npm run lint && npm run test",
     "db:generate": "npm run db:generate -w server",
+    "tmux:ls": "npm run tmux:ls -w server",
+    "tmux:prune": "npm run tmux:prune -w server",
     "test": "npm run test -w server",
     "lint": "eslint .",
     "format": "prettier --write .",

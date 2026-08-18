@@ -14,12 +14,19 @@ export interface ClaudeCliContext {
   contextFile?: string;
   /** Passed as one --add-dir each; the CLI may Read outside its cwd only here. */
   extraDirs?: string[];
+  /**
+   * The conversation this terminal owns. Given one, the CLI is pinned to it
+   * (--session-id) and resumed by id (--resume) — `--continue` picks whichever
+   * conversation in the directory is newest, which is the wrong one as soon as
+   * two Claude tabs share a repo.
+   */
+  sessionId?: string;
 }
 
 /**
  * `restart` resumes the previous conversation, falling back to a fresh one. The
  * flags are repeated on the fallback branch on purpose: without them a failed
- * --continue would silently drop the workspace context.
+ * resume would silently drop the workspace context.
  */
 export function buildClaudeCommand(restart: boolean, ctx: ClaudeCliContext = {}): string {
   const parts = [
@@ -27,5 +34,14 @@ export function buildClaudeCommand(restart: boolean, ctx: ClaudeCliContext = {})
     ...(ctx.extraDirs ?? []).map((d) => `--add-dir ${shq(d)}`),
   ];
   const flags = parts.length > 0 ? ` ${parts.join(" ")}` : "";
-  return restart ? `claude --continue${flags} || claude${flags}` : `claude${flags}`;
+
+  if (!ctx.sessionId) {
+    // Rows from before session ids existed: the old, best-effort behaviour.
+    return restart ? `claude --continue${flags} || claude${flags}` : `claude${flags}`;
+  }
+
+  const pin = `claude --session-id ${shq(ctx.sessionId)}${flags}`;
+  // The fallback only fires when the transcript is gone (the CLI prunes its own),
+  // and then the id is free again — so it reopens the same id, fresh.
+  return restart ? `claude --resume ${shq(ctx.sessionId)}${flags} || ${pin}` : pin;
 }

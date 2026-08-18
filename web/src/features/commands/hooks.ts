@@ -22,6 +22,20 @@ export function useRunCommand(projectId: string) {
   });
 }
 
+/**
+ * Runs the command in a real terminal window instead of here — nothing about that
+ * run is ours, so there is no log, no timeout and no kill.
+ */
+export function useOpenCommandInTerminal(projectId: string) {
+  return useMutation({
+    mutationFn: (body: { commandId: string; envSetId?: string | null }) =>
+      api.post<{ opened: string; app: string }>(
+        `/api/projects/${projectId}/commands/open-in-terminal`,
+        body,
+      ),
+  });
+}
+
 export function useKillRun(projectId: string) {
   const qc = useQueryClient();
   return useMutation({

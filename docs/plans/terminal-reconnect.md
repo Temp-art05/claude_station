@@ -1,5 +1,10 @@
 # TerminalPane: clear error banner + auto-reconnect WebSocket
 
+> **Cập nhật (2026-08-18):** giả định "PTY chết là hết" đã đổi — mọi PTY giờ chạy trong tmux
+> (`docs/plans/terminal-open-in-macos.md`). PTY của app chết mà session tmux còn thì đó là
+> *detach*, không phải exit: row thành `orphaned` + `tmuxAlive`, và Reattach nối lại đúng
+> session đó. Cơ chế retry/fatal của `TerminalPane` giữ nguyên.
+
 ## Mục tiêu
 Banner "Connection failed" trong `web/src/features/terminals/TerminalPane.tsx` hiện
 dính vĩnh viễn (chỉ `setError`, không bao giờ clear), và WS đứt là chết luôn pane

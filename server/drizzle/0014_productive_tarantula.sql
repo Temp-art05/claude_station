@@ -1,0 +1,1 @@
+ALTER TABLE `terminals` ADD `claude_session_id` text;
