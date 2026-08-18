@@ -22,7 +22,7 @@ export async function deleteProject(id: string): Promise<void> {
     .from(schema.terminals)
     .where(eq(schema.terminals.projectId, id))
     .all()) {
-    pty.kill(t.id);
+    pty.killSession(t.id);
   }
 
   for (const run of db

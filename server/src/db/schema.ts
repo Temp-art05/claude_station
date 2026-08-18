@@ -143,6 +143,13 @@ export const terminals = sqliteTable(
     kind: text("kind").notNull().default("shell"), // shell|claude
     /** Command the PTY was started with (app agents) — restart re-runs it. */
     command: text("command"),
+    /**
+     * The `claude` CLI session this tab owns (--session-id). Resuming targets it
+     * by id instead of `--continue`, which would grab whichever conversation in
+     * this directory happens to be newest. NULL on shells and on rows opened
+     * before this existed.
+     */
+    claudeSessionId: text("claude_session_id"),
     status: text("status").notNull().default("running"), // running|exited|orphaned
     createdAt: text("created_at").notNull(),
     closedAt: text("closed_at"),

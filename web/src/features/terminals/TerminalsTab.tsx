@@ -1,15 +1,28 @@
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { Select } from "@/components/ui/select";
-import { Plus, RotateCw, X } from "@/components/ui/icons";
-import type { EnvSet, Project, TerminalKind } from "@claude-station/shared";
+import { ExternalLink, History, Plus, RotateCw, Trash2, X } from "@/components/ui/icons";
+import type {
+  EnvSet,
+  Project,
+  TerminalHistoryItem,
+  TerminalKind,
+} from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/card";
+import { Badge, Card } from "@/components/ui/card";
 import { usePanelActive } from "@/components/KeepAlive";
 import { projectKey, useUiState } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "./TerminalPane";
-import { useCreateTerminal, useKillTerminal, useRestartTerminal, useTerminals } from "./hooks";
+import {
+  useCreateTerminal,
+  useDeleteTerminalRecord,
+  useExportTerminal,
+  useKillTerminal,
+  useRestartTerminal,
+  useTerminalHistory,
+  useTerminals,
+} from "./hooks";
 
 interface Props {
   project: Project;
@@ -23,6 +36,8 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   const create = useCreateTerminal(project.id);
   const kill = useKillTerminal(project.id);
   const restart = useRestartTerminal(project.id);
+  const handoff = useExportTerminal(project.id);
+  const forget = useDeleteTerminalRecord(project.id);
 
   const onScreen = usePanelActive();
   // "Work with Claude" deep-links land here as ?terminal=<id>&seed=<text>.
@@ -40,6 +55,9 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   // Keyed by kind: the Claude tab and the Terminals tab each keep their own.
   const ui = (...parts: string[]) => projectKey(project.id, "terminals", kind, ...parts);
   const [selectedId, setSelectedId] = useUiState<string | null>(ui("selectedId"), null);
+  const [historyOpen, setHistoryOpen] = useUiState(ui("historyOpen"), false);
+  // Only fetched while the panel is open — closed sessions don't change on their own.
+  const { data: history = [] } = useTerminalHistory(project.id, kind, historyOpen && onScreen);
   const [storedPathId, setPathId] = useUiState(ui("pathId"), project.paths[0]?.id ?? "");
   const [storedEnvSetId, setEnvSetId] = useUiState(ui("envSetId"), "");
   // A repo or env set can disappear between visits; "" is a valid env choice.
@@ -141,6 +159,27 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
         />
         <Button
           size="sm"
+          variant={historyOpen ? "secondary" : "ghost"}
+          onClick={() => setHistoryOpen(!historyOpen)}
+          title="Sessions you closed — continue one, or delete it for good"
+        >
+          <History size={16} /> History
+        </Button>
+        {active?.status === "running" && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => handoff.mutate(active.id)}
+            disabled={handoff.isPending}
+            title={`Attach this session in a real terminal window and let go of it here — same process, ${
+              kind === "claude" ? "same conversation" : "same shell"
+            }`}
+          >
+            <ExternalLink size={16} /> Open in Terminal
+          </Button>
+        )}
+        <Button
+          size="sm"
           onClick={() =>
             create.mutate(
               { cwdPathId: pathId || undefined, envSetId: envSetId || null, kind },
@@ -153,7 +192,24 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1">
+      {historyOpen && (
+        <HistoryPanel
+          kind={kind}
+          items={history}
+          pending={restart.isPending || forget.isPending}
+          onContinue={(id) =>
+            restart.mutate(id, {
+              onSuccess: () => {
+                setActiveId(id);
+                setHistoryOpen(false);
+              },
+            })
+          }
+          onForget={(id) => forget.mutate(id)}
+        />
+      )}
+
+      <div className={cn("min-h-0 flex-1", historyOpen && "hidden")}>
         {!active && (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             {kind === "claude" ? (
@@ -162,6 +218,8 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
                 <p className="m3-body-sm text-ink-faint">
                   Pick a repo and hit <span className="text-ink-muted">+ Claude</span> — the{" "}
                   <code className="font-mono text-ink-muted">claude</code> CLI runs right here.
+                  Sessions you closed are under <span className="text-ink-muted">History</span>, and
+                  can be picked back up.
                 </p>
               </>
             ) : (
@@ -169,7 +227,7 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
                 <p className="m3-title-md">No terminal open.</p>
                 <p className="m3-body-sm text-ink-faint">
                   Open one and run <code className="font-mono text-ink-muted">claude</code> inside
-                  it.
+                  it. Shells you closed are under <span className="text-ink-muted">History</span>.
                 </p>
               </>
             )}
@@ -177,18 +235,27 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
         )}
         {active?.status === "orphaned" && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <Badge tone="err">orphaned</Badge>
+            <Badge tone={active.tmuxAlive ? "accent" : "err"}>
+              {active.tmuxAlive ? "detached" : "orphaned"}
+            </Badge>
             <p className="m3-body-sm max-w-sm text-ink-muted">
-              {kind === "claude"
-                ? "This Claude session belonged to a previous server process. Restart resumes the last conversation in this directory via claude --continue."
-                : "This shell belonged to a previous server process, so its output is gone. Restart it to get a fresh shell in the same directory."}
+              {active.tmuxAlive
+                ? "Nothing is attached here, but the process is still alive in its tmux session — handed to a terminal window, or left over from a server restart. Reattaching picks it up exactly where it is."
+                : kind === "claude"
+                  ? "This Claude session belonged to a previous server process. Restart resumes the last conversation in this directory via claude --continue."
+                  : "This shell belonged to a previous server process, so its output is gone. Restart it to get a fresh shell in the same directory."}
             </p>
             <Button
               size="sm"
               onClick={() => restart.mutate(active.id)}
               disabled={restart.isPending}
             >
-              <RotateCw size={16} /> {kind === "claude" ? "Restart Claude" : "Restart shell"}
+              <RotateCw size={16} />{" "}
+              {active.tmuxAlive
+                ? "Reattach"
+                : kind === "claude"
+                  ? "Restart Claude"
+                  : "Restart shell"}
             </Button>
           </div>
         )}
@@ -202,12 +269,101 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
         )}
       </div>
 
-      {active && (
+      {active && !historyOpen && (
         <div className="m3-label-sm border-t border-hairline px-4 py-2.5 font-mono text-ink-faint">
           {active.cwd}
           {active.envSetId && <span className="ml-2 text-accent">env applied</span>}
+          {handoff.error && (
+            <span className="ml-2 text-err">
+              {handoff.error instanceof Error ? handoff.error.message : "Hand-off failed"}
+            </span>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Closed sessions. A Claude row continues by session id, so the conversation that
+ * comes back is this row's own — `claude --continue` would have grabbed whichever
+ * one in the directory was newest. Deleting takes the CLI transcript with it and
+ * asks nothing first: hover-only, but final.
+ */
+function HistoryPanel({
+  kind,
+  items,
+  pending,
+  onContinue,
+  onForget,
+}: {
+  kind: TerminalKind;
+  items: TerminalHistoryItem[];
+  pending: boolean;
+  onContinue: (id: string) => void;
+  onForget: (id: string) => void;
+}) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      {items.length === 0 && (
+        <p className="m3-body-sm text-ink-faint">
+          Nothing closed yet. {kind === "claude" ? "A Claude session" : "A shell"} you close shows
+          up here, and can be picked back up.
+        </p>
+      )}
+      <div className="space-y-1.5">
+        {items.map((t) => (
+          <Card key={t.id} className="group flex items-center gap-2 p-2.5">
+            <button
+              onClick={() => onContinue(t.id)}
+              disabled={pending}
+              className="min-w-0 flex-1 cursor-pointer text-left disabled:cursor-default"
+              title={
+                kind === "claude"
+                  ? t.transcript
+                    ? "Continue this conversation"
+                    : "Transcript is gone — this reopens Claude in the same directory"
+                  : "Open a shell in the same directory"
+              }
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-xs font-medium">{t.title}</span>
+                {kind === "claude" && !t.transcript && <Badge tone="err">no transcript</Badge>}
+              </div>
+              <p className="truncate font-mono m3-label-sm text-ink-faint">
+                {t.cwd}
+                {t.closedAt && (
+                  <span className="ml-2">closed {new Date(t.closedAt).toLocaleString()}</span>
+                )}
+              </p>
+            </button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onContinue(t.id)}
+              disabled={pending}
+              aria-label="Continue session"
+            >
+              <RotateCw size={16} /> Continue
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="opacity-0 group-hover:opacity-100"
+              onClick={() => onForget(t.id)}
+              disabled={pending}
+              aria-label="Delete from history"
+              title={
+                kind === "claude"
+                  ? "Delete this session and its transcript — no undo"
+                  : "Delete this session from history — no undo"
+              }
+            >
+              <Trash2 size={16} />
+            </Button>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }

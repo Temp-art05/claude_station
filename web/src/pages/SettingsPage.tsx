@@ -32,6 +32,7 @@ interface Doctor {
   gh: { ok: boolean; detail: string };
   git: { ok: boolean; detail: string };
   pty: { ok: boolean; detail: string };
+  tmux: { ok: boolean; detail: string; enabled: boolean };
   runningTerminals: number;
 }
 
@@ -89,6 +90,17 @@ export function SettingsPage() {
         {doctor && (
           <>
             <Check ok={doctor.pty.ok} label="node-pty (terminals)" detail={doctor.pty.detail} />
+            <Check
+              ok={doctor.tmux.enabled}
+              label="tmux (hand a terminal to Terminal.app, survive restarts)"
+              detail={
+                doctor.tmux.enabled
+                  ? doctor.tmux.detail
+                  : doctor.tmux.ok
+                    ? `${doctor.tmux.detail} — turned off below`
+                    : doctor.tmux.detail
+              }
+            />
             <Check ok={doctor.claudeCli.ok} label="claude CLI" detail={doctor.claudeCli.detail} />
             <Check ok={doctor.gh.ok} label="gh CLI login" detail={doctor.gh.detail} />
             <Check ok={doctor.git.ok} label="git" detail={doctor.git.detail} />
@@ -117,6 +129,15 @@ export function SettingsPage() {
                 value={settings["ide.command"]}
                 onChange={(e) => update.mutate({ "ide.command": e.target.value })}
                 placeholder="xed | idea | code"
+                className="font-mono text-xs"
+              />
+            </div>
+            <div>
+              <Label>Open terminals with</Label>
+              <Input
+                value={settings["terminal.app"]}
+                onChange={(e) => update.mutate({ "terminal.app": e.target.value })}
+                placeholder="Terminal | iTerm | Ghostty"
                 className="font-mono text-xs"
               />
             </div>
@@ -158,6 +179,10 @@ export function SettingsPage() {
                 ["concurrency.repoLock", "Block two sessions running in the same repo at once"],
                 ["notifications.enabled", "Desktop notifications for finished turns"],
                 ["git.useWorktreeDefault", "New sessions get their own git worktree by default"],
+                [
+                  "terminal.tmux",
+                  "Run terminals inside tmux (lets you hand one to a real terminal; needs tmux installed)",
+                ],
               ] as const
             ).map(([key, label]) => (
               <label key={key} className="flex cursor-pointer items-center gap-2 text-sm">

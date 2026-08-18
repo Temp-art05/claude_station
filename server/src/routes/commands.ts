@@ -4,10 +4,20 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { pathCommandInputSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
+import { shq } from "../lib/claude-cli";
+import { setting } from "../lib/config";
 import { newId } from "../lib/id";
+import { openWith, writeLauncher } from "../lib/open-terminal";
 import { parsePatch } from "../lib/patch";
 import { badRequest } from "../lib/path-safety";
-import { isRunActive, killRun, readLogSlice, startRun } from "../services/commands";
+import { envVarsFor } from "../services/env-sets";
+import {
+  isRunActive,
+  killRun,
+  readLogSlice,
+  resolveCommandTarget,
+  startRun,
+} from "../services/commands";
 
 const idParam = z.object({ id: z.string() });
 const pathIdParam = z.object({ pathId: z.string() });
@@ -113,6 +123,47 @@ export function commandRoutes(app: FastifyInstance): void {
     reply.code(201);
     return { runId };
   });
+
+  /**
+   * Hand a command to a real terminal window instead of running it here. Nothing
+   * about this run is ours: no log, no timeout, no kill — that is the trade the
+   * UI warns about, and the reason it stays a separate button from Run.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/commands/open-in-terminal",
+    async (req) => {
+      const { id: projectId } = idParam.parse(req.params);
+      const body = z
+        .object({
+          commandId: z.string(),
+          extraArgs: z.string().max(500).optional(),
+          envSetId: z.string().nullable().optional(),
+        })
+        .parse(req.body ?? {});
+      const { cmd, path, cwd } = resolveCommandTarget(body.commandId, projectId);
+      const fullCommand = body.extraArgs ? `${cmd.command} ${body.extraArgs}` : cmd.command;
+
+      // Same env resolution as startRun, CI=1 included: the point of this button is
+      // reproducing the app's run by hand, not running something subtly different.
+      const env = { ...envVarsFor(body.envSetId ?? path.envSetId), CI: "1" };
+      const exports = Object.entries(env)
+        .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+        .map(([k, v]) => `export ${k}=${shq(v)}`);
+
+      const app_ = setting("terminal.app");
+      const file = writeLauncher(`${cmd.name}-${cmd.id.slice(0, 8)}`, [
+        `cd ${shq(cwd)}`,
+        ...exports,
+        `printf '$ %s\\n\\n' ${shq(fullCommand)}`,
+        fullCommand,
+        `printf '\\n[claude-station] exit %s — dropping into a shell\\n' "$?"`,
+        // Keep the window: a build's output is worth reading after it finishes.
+        'exec "${SHELL:-/bin/zsh}" -l',
+      ]);
+      await openWith(app_, file);
+      return { opened: file, app: app_, command: fullCommand, cwd };
+    },
+  );
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/command-runs", async (req) => {
     const { id } = idParam.parse(req.params);

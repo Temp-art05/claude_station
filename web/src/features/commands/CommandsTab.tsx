@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useConfirm } from "@/components/ui/confirm";
 import { Select } from "@/components/ui/select";
-import { Hammer, Play, Square, Trash2, Plus, X } from "@/components/ui/icons";
+import { ExternalLink, Hammer, Play, Square, Trash2, Plus, X } from "@/components/ui/icons";
 import {
   COMMAND_PRESETS,
   commandKindSchema,
@@ -25,6 +25,7 @@ import {
   useDeleteCommand,
   useDeleteRun,
   useKillRun,
+  useOpenCommandInTerminal,
   useRunCommand,
 } from "./hooks";
 
@@ -42,6 +43,7 @@ export function CommandsTab({ project, envSets }: Props) {
   const run = useRunCommand(project.id);
   const kill = useKillRun(project.id);
   const removeRun = useDeleteRun(project.id);
+  const handoff = useOpenCommandInTerminal(project.id);
 
   const [storedRun, setSelectedRun] = useUiState<string | null>(
     projectKey(project.id, "commands", "selectedRun"),
@@ -104,6 +106,8 @@ export function CommandsTab({ project, envSets }: Props) {
                   onRun={() =>
                     run.mutate({ commandId: cmd.id }, { onSuccess: (r) => setSelectedRun(r.runId) })
                   }
+                  onRunInTerminal={() => handoff.mutate({ commandId: cmd.id })}
+                  terminalPending={handoff.isPending}
                 />
               ))}
             </div>
@@ -189,11 +193,15 @@ function CommandRow({
   command,
   pending,
   onRun,
+  onRunInTerminal,
+  terminalPending,
 }: {
   pathId: string;
   command: Project["paths"][number]["commands"][number];
   pending: boolean;
   onRun: () => void;
+  onRunInTerminal: () => void;
+  terminalPending: boolean;
 }) {
   const del = useDeleteCommand(pathId);
   return (
@@ -207,6 +215,16 @@ function CommandRow({
       </div>
       <Button size="icon" variant="ghost" onClick={onRun} disabled={pending} aria-label="Run">
         <Play size={16} />
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={onRunInTerminal}
+        disabled={terminalPending}
+        aria-label="Run in a terminal window"
+        title="Run this in a terminal window instead — that run is yours, not the app's: no log, no timeout, no kill button"
+      >
+        <ExternalLink size={16} />
       </Button>
       <Button
         size="icon"

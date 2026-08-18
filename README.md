@@ -30,8 +30,9 @@ execution by design, and binding to `127.0.0.1` alone would not help: any page o
 can POST to localhost. Every request needs the token **and** a whitelisted `Origin`.
 
 **Requirements:** Node 24+ · `claude` CLI already logged in (the Agent SDK reuses that login, no API
-key needed) · Xcode Command Line Tools on macOS (node-pty builds against them) · optional `gh` CLI
-for the GitHub views.
+key needed) · Xcode Command Line Tools on macOS (node-pty builds against them) · `tmux` for terminals
+that survive a restart and can be handed to Terminal.app (`brew install tmux`; without it terminals
+still work, they just die with the server) · optional `gh` CLI for the GitHub views.
 
 ## What it does
 
@@ -46,8 +47,27 @@ Leaving a project keeps its terminals alive; the sidebar brings you back to the 
 ![Claude in a terminal](docs/images/claude.png)
 
 Each repo gets embedded `claude` CLI terminals — a real PTY rendered with xterm, so the CLI's own
-TUI handles approvals exactly as it does in your shell. Scrollback survives a reconnect, and a
-restart after a server restart resumes with `claude --continue`. Jira and GitHub both have a
+TUI handles approvals exactly as it does in your shell. Scrollback survives a reconnect.
+
+Every terminal runs inside a tmux session on the app's own socket (`tmux -L claude-station`), which
+buys two things. It **survives a server restart** — the tab goes *detached* and **Reattach** picks the
+session up mid-thought instead of starting over. And **Open in Terminal** hands the session to a real
+window: the launcher attaches to the very same tmux session, so it is the same process and the same
+conversation, and the tab here lets go. Closing a tab with **×** is still a real kill; only the
+hand-off detaches. Terminal app is a setting (`Terminal` by default), and `npm run tmux:ls` /
+`npm run tmux:prune` show and clean up sessions nothing points at any more.
+
+**History** in the tab bar lists the sessions you closed. Each Claude tab owns its own CLI session
+id (`claude --session-id`), so continuing one resumes *that* conversation — `claude --continue` would
+have picked whichever conversation in the directory was newest, which is the wrong one as soon as two
+tabs share a repo. The trash icon on a row deletes it for good: the row **and** the CLI's transcript
+under `~/.claude/projects/`, with no confirmation and no undo. Rows opened before session ids existed
+still continue via `--continue`, and deleting one only drops the row — nothing on disk is guessed at.
+
+Two tmux details worth knowing: the prefix is `C-]` (not `C-b`, which readline needs), and the mouse
+is tmux's — the wheel scrolls tmux history since tmux owns the alternate screen, so selecting text
+needs Option/Shift. Without tmux installed the terminals fall back to plain PTYs and the hand-off
+button is gone. Jira and GitHub both have a
 "Work on this with Claude" button that opens one of these with the issue context pre-typed — never
 auto-sent. Agent workspaces and workflow steps use the Agent SDK chat instead, with streaming and an
 approval modal.
@@ -58,7 +78,9 @@ approval modal.
 
 Per-path build/test/lint runner — `xcodebuild`, `./gradlew`, `npm run …` — with a live log, a
 timeout, and a kill that takes the whole process group. Presets for iOS / Android / KMP / Node.
-Claude can run these too (and read the logs), so it can fix a failing build on its own.
+Claude can run these too (and read the logs), so it can fix a failing build on its own. The second
+button on a command runs it in a terminal window instead, same cwd and same env set — that run is
+yours, not the app's: no log, no timeout, no kill button.
 
 ### Diff
 

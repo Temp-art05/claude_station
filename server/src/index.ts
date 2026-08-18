@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ZodError } from "zod";
 import { registerAuth, TOKEN } from "./lib/auth";
-import { env } from "./lib/config";
+import { env, setting } from "./lib/config";
 import { REPO_ROOT } from "./lib/repo-root";
 import { agentRoutes } from "./routes/agents";
 import { backupRoutes } from "./routes/backup";
@@ -29,7 +29,8 @@ import { backfillChatSearch, ensureSearchTables } from "./services/search";
 import { reconcileWorktreesOnBoot } from "./services/sessions";
 import { reconcileRunsOnBoot } from "./services/workflow-runner";
 import { killAllRuns } from "./services/commands";
-import { killAll as killAllPtys } from "./services/pty-manager";
+import { killAll as killAllPtys, tmuxEnabled } from "./services/pty-manager";
+import * as tmux from "./lib/tmux";
 import { chatWs } from "./ws/chat-ws";
 import { workflowWs } from "./ws/workflow-ws";
 import { commandWs } from "./ws/command-ws";
@@ -70,6 +71,14 @@ ensureSearchTables();
 backfillChatSearch();
 // Built-in global memory notes — inserted once each, then left alone.
 seedGlobalMemories();
+// Our own tmux socket gets its config rewritten every boot: the settings there are
+// what make a session usable in an embedded xterm (no status bar, mouse scrolling).
+if (tmuxEnabled()) {
+  tmux.writeConfig();
+  app.log.info(`terminals run inside tmux (${tmux.probe().detail}, socket ${tmux.TMUX_SOCKET})`);
+} else if (setting("terminal.tmux")) {
+  app.log.warn(`tmux not usable, terminals run as plain PTYs — ${tmux.probe().detail}`);
+}
 // A step that was mid-flight when the process died is marked interrupted, never
 // resumed blind: it may already have edited files or commented on a ticket.
 const interruptedSteps = reconcileRunsOnBoot();
@@ -128,7 +137,8 @@ if (env.isProd && existsSync(webDist)) {
   });
 }
 
-// Never leave orphaned shells or build processes behind.
+// Never leave orphaned shells or build processes behind. tmux-backed terminals are
+// only detached here — they are meant to survive a restart and be reattached.
 let shuttingDown = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

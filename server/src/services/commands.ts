@@ -56,12 +56,14 @@ export interface StartRunResult {
 /**
  * Only commands already stored on a project path can run: the client (and
  * Claude) pass an id, never a shell string, so there is nothing to inject.
+ * Shared with the "run this in my own terminal" handoff, which must resolve the
+ * command exactly the same way.
  */
-export function startRun(input: StartRunInput): StartRunResult {
+export function resolveCommandTarget(pathCommandId: string, projectId: string) {
   const cmd = db
     .select()
     .from(schema.pathCommands)
-    .where(eq(schema.pathCommands.id, input.pathCommandId))
+    .where(eq(schema.pathCommands.id, pathCommandId))
     .get();
   if (!cmd) throw badRequest("Command not found");
 
@@ -71,9 +73,13 @@ export function startRun(input: StartRunInput): StartRunResult {
     .where(eq(schema.projectPaths.id, cmd.projectPathId))
     .get();
   if (!path) throw badRequest("Command's path no longer exists");
-  if (path.projectId !== input.projectId) throw badRequest("Command belongs to another project");
+  if (path.projectId !== projectId) throw badRequest("Command belongs to another project");
 
-  const cwd = assertPathAllowed(cmd.cwdOverride ?? path.path, input.projectId);
+  return { cmd, path, cwd: assertPathAllowed(cmd.cwdOverride ?? path.path, projectId) };
+}
+
+export function startRun(input: StartRunInput): StartRunResult {
+  const { cmd, path, cwd } = resolveCommandTarget(input.pathCommandId, input.projectId);
   const fullCommand = input.extraArgs ? `${cmd.command} ${input.extraArgs}` : cmd.command;
 
   const runId = newId();

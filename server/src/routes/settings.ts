@@ -7,7 +7,7 @@ import { appSettingsPatchSchema } from "@claude-station/shared";
 import { settings, updateSettings, env as envConfig } from "../lib/config";
 import { DATA_DIR, CLAUDE_SKILLS_LINK_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
-import { runningIds } from "../services/pty-manager";
+import { runningIds, tmuxEnabled } from "../services/pty-manager";
 
 const exec = promisify(execFile);
 
@@ -30,10 +30,11 @@ export function settingsRoutes(app: FastifyInstance): void {
 
   /** Doctor panel: everything that silently breaks the app if missing. */
   app.get("/api/doctor", async () => {
-    const [claudeCli, gh, git] = await Promise.all([
+    const [claudeCli, gh, git, tmuxProbe] = await Promise.all([
       probe("claude", ["--version"]),
       probe("gh", ["auth", "status"]),
       probe("git", ["--version"]),
+      probe("tmux", ["-V"]),
     ]);
 
     let dataDirWritable = true;
@@ -81,6 +82,9 @@ export function settingsRoutes(app: FastifyInstance): void {
       gh,
       git,
       pty: { ok: ptyOk, detail: ptyDetail },
+      // Without tmux the terminals still work, they just can't be handed to a
+      // real terminal window and don't survive a server restart.
+      tmux: { ...tmuxProbe, enabled: tmuxEnabled() },
       runningTerminals: runningIds().length,
     };
   });

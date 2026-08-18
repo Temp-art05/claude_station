@@ -1,4 +1,5 @@
 import { asc, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TerminalInput, TerminalKind } from "@claude-station/shared";
@@ -44,7 +45,7 @@ export function removeTerminalContext(terminalId: string): void {
  */
 export function claudeCommand(
   restart: boolean,
-  opts?: { projectId: string; terminalId: string; cwd: string },
+  opts?: { projectId: string; terminalId: string; cwd: string; sessionId?: string | null },
 ): string {
   if (!opts) return buildClaudeCommand(restart);
 
@@ -58,6 +59,7 @@ export function claudeCommand(
     .all();
 
   return buildClaudeCommand(restart, {
+    sessionId: opts.sessionId ?? undefined,
     contextFile: writeTerminalContext(opts.projectId, opts.terminalId) || undefined,
     extraDirs: [
       ...paths.map((p) => p.path).filter((p) => p !== opts.cwd),
@@ -95,6 +97,9 @@ export function createTerminal(
 ) {
   const kind: TerminalKind = input.kind ?? "shell";
   const id = newId();
+  // Pinning the CLI to an id of our own is what makes "continue this one" exact
+  // later on, and what makes its transcript findable when the row is deleted.
+  const claudeSessionId = kind === "claude" ? randomUUID() : null;
   const base = resolveCwd(projectId, input);
   // A worktree cwd lives in data/worktrees/<terminalId>, which path-safety allows.
   const cwd = input.useWorktree ? createWorktree(base, id) : base;
@@ -107,7 +112,7 @@ export function createTerminal(
     command:
       input.command ??
       (kind === "claude"
-        ? claudeCommand(false, { projectId, terminalId: id, cwd })
+        ? claudeCommand(false, { projectId, terminalId: id, cwd, sessionId: claudeSessionId })
         : undefined),
   });
 
@@ -127,6 +132,7 @@ export function createTerminal(
     pid,
     kind,
     command: input.command ?? null,
+    claudeSessionId,
     status: "running" as const,
     createdAt: nowIso(),
     closedAt: null,

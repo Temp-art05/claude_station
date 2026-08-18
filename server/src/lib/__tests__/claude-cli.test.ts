@@ -70,3 +70,34 @@ describe("buildClaudeCommand", () => {
     );
   });
 });
+
+describe("buildClaudeCommand with a session id", () => {
+  const sid = "11111111-2222-3333-4444-555555555555";
+
+  it("pins a fresh session to the id", () => {
+    expect(buildClaudeCommand(false, { sessionId: sid })).toBe(`claude --session-id '${sid}'`);
+  });
+
+  it("resumes that id, not whatever was newest in the directory", () => {
+    const cmd = buildClaudeCommand(true, { sessionId: sid });
+    expect(cmd).toBe(`claude --resume '${sid}' || claude --session-id '${sid}'`);
+    expect(cmd).not.toContain("--continue");
+  });
+
+  it("keeps the workspace flags on both branches", () => {
+    const cmd = buildClaudeCommand(true, {
+      sessionId: sid,
+      contextFile: "/data/ctx.md",
+      extraDirs: ["/repo/be"],
+    });
+    const [resume, fallback] = cmd.split(" || ");
+    for (const branch of [resume, fallback]) {
+      expect(branch).toContain("--append-system-prompt-file '/data/ctx.md'");
+      expect(branch).toContain("--add-dir '/repo/be'");
+    }
+  });
+
+  it("falls back to the old --continue form when there is no id (legacy rows)", () => {
+    expect(buildClaudeCommand(true)).toBe("claude --continue || claude");
+  });
+});

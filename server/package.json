@@ -7,6 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "db:generate": "drizzle-kit generate",
+    "tmux:ls": "tsx src/tools/tmux-cli.ts ls",
+    "tmux:prune": "tsx src/tools/tmux-cli.ts prune",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
