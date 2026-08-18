@@ -225,6 +225,20 @@ export const terminalSchema = z.object({
 });
 export type Terminal = z.infer<typeof terminalSchema>;
 
+/** A `claude` CLI conversation on disk — including ones this app never opened. */
+export const cliSessionSchema = z.object({
+  /** The CLI's own session id; `claude --resume <this>` reopens the conversation. */
+  sessionId: z.string(),
+  cwd: z.string(),
+  gitBranch: z.string().nullable(),
+  title: z.string(),
+  sizeBytes: z.number().int(),
+  modifiedAt: z.string(),
+  /** A terminal row in this app already owns this conversation. */
+  adopted: z.boolean(),
+});
+export type CliSession = z.infer<typeof cliSessionSchema>;
+
 /** A closed terminal, as the History panel lists it. */
 export const terminalHistoryItemSchema = terminalSchema.extend({
   /** The CLI transcript is still on disk, so continuing really resumes it. */

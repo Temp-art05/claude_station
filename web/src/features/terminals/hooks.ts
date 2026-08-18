@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  CliSession,
   Terminal,
   TerminalHistoryItem,
   TerminalInput,
@@ -35,6 +36,45 @@ export function useDeleteTerminalRecord(projectId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["terminal-history", projectId] });
       qc.invalidateQueries({ queryKey: ["terminals", projectId] });
+    },
+  });
+}
+
+/**
+ * Conversations the `claude` CLI kept for this project's directories, including the
+ * ones run from a real terminal that this app has no row for.
+ */
+export function useCliSessions(projectId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["cli-sessions", projectId],
+    queryFn: () => api.get<CliSession[]>(`/api/projects/${projectId}/cli-sessions`),
+    enabled,
+  });
+}
+
+/** Takes a CLI conversation over: a new Claude tab resumes it and owns it from then on. */
+export function useContinueCliSession(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sessionId: string) =>
+      api.post<Terminal>(`/api/projects/${projectId}/cli-sessions/${sessionId}/continue`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["terminals", projectId] });
+      qc.invalidateQueries({ queryKey: ["cli-sessions", projectId] });
+      qc.invalidateQueries({ queryKey: ["terminal-history", projectId] });
+    },
+  });
+}
+
+/** Deletes the transcript from disk. No guard, no undo — see the route. */
+export function useDeleteCliSession(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sessionId: string) =>
+      api.delete(`/api/projects/${projectId}/cli-sessions/${sessionId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["cli-sessions", projectId] });
+      qc.invalidateQueries({ queryKey: ["terminal-history", projectId] });
     },
   });
 }

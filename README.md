@@ -57,11 +57,20 @@ conversation, and the tab here lets go. Closing a tab with **×** is still a rea
 hand-off detaches. Terminal app is a setting (`Terminal` by default), and `npm run tmux:ls` /
 `npm run tmux:prune` show and clean up sessions nothing points at any more.
 
-**History** in the tab bar lists the sessions you closed. Each Claude tab owns its own CLI session
+**History** in the tab bar has two parts. First the app's own sessions: the ones you closed, plus
+the ones left over from an earlier server process — a tab is only a session something still has
+(running, or detached with its tmux session alive). Then **From the CLI**: every `claude`
+conversation the CLI itself remembers for this project's directories, *including the ones you ran
+in a real terminal and this app never saw*. Continuing one opens a tab that adopts its session id,
+so from then on it is an ordinary session here. They are read straight off
+`~/.claude/projects/` — head and tail of each file only, never the whole thing, since a
+conversation with pasted images can run to tens of MB. Each Claude tab owns its own CLI session
 id (`claude --session-id`), so continuing one resumes *that* conversation — `claude --continue` would
 have picked whichever conversation in the directory was newest, which is the wrong one as soon as two
 tabs share a repo. The trash icon on a row deletes it for good: the row **and** the CLI's transcript
-under `~/.claude/projects/`, with no confirmation and no undo. Rows opened before session ids existed
+under `~/.claude/projects/`, with no confirmation and no undo — in the CLI section it deletes the
+transcript even if that conversation is running in another terminal right now, which is why each
+row shows when it was last written to. Rows opened before session ids existed
 still continue via `--continue`, and deleting one only drops the row — nothing on disk is guessed at.
 
 Two tmux details worth knowing: the prefix is `C-]` (not `C-b`, which readline needs), and the mouse

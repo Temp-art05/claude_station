@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router";
 import { Select } from "@/components/ui/select";
 import { ExternalLink, History, Plus, RotateCw, Trash2, X } from "@/components/ui/icons";
 import type {
+  CliSession,
   EnvSet,
   Project,
   TerminalHistoryItem,
@@ -15,7 +16,10 @@ import { projectKey, useUiState } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "./TerminalPane";
 import {
+  useCliSessions,
+  useContinueCliSession,
   useCreateTerminal,
+  useDeleteCliSession,
   useDeleteTerminalRecord,
   useExportTerminal,
   useKillTerminal,
@@ -58,6 +62,11 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   const [historyOpen, setHistoryOpen] = useUiState(ui("historyOpen"), false);
   // Only fetched while the panel is open — closed sessions don't change on their own.
   const { data: history = [] } = useTerminalHistory(project.id, kind, historyOpen && onScreen);
+  // Shells have no transcripts, so the CLI list is the Claude tab's business only.
+  const cliEnabled = historyOpen && onScreen && kind === "claude";
+  const { data: cliSessions = [] } = useCliSessions(project.id, cliEnabled);
+  const continueCli = useContinueCliSession(project.id);
+  const forgetCli = useDeleteCliSession(project.id);
   const [storedPathId, setPathId] = useUiState(ui("pathId"), project.paths[0]?.id ?? "");
   const [storedEnvSetId, setEnvSetId] = useUiState(ui("envSetId"), "");
   // A repo or env set can disappear between visits; "" is a valid env choice.
@@ -89,7 +98,13 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
     );
   }, [setParams]);
 
-  const live = terminals.filter((t) => t.status !== "exited");
+  // Tabs are the sessions something still holds: running, or detached with their
+  // tmux session alive. An orphaned row with nothing behind it is finished work —
+  // it belongs in History, where Continue reopens it, instead of sitting here as a
+  // tab that only ever offers to start over.
+  const live = terminals.filter(
+    (t) => t.status === "running" || (t.status === "orphaned" && t.tmuxAlive),
+  );
   // Derived, not synced: the selection falls back to the first live tab.
   const activeId =
     selectedId && live.some((t) => t.id === selectedId) ? selectedId : (live[0]?.id ?? null);
@@ -206,6 +221,17 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
             })
           }
           onForget={(id) => forget.mutate(id)}
+          cliSessions={kind === "claude" ? cliSessions : undefined}
+          cliPending={continueCli.isPending || forgetCli.isPending}
+          onContinueCli={(sessionId) =>
+            continueCli.mutate(sessionId, {
+              onSuccess: (row) => {
+                setActiveId(row.id);
+                setHistoryOpen(false);
+              },
+            })
+          }
+          onForgetCli={(sessionId) => forgetCli.mutate(sessionId)}
         />
       )}
 
@@ -284,11 +310,26 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   );
 }
 
+function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 /**
- * Closed sessions. A Claude row continues by session id, so the conversation that
- * comes back is this row's own — `claude --continue` would have grabbed whichever
- * one in the directory was newest. Deleting takes the CLI transcript with it and
- * asks nothing first: hover-only, but final.
+ * Closed sessions, in two parts.
+ *
+ * The app's own rows come first: a Claude row continues by session id, so the
+ * conversation that comes back is this row's own — `claude --continue` would have
+ * grabbed whichever one in the directory was newest.
+ *
+ * Then the conversations the CLI itself remembers for these directories, which is
+ * everything you ever ran from a real terminal too. Continuing one hands it to a new
+ * tab that adopts its session id, after which it is an ordinary row of the app — so a
+ * conversation you opened here shows up in both parts, deliberately: each part says
+ * plainly where its data comes from.
+ *
+ * Deleting asks nothing, in either part, and cannot be undone.
  */
 function HistoryPanel({
   kind,
@@ -296,15 +337,27 @@ function HistoryPanel({
   pending,
   onContinue,
   onForget,
+  cliSessions,
+  cliPending,
+  onContinueCli,
+  onForgetCli,
 }: {
   kind: TerminalKind;
   items: TerminalHistoryItem[];
   pending: boolean;
   onContinue: (id: string) => void;
   onForget: (id: string) => void;
+  /** Undefined on the Terminals tab: a shell leaves no transcript behind. */
+  cliSessions?: CliSession[];
+  cliPending: boolean;
+  onContinueCli: (sessionId: string) => void;
+  onForgetCli: (sessionId: string) => void;
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      {cliSessions && (
+        <h3 className="m3-label-md mb-2 text-ink-muted">Sessions in this app</h3>
+      )}
       {items.length === 0 && (
         <p className="m3-body-sm text-ink-faint">
           Nothing closed yet. {kind === "claude" ? "A Claude session" : "A shell"} you close shows
@@ -328,13 +381,16 @@ function HistoryPanel({
             >
               <div className="flex items-center gap-1.5">
                 <span className="truncate text-xs font-medium">{t.title}</span>
+                {t.status === "orphaned" && <Badge>left from a restart</Badge>}
                 {kind === "claude" && !t.transcript && <Badge tone="err">no transcript</Badge>}
               </div>
               <p className="truncate font-mono m3-label-sm text-ink-faint">
                 {t.cwd}
-                {t.closedAt && (
-                  <span className="ml-2">closed {new Date(t.closedAt).toLocaleString()}</span>
-                )}
+                <span className="ml-2">
+                  {t.closedAt
+                    ? `closed ${new Date(t.closedAt).toLocaleString()}`
+                    : `opened ${new Date(t.createdAt).toLocaleString()}`}
+                </span>
               </p>
             </button>
             <Button
@@ -364,6 +420,68 @@ function HistoryPanel({
           </Card>
         ))}
       </div>
+
+      {cliSessions && (
+        <>
+          <h3 className="m3-label-md mt-5 mb-2 text-ink-muted">
+            From the CLI{" "}
+            <span className="text-ink-faint">
+              — every <code className="font-mono">claude</code> conversation in this project's
+              directories, including the ones you ran in a real terminal
+            </span>
+          </h3>
+          {cliSessions.length === 0 && (
+            <p className="m3-body-sm text-ink-faint">
+              Nothing on disk for these directories. The CLI keeps 30 days by default
+              (<code className="font-mono">cleanupPeriodDays</code>).
+            </p>
+          )}
+          <div className="space-y-1.5">
+            {cliSessions.map((c) => (
+              <Card key={c.sessionId} className="group flex items-center gap-2 p-2.5">
+                <button
+                  onClick={() => onContinueCli(c.sessionId)}
+                  disabled={cliPending}
+                  className="min-w-0 flex-1 cursor-pointer text-left disabled:cursor-default"
+                  title="Open a Claude tab that resumes this conversation"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-xs font-medium">{c.title}</span>
+                    {c.adopted && <Badge tone="accent">in app</Badge>}
+                    {c.gitBranch && <Badge>{c.gitBranch}</Badge>}
+                  </div>
+                  <p className="truncate font-mono m3-label-sm text-ink-faint">
+                    {c.cwd}
+                    <span className="ml-2">
+                      {new Date(c.modifiedAt).toLocaleString()} · {humanSize(c.sizeBytes)}
+                    </span>
+                  </p>
+                </button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onContinueCli(c.sessionId)}
+                  disabled={cliPending}
+                  aria-label="Continue this conversation"
+                >
+                  <RotateCw size={16} /> Continue
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="opacity-0 group-hover:opacity-100"
+                  onClick={() => onForgetCli(c.sessionId)}
+                  disabled={cliPending}
+                  aria-label="Delete transcript"
+                  title="Delete this transcript from ~/.claude/projects — no undo, and it takes the conversation with it even if it is running elsewhere"
+                >
+                  <Trash2 size={16} />
+                </Button>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
