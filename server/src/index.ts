@@ -43,7 +43,9 @@ app.setErrorHandler((err: unknown, _req, reply) => {
     return reply.code(400).send({ error: "Validation failed", issues: err.issues });
   }
   const statusCode =
-    typeof err === "object" && err !== null && "statusCode" in err &&
+    typeof err === "object" &&
+    err !== null &&
+    "statusCode" in err &&
     typeof (err as { statusCode?: unknown }).statusCode === "number"
       ? (err as { statusCode: number }).statusCode
       : 500;
@@ -72,13 +74,17 @@ seedGlobalMemories();
 // resumed blind: it may already have edited files or commented on a ticket.
 const interruptedSteps = reconcileRunsOnBoot();
 if (interruptedSteps > 0) {
-  app.log.warn(`${interruptedSteps} workflow step(s) interrupted by a restart — resume from the UI`);
+  app.log.warn(
+    `${interruptedSteps} workflow step(s) interrupted by a restart — resume from the UI`,
+  );
 }
 // A worktree whose session is gone keeps its branch checked out, which makes that
 // branch impossible to switch to or delete until the worktree is dropped.
 const worktrees = reconcileWorktreesOnBoot();
 if (worktrees.removed.length > 0) {
-  app.log.info(`Removed ${worktrees.removed.length} orphaned worktree(s): ${worktrees.removed.join(", ")}`);
+  app.log.info(
+    `Removed ${worktrees.removed.length} orphaned worktree(s): ${worktrees.removed.join(", ")}`,
+  );
 }
 for (const path of worktrees.kept) {
   app.log.warn(`Orphaned worktree kept — it still holds work: ${path}`);
@@ -136,9 +142,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 try {
   await app.listen({ port: env.port, host: env.host });
-  const uiUrl = env.isProd
-    ? `http://${env.host}:${env.port}`
-    : `http://${env.host}:${env.webPort}`;
+  // The hosts alias is redirected from port 80, so it needs no port either way.
+  const uiUrl = env.stationHost
+    ? `http://${env.stationHost}`
+    : env.isProd
+      ? `http://${env.host}:${env.port}`
+      : `http://${env.host}:${env.webPort}`;
   console.log(`\n  claude-station ready\n  → ${uiUrl}/?t=${TOKEN}\n`);
   console.log(`  (token also in data/.token — API needs header x-cs-token)\n`);
 } catch (err) {

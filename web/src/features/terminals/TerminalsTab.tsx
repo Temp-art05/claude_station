@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
-import { Plus, RotateCw, X } from "lucide-react";
+import { Select } from "@/components/ui/select";
+import { Plus, RotateCw, X } from "@/components/ui/icons";
 import type { EnvSet, Project, TerminalKind } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
@@ -8,12 +9,7 @@ import { usePanelActive } from "@/components/KeepAlive";
 import { projectKey, useUiState } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "./TerminalPane";
-import {
-  useCreateTerminal,
-  useKillTerminal,
-  useRestartTerminal,
-  useTerminals,
-} from "./hooks";
+import { useCreateTerminal, useKillTerminal, useRestartTerminal, useTerminals } from "./hooks";
 
 interface Props {
   project: Project;
@@ -94,29 +90,30 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-edge px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {live.map((t) => (
             <button
               key={t.id}
               onClick={() => setActiveId(t.id)}
               className={cn(
-                "group flex shrink-0 items-center gap-2 rounded-md px-2.5 py-1.5 text-xs transition-colors cursor-pointer",
+                "state-layer m3-label-md group flex h-8 shrink-0 cursor-pointer items-center gap-2 rounded-pill px-3 font-semibold",
+                "transition-[background-color,color] duration-200 ease-emphasized",
                 activeId === t.id
-                  ? "bg-surface-3 text-ink"
-                  : "text-ink-muted hover:bg-surface-2 hover:text-ink",
+                  ? "bg-inverse-surface text-on-inverse-surface"
+                  : "text-ink-muted hover:text-ink",
               )}
             >
               <span
                 className={cn(
-                  "h-1.5 w-1.5 rounded-full",
+                  "size-1.5 rounded-full",
                   t.status === "running" ? "bg-ok" : "bg-ink-faint",
                 )}
               />
               {t.title}
               <X
-                size={12}
-                className="opacity-0 transition-opacity group-hover:opacity-60 hover:opacity-100"
+                size={16}
+                className="-mr-1 opacity-0 transition-opacity duration-150 group-hover:opacity-60 hover:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   kill.mutate(t.id);
@@ -124,32 +121,24 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
               />
             </button>
           ))}
-          {isLoading && <span className="text-xs text-ink-muted">Loading…</span>}
+          {isLoading && <span className="m3-body-sm text-ink-muted">Loading…</span>}
         </div>
 
-        <select
+        <Select
           value={pathId}
-          onChange={(e) => setPathId(e.target.value)}
-          className="h-7 rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-        >
-          {project.paths.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <select
+          onChange={setPathId}
+          aria-label="Repo"
+          options={project.paths.map((p) => ({ value: p.id, label: p.label }))}
+        />
+        <Select
           value={envSetId}
-          onChange={(e) => setEnvSetId(e.target.value)}
-          className="h-7 rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-        >
-          <option value="">No env set</option>
-          {envSets.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
+          onChange={setEnvSetId}
+          aria-label="Env set"
+          options={[
+            { value: "", label: "No env set" },
+            ...envSets.map((s) => ({ value: s.id, label: s.name })),
+          ]}
+        />
         <Button
           size="sm"
           onClick={() =>
@@ -160,7 +149,7 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
           }
           disabled={create.isPending || project.paths.length === 0}
         >
-          <Plus size={14} /> {kind === "claude" ? "Claude" : "Terminal"}
+          <Plus size={16} /> {kind === "claude" ? "Claude" : "Terminal"}
         </Button>
       </div>
 
@@ -169,16 +158,16 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             {kind === "claude" ? (
               <>
-                <p className="text-sm text-ink-muted">No Claude session open.</p>
-                <p className="text-xs text-ink-faint">
+                <p className="m3-title-md">No Claude session open.</p>
+                <p className="m3-body-sm text-ink-faint">
                   Pick a repo and hit <span className="text-ink-muted">+ Claude</span> — the{" "}
                   <code className="font-mono text-ink-muted">claude</code> CLI runs right here.
                 </p>
               </>
             ) : (
               <>
-                <p className="text-sm text-ink-muted">No terminal open.</p>
-                <p className="text-xs text-ink-faint">
+                <p className="m3-title-md">No terminal open.</p>
+                <p className="m3-body-sm text-ink-faint">
                   Open one and run <code className="font-mono text-ink-muted">claude</code> inside
                   it.
                 </p>
@@ -189,13 +178,17 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
         {active?.status === "orphaned" && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <Badge tone="err">orphaned</Badge>
-            <p className="max-w-sm text-xs text-ink-muted">
+            <p className="m3-body-sm max-w-sm text-ink-muted">
               {kind === "claude"
                 ? "This Claude session belonged to a previous server process. Restart resumes the last conversation in this directory via claude --continue."
                 : "This shell belonged to a previous server process, so its output is gone. Restart it to get a fresh shell in the same directory."}
             </p>
-            <Button size="sm" onClick={() => restart.mutate(active.id)} disabled={restart.isPending}>
-              <RotateCw size={14} /> {kind === "claude" ? "Restart Claude" : "Restart shell"}
+            <Button
+              size="sm"
+              onClick={() => restart.mutate(active.id)}
+              disabled={restart.isPending}
+            >
+              <RotateCw size={16} /> {kind === "claude" ? "Restart Claude" : "Restart shell"}
             </Button>
           </div>
         )}
@@ -210,7 +203,7 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
       </div>
 
       {active && (
-        <div className="border-t border-edge px-4 py-1.5 font-mono text-[11px] text-ink-faint">
+        <div className="m3-label-sm border-t border-hairline px-4 py-2.5 font-mono text-ink-faint">
           {active.cwd}
           {active.envSetId && <span className="ml-2 text-accent">env applied</span>}
         </div>

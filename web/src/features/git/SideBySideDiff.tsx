@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 interface Cell {
@@ -103,11 +103,7 @@ function Half({ cell, tone }: { cell: Cell | null; tone: "del" | "add" }) {
     <div
       className={cn(
         "flex min-w-0 flex-1",
-        cell
-          ? tone === "del"
-            ? "bg-err/10"
-            : "bg-ok/10"
-          : "bg-white/3",
+        cell ? (tone === "del" ? "bg-err/10" : "bg-ok/10") : "bg-white/3",
       )}
     >
       <span className="w-11 shrink-0 border-r border-hairline px-1.5 text-right text-ink-faint select-none">
@@ -133,22 +129,22 @@ export function SideBySideDiff({
   }
 
   return (
-    <div className="h-full overflow-auto bg-base font-mono text-[11.5px] leading-relaxed">
+    <div className="h-full overflow-auto bg-base font-mono m3-label-md leading-relaxed">
       {rows.map((row, i) => {
         if (row.kind === "hunk") {
           return (
             <div
               key={i}
-              className="group flex items-center gap-2 border-y border-hairline bg-surface-2 px-3 py-0.5 text-[10.5px] text-accent"
+              className="group flex items-center gap-2 border-y border-hairline bg-surface-2 px-3 py-0.5 m3-label-sm text-accent"
             >
               <span className="min-w-0 flex-1 truncate">{row.label}</span>
               {onRevertHunk && (
                 <button
                   onClick={() => onRevertHunk(row.index)}
                   title="Rollback this hunk — revert just these lines in the working tree"
-                  className="inline-flex cursor-pointer items-center gap-1 rounded-pill border border-hairline px-1.5 py-0.5 text-[10px] text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 hover:border-err/40 hover:text-err"
+                  className="inline-flex cursor-pointer items-center gap-1 rounded-pill border border-hairline px-1.5 py-0.5 m3-label-sm text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 hover:border-err/40 hover:text-err"
                 >
-                  <RotateCcw size={9} /> Rollback
+                  <RotateCcw size={16} /> Rollback
                 </button>
               )}
             </div>

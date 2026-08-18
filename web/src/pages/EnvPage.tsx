@@ -1,10 +1,12 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileUp, Plus, Trash2 } from "lucide-react";
+import { Select } from "@/components/ui/select";
+import { FileUp, KeyRound, Plus, Trash2 } from "@/components/ui/icons";
 import type { EnvSet, EnvSetInput, Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -49,7 +51,9 @@ export function EnvPage() {
 
   const save = useMutation({
     mutationFn: ({ id, input }: { id?: string; input: EnvSetInput }) =>
-      id ? api.patch<EnvSet>(`/api/env-sets/${id}`, input) : api.post<EnvSet>("/api/env-sets", input),
+      id
+        ? api.patch<EnvSet>(`/api/env-sets/${id}`, input)
+        : api.post<EnvSet>("/api/env-sets", input),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["env-sets"] }),
   });
   const remove = useMutation({
@@ -134,18 +138,16 @@ export function EnvPage() {
         </div>
         <div className="w-56">
           <Label>Scope</Label>
-          <select
+          <Select
+            size="md"
+            className="w-full"
             value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className="h-9 w-full rounded-md border border-edge bg-surface px-2 text-sm text-ink"
-          >
-            <option value="">Global (all projects)</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+            onChange={setProjectId}
+            options={[
+              { value: "", label: "Global (all projects)" },
+              ...projects.map((p) => ({ value: p.id, label: p.name })),
+            ]}
+          />
         </div>
       </div>
 
@@ -207,14 +209,14 @@ export function EnvPage() {
               onClick={() => envFileRef.current?.click()}
               title="Parse a .env file — existing keys get updated, new keys appended"
             >
-              <FileUp size={13} /> Import .env
+              <FileUp size={16} /> Import .env
             </Button>
             <Button
               size="sm"
               variant="ghost"
               onClick={() => setVars((v) => [...v, { key: "", value: "", isSecret: false }])}
             >
-              <Plus size={13} /> Add
+              <Plus size={16} /> Add
             </Button>
           </div>
           <input
@@ -235,7 +237,9 @@ export function EnvPage() {
                 className="w-56 font-mono text-xs"
                 value={v.key}
                 onChange={(e) =>
-                  setVars((prev) => prev.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))
+                  setVars((prev) =>
+                    prev.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)),
+                  )
                 }
                 placeholder="API_BASE_URL"
               />
@@ -243,7 +247,9 @@ export function EnvPage() {
                 className="font-mono text-xs"
                 value={v.value}
                 onChange={(e) =>
-                  setVars((prev) => prev.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
+                  setVars((prev) =>
+                    prev.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)),
+                  )
                 }
                 placeholder="value"
               />
@@ -266,7 +272,7 @@ export function EnvPage() {
                 onClick={() => setVars((prev) => prev.filter((_, j) => j !== i))}
                 aria-label="Remove var"
               >
-                <Trash2 size={13} />
+                <Trash2 size={16} />
               </Button>
             </div>
           ))}
@@ -286,18 +292,16 @@ export function EnvPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-6">
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold">Environment sets</h1>
-          <p className="text-sm text-ink-muted">
-            Injected into terminals, build commands, and Claude sessions. Stored in plain text in
-            the local DB.
-          </p>
-        </div>
-        <Button variant="primary" onClick={startNew}>
-          <Plus size={16} /> New set
-        </Button>
-      </div>
+      <PageHeader
+        title="Environment sets"
+        icon={KeyRound}
+        supporting="Injected into terminals, build commands, and Claude sessions. Stored in plain text in the local DB."
+        actions={
+          <Button variant="primary" onClick={startNew}>
+            <Plus size={18} /> New set
+          </Button>
+        }
+      />
 
       <div className="space-y-2">
         {editing === "new" && editorCard}
@@ -308,7 +312,7 @@ export function EnvPage() {
             <Card key={set.id} className="flex items-center gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[15px] font-bold text-ok">{set.name}</span>
+                  <span className="m3-title-sm font-bold text-ok">{set.name}</span>
                   <Badge tone={set.projectId ? "default" : "accent"}>
                     {set.projectId
                       ? (projects.find((p) => p.id === set.projectId)?.name ?? "project")
@@ -321,10 +325,8 @@ export function EnvPage() {
                   ))}
                   <Badge>{set.vars.length} vars</Badge>
                 </div>
-                {set.description && (
-                  <p className="mt-1 text-[13px] text-white">{set.description}</p>
-                )}
-                <div className="mt-1.5 line-clamp-2 font-mono text-[12px] leading-5 text-white">
+                {set.description && <p className="mt-1 m3-body-sm text-white">{set.description}</p>}
+                <div className="mt-1.5 line-clamp-2 font-mono m3-label-md leading-5 text-white">
                   {set.vars.map((v) => (
                     <span key={v.id} className="mr-3">
                       {v.key}={v.isSecret ? "••••••" : v.value || "″″"}
@@ -341,7 +343,7 @@ export function EnvPage() {
                 onClick={() => remove.mutate(set.id)}
                 aria-label="Delete"
               >
-                <Trash2 size={14} />
+                <Trash2 size={16} />
               </Button>
             </Card>
           ),

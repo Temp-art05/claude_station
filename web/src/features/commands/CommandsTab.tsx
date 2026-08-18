@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Hammer, Play, Square, Trash2, Plus, X } from "lucide-react";
+import { useConfirm } from "@/components/ui/confirm";
+import { Select } from "@/components/ui/select";
+import { Hammer, Play, Square, Trash2, Plus, X } from "@/components/ui/icons";
 import {
   COMMAND_PRESETS,
   commandKindSchema,
@@ -34,6 +36,7 @@ interface Props {
 }
 
 export function CommandsTab({ project, envSets }: Props) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { data: runs = [] } = useCommandRuns(project.id);
   const run = useRunCommand(project.id);
@@ -59,38 +62,33 @@ export function CommandsTab({ project, envSets }: Props) {
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="w-[420px] shrink-0 overflow-y-auto border-r border-edge p-4">
-        <h2 className="mb-3 text-sm font-medium">Commands</h2>
+      <div className="w-[420px] shrink-0 overflow-y-auto border-r border-hairline p-5">
+        <h2 className="m3-title-sm mb-3">Commands</h2>
 
         {project.paths.map((path) => (
           <div key={path.id} className="mb-5">
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <p className="truncate text-xs font-medium">{path.label}</p>
-                <p className="truncate font-mono text-[10.5px] text-ink-faint">{path.path}</p>
+                <p className="truncate font-mono m3-label-sm text-ink-faint">{path.path}</p>
               </div>
-              <select
+              <Select
                 value={path.envSetId ?? ""}
-                onChange={(e) =>
-                  setPathEnv.mutate({ pathId: path.id, envSetId: e.target.value || null })
-                }
+                onChange={(v) => setPathEnv.mutate({ pathId: path.id, envSetId: v || null })}
                 title="Default env set for this repo's commands (also used when Claude runs them)"
-                className="h-7 max-w-36 shrink-0 rounded-md border border-edge bg-surface px-2 text-[11px] text-ink"
-              >
-                <option value="">no env</option>
-                {envSets.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+                className="max-w-36 shrink-0"
+                options={[
+                  { value: "", label: "no env" },
+                  ...envSets.map((s) => ({ value: s.id, label: s.name })),
+                ]}
+              />
               <Button size="sm" variant="ghost" onClick={() => setAddFor(path.id)}>
-                <Plus size={13} />
+                <Plus size={16} />
               </Button>
             </div>
 
             {path.commands.length === 0 && (
-              <p className="rounded-md border border-dashed border-edge px-3 py-2.5 text-[11px] text-ink-faint">
+              <p className="rounded-lg border border-dashed border-outline/60 px-3.5 py-3 m3-label-sm text-ink-faint">
                 No commands. Add one (xcodebuild, ./gradlew, npm run build…) so both you and Claude
                 can run it.
               </p>
@@ -104,10 +102,7 @@ export function CommandsTab({ project, envSets }: Props) {
                   command={cmd}
                   pending={run.isPending}
                   onRun={() =>
-                    run.mutate(
-                      { commandId: cmd.id },
-                      { onSuccess: (r) => setSelectedRun(r.runId) },
-                    )
+                    run.mutate({ commandId: cmd.id }, { onSuccess: (r) => setSelectedRun(r.runId) })
                   }
                 />
               ))}
@@ -115,35 +110,33 @@ export function CommandsTab({ project, envSets }: Props) {
           </div>
         ))}
 
-        <h2 className="mb-2 mt-6 text-sm font-medium">Recent runs</h2>
+        <h2 className="m3-title-sm mt-6 mb-2">Recent runs</h2>
         <div className="space-y-1">
-          {runs.length === 0 && <p className="text-[11px] text-ink-faint">Nothing run yet.</p>}
+          {runs.length === 0 && <p className="m3-label-sm text-ink-faint">Nothing run yet.</p>}
           {runs.map((r) => (
             <button
               key={r.id}
               onClick={() => setSelectedRun(r.id)}
               className={cn(
                 "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors cursor-pointer",
-                activeRun === r.id ? "bg-surface-3" : "hover:bg-surface-2",
+                activeRun === r.id
+                  ? "bg-secondary-container text-on-secondary-container"
+                  : "hover:bg-white/6",
               )}
             >
               <span
                 className={cn(
                   "h-1.5 w-1.5 shrink-0 rounded-full",
-                  r.active
-                    ? "bg-warn animate-status"
-                    : r.exitCode === 0
-                      ? "bg-ok"
-                      : "bg-err",
+                  r.active ? "bg-warn animate-status" : r.exitCode === 0 ? "bg-ok" : "bg-err",
                 )}
               />
               <span className="min-w-0 flex-1 truncate">{r.name}</span>
-              <span className="shrink-0 text-[10px] text-ink-faint">
+              <span className="shrink-0 m3-label-sm text-ink-faint">
                 {r.origin === "claude" ? "claude" : ""}
               </span>
               {r.active && (
                 <Square
-                  size={11}
+                  size={16}
                   className="shrink-0 text-err"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -152,16 +145,22 @@ export function CommandsTab({ project, envSets }: Props) {
                 />
               )}
               <X
-                size={12}
+                size={16}
                 aria-label="Delete run"
                 className="shrink-0 text-ink-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-err"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (r.active && !confirm(`"${r.name}" is still running — stop it and delete the run?`)) {
-                    return;
-                  }
-                  if (selectedRun === r.id) setSelectedRun(null);
-                  removeRun.mutate(r.id);
+                  const drop = () => {
+                    if (selectedRun === r.id) setSelectedRun(null);
+                    removeRun.mutate(r.id);
+                  };
+                  if (!r.active) return drop();
+                  void confirm({
+                    title: `"${r.name}" is still running`,
+                    body: "Stop it and delete the run?",
+                    confirmLabel: "Stop and delete",
+                    tone: "danger",
+                  }).then((ok) => ok && drop());
                 }}
               />
             </button>
@@ -204,10 +203,10 @@ function CommandRow({
           <span className="truncate text-xs font-medium">{command.name}</span>
           <Badge>{command.kind}</Badge>
         </div>
-        <p className="truncate font-mono text-[10.5px] text-ink-faint">{command.command}</p>
+        <p className="truncate font-mono m3-label-sm text-ink-faint">{command.command}</p>
       </div>
       <Button size="icon" variant="ghost" onClick={onRun} disabled={pending} aria-label="Run">
-        <Play size={13} />
+        <Play size={16} />
       </Button>
       <Button
         size="icon"
@@ -216,7 +215,7 @@ function CommandRow({
         onClick={() => del.mutate(command.id)}
         aria-label="Delete command"
       >
-        <Trash2 size={13} />
+        <Trash2 size={16} />
       </Button>
     </Card>
   );
@@ -279,19 +278,13 @@ function AddCommandDialog({ pathId, onClose }: { pathId: string | null; onClose:
         <div className="flex gap-2">
           <div className="w-32">
             <Label>Kind</Label>
-            <select
+            <Select
+              size="md"
+              className="w-full"
               value={draft.kind}
-              onChange={(e) =>
-                setDraft({ ...draft, kind: e.target.value as PathCommandInput["kind"] })
-              }
-              className="h-9 w-full rounded-md border border-edge bg-surface px-2 text-sm text-ink"
-            >
-              {KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setDraft({ ...draft, kind: v as PathCommandInput["kind"] })}
+              options={KINDS.map((k) => ({ value: k, label: k }))}
+            />
           </div>
           <div className="w-32">
             <Label>Timeout (s)</Label>

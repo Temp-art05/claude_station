@@ -10,7 +10,8 @@ import {
   Sparkles,
   Trash2,
   Upload,
-} from "lucide-react";
+} from "@/components/ui/icons";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { api } from "@/lib/api";
@@ -22,7 +23,7 @@ import {
   type PickedFile,
 } from "@/lib/folder-upload";
 import { fileUrl, uploadFile } from "@/lib/upload";
-import { cn } from "@/lib/utils";
+import { FilterChip } from "@/components/ui/chip";
 import { KNOWLEDGE_FOLDER_SUGGESTIONS } from "@claude-station/shared";
 
 export interface KnowledgeRow {
@@ -158,7 +159,9 @@ export function KnowledgePanel({ projectId }: Props) {
   };
 
   const visible = projectId ? rows : rows.filter((r) => !folder || r.folder === folder);
-  const folderOptions = [...new Set([...folders.map((f) => f.folder), ...KNOWLEDGE_FOLDER_SUGGESTIONS])]
+  const folderOptions = [
+    ...new Set([...folders.map((f) => f.folder), ...KNOWLEDGE_FOLDER_SUGGESTIONS]),
+  ]
     .filter(Boolean)
     .sort();
 
@@ -166,30 +169,17 @@ export function KnowledgePanel({ projectId }: Props) {
     <div className="space-y-3">
       {!projectId && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            onClick={() => setFolder("")}
-            className={cn(
-              "cursor-pointer rounded-pill border px-2.5 py-1 text-xs transition-colors",
-              folder === ""
-                ? "border-accent/40 bg-accent/12 text-accent"
-                : "border-hairline text-ink-muted hover:text-ink",
-            )}
-          >
+          <FilterChip onClick={() => setFolder("")} selected={folder === ""}>
             all · {rows.length}
-          </button>
+          </FilterChip>
           {folders.map((f) => (
-            <button
+            <FilterChip
               key={f.folder}
               onClick={() => setFolder(f.folder)}
-              className={cn(
-                "cursor-pointer rounded-pill border px-2.5 py-1 text-xs transition-colors",
-                folder === f.folder
-                  ? "border-accent/40 bg-accent/12 text-accent"
-                  : "border-hairline text-ink-muted hover:text-ink",
-              )}
+              selected={folder === f.folder}
             >
               {f.folder || "unfiled"} · {f.count}
-            </button>
+            </FilterChip>
           ))}
         </div>
       )}
@@ -213,35 +203,33 @@ export function KnowledgePanel({ projectId }: Props) {
             for (const file of looseFiles) upload.mutate({ file });
           });
         }}
-        className={`rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
-          dragging ? "border-accent bg-accent/5" : "border-edge"
+        className={`rounded-xl border border-dashed px-4 py-8 text-center transition-[background-color,border-color] duration-200 ease-emphasized ${
+          dragging ? "border-primary bg-primary/8" : "border-outline/60"
         }`}
       >
-        <Upload size={20} className="mx-auto mb-2 text-ink-faint" />
-        <p className="text-sm text-ink-muted">
+        <div className="mx-auto mb-3 grid size-12 place-items-center rounded-lg bg-secondary-container text-on-secondary-container">
+          <Upload size={24} fill={1} />
+        </div>
+        <p className="m3-body-md text-ink-muted">
           Drop docs, spreadsheets or whole folders here — Claude gets them as read-only context.
         </p>
-        <p className="mb-3 text-[11px] text-ink-faint">
+        <p className="mb-3 m3-label-sm text-ink-faint">
           .xlsx is also flattened to CSV per sheet so Claude can read it reliably.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           {!projectId && (
-            <select
+            <Select
               value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              className="h-7 px-2 text-xs"
+              onChange={setFolder}
               title="Folder for the next import"
-            >
-              <option value="">unfiled</option>
-              {folderOptions.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "", label: "unfiled" },
+                ...folderOptions.map((f) => ({ value: f, label: f })),
+              ]}
+            />
           )}
           <Button size="sm" onClick={() => fileRef.current?.click()} disabled={upload.isPending}>
-            <Upload size={13} /> {upload.isPending ? "Uploading…" : "Choose file"}
+            <Upload size={16} /> {upload.isPending ? "Uploading…" : "Choose file"}
           </Button>
           <Button
             size="sm"
@@ -249,11 +237,11 @@ export function KnowledgePanel({ projectId }: Props) {
             onClick={() => dirRef.current?.click()}
             disabled={uploadFolder.isPending}
           >
-            <FolderUp size={13} /> {uploadFolder.isPending ? "Importing…" : "Import folder"}
+            <FolderUp size={16} /> {uploadFolder.isPending ? "Importing…" : "Import folder"}
           </Button>
           {!projectId && (
             <Button size="sm" variant="ghost" onClick={() => skillRef.current?.click()}>
-              <Sparkles size={13} /> Import skill (SKILL.md)
+              <Sparkles size={16} /> Import skill (SKILL.md)
             </Button>
           )}
         </div>
@@ -294,20 +282,22 @@ export function KnowledgePanel({ projectId }: Props) {
         />
       </div>
 
-      {error && <p className="text-xs text-err">{error}</p>}
+      {error && <p className="m3-body-sm text-err">{error}</p>}
 
       {visible.length === 0 && (
-        <Card className="py-8 text-center text-sm text-ink-muted">Nothing imported yet.</Card>
+        <Card className="m3-body-md py-10 text-center text-ink-muted">Nothing imported yet.</Card>
       )}
 
       {visible.map((row) => {
         const Icon = ICONS[row.kind];
         return (
-          <Card key={row.id} className="flex items-start gap-3 p-3">
-            <Icon size={15} className="mt-0.5 shrink-0 text-accent" />
+          <Card key={row.id} className="flex items-start gap-3 p-3.5">
+            <div className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-md bg-primary-container/45 text-on-primary-container">
+              <Icon size={18} fill={1} />
+            </div>
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="truncate text-sm font-medium">{row.originalFilename}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="m3-title-sm truncate">{row.originalFilename}</span>
                 <Badge>{row.kind}</Badge>
                 {row.linkState && (
                   <Badge tone={row.linkState === "linked" ? "ok" : "err"}>{row.linkState}</Badge>
@@ -315,18 +305,20 @@ export function KnowledgePanel({ projectId }: Props) {
                 {row.attached && <Badge tone="accent">library</Badge>}
                 {row.folder && <Badge>{row.folder}</Badge>}
                 {!row.exists && <Badge tone="err">missing on disk</Badge>}
-                <span className="text-[10.5px] text-ink-faint">{humanSize(row.sizeBytes)}</span>
+                <span className="m3-label-sm text-ink-faint">{humanSize(row.sizeBytes)}</span>
               </div>
               {row.description && (
-                <p className="mt-0.5 text-xs text-ink-muted">{row.description}</p>
+                <p className="m3-body-sm mt-1 text-ink-muted">{row.description}</p>
               )}
               {sheets?.id === row.id && (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {sheets.names.map((name) => (
                     <a
                       key={name}
-                      href={fileUrl(`/api/knowledge/${row.id}/file?sheet=${encodeURIComponent(name)}`)}
-                      className="rounded-md bg-white/8 px-1.5 py-0.5 font-mono text-[10.5px] text-ink-muted hover:text-ink"
+                      href={fileUrl(
+                        `/api/knowledge/${row.id}/file?sheet=${encodeURIComponent(name)}`,
+                      )}
+                      className="m3-label-sm rounded-pill bg-white/8 px-2.5 py-1 font-mono text-ink-muted transition-colors duration-150 hover:text-ink"
                     >
                       {name}.csv
                     </a>
@@ -340,31 +332,25 @@ export function KnowledgePanel({ projectId }: Props) {
               </Button>
             )}
             {!projectId && (
-              <select
+              <Select
                 value={row.folder}
-                onChange={(e) => move.mutate({ id: row.id, to: e.target.value })}
-                className="h-8 px-2 text-[11px]"
+                onChange={(v) => move.mutate({ id: row.id, to: v })}
                 title="Move to folder"
-              >
-                <option value="">unfiled</option>
-                {folderOptions.map((f) => (
-                  <option key={f} value={f}>
-                    {f}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: "", label: "unfiled" },
+                  ...folderOptions.map((f) => ({ value: f, label: f })),
+                ]}
+              />
             )}
             <a
               href={fileUrl(`/api/knowledge/${row.id}/file`)}
               download
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink"
+              className="state-layer inline-flex size-9 items-center justify-center rounded-pill text-ink-muted transition-colors duration-200 ease-emphasized hover:text-ink"
               title={
-                row.kind === "folder" || row.kind === "skill"
-                  ? "Download as .zip"
-                  : "Download"
+                row.kind === "folder" || row.kind === "skill" ? "Download as .zip" : "Download"
               }
             >
-              <Download size={14} />
+              <Download size={16} />
             </a>
             {row.attached ? (
               <Button
@@ -374,7 +360,7 @@ export function KnowledgePanel({ projectId }: Props) {
                 title="Detach from this project (keeps the library copy)"
                 aria-label="Detach"
               >
-                <FolderInput size={14} />
+                <FolderInput size={16} />
               </Button>
             ) : (
               <Button
@@ -383,7 +369,7 @@ export function KnowledgePanel({ projectId }: Props) {
                 onClick={() => remove.mutate(row.id)}
                 aria-label="Delete"
               >
-                <Trash2 size={14} />
+                <Trash2 size={16} />
               </Button>
             )}
           </Card>

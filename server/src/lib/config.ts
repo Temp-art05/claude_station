@@ -12,16 +12,29 @@ export const env = {
   port: Number(process.env.PORT ?? 3789),
   webPort: Number(process.env.WEB_PORT ?? 5173),
   host: "127.0.0.1" as const, // local-only, never expose
+  // Optional pretty hostname for the UI — a /etc/hosts alias for 127.0.0.1 set
+  // up by scripts/setup-host.sh. Purely cosmetic: the server still binds to the
+  // loopback address above, so this exposes nothing new to the network.
+  stationHost: process.env.STATION_HOST?.trim() || null,
   isProd: process.env.NODE_ENV === "production",
 };
 
 /** Origins allowed to talk to the API — derived from the ports, not hardcoded. */
-export const ALLOWED_ORIGINS: ReadonlySet<string> = new Set(
-  [env.port, env.webPort].flatMap((port) => [
+export const ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
+  ...[env.port, env.webPort].flatMap((port) => [
     `http://localhost:${port}`,
     `http://127.0.0.1:${port}`,
   ]),
-);
+  // Reached through the port-80 redirect the browser sends no port at all;
+  // the explicit ones cover hitting a dev/prod port directly under the alias.
+  ...(env.stationHost
+    ? [
+        `http://${env.stationHost}`,
+        `http://${env.stationHost}:${env.port}`,
+        `http://${env.stationHost}:${env.webPort}`,
+      ]
+    : []),
+]);
 
 let cache: AppSettings | null = null;
 

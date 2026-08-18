@@ -12,7 +12,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import { branchAncestors, buildBranchTree, type BranchNode } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -112,7 +112,12 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
       // tells you to rerun with -D. Worth keeping as a speed bump, but until now
       // it was a dead end: nothing in the UI could pass force, so a backup branch
       // — which by definition holds unmerged commits — could never be cleaned up.
-      if (vars.op === "delete-branch" && vars.branch && !vars.force && /not fully merged/i.test(message)) {
+      if (
+        vars.op === "delete-branch" &&
+        vars.branch &&
+        !vars.force &&
+        /not fully merged/i.test(message)
+      ) {
         setUnmerged(vars.branch);
         return;
       }
@@ -170,7 +175,7 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
     <button
       onClick={onClick}
       disabled={run.isPending}
-      className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-ink-muted hover:bg-surface-2 hover:text-ink"
+      className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-ink-muted hover:bg-white/6 hover:text-ink"
     >
       {icon}
       {label}
@@ -190,7 +195,7 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
       style={{ paddingLeft: 8 + depth * 12 }}
       className={cn(
         "group flex items-center gap-1 rounded-md pr-2 py-0.5",
-        isCurrent ? "bg-accent/10 text-accent" : "hover:bg-surface-2",
+        isCurrent ? "bg-accent/10 text-accent" : "hover:bg-white/6",
       )}
     >
       <button
@@ -198,7 +203,7 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
         disabled={isCurrent || run.isPending}
         title={isCurrent ? `Current branch — ${name}` : `Checkout ${name}`}
         className={cn(
-          "min-w-0 flex-1 truncate py-0.5 text-left font-mono text-[11px]",
+          "min-w-0 flex-1 truncate py-0.5 text-left font-mono m3-label-sm",
           !isCurrent && "cursor-pointer",
         )}
       >
@@ -211,14 +216,14 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
             title={`Merge ${name} into ${current}`}
             className="cursor-pointer rounded p-0.5 text-ink-faint hover:text-ink"
           >
-            <GitMerge size={11} />
+            <GitMerge size={16} />
           </button>
           <button
             onClick={() => doOp("rebase", name)}
             title={`Rebase ${current} onto ${name}`}
             className="cursor-pointer rounded p-0.5 text-ink-faint hover:text-ink"
           >
-            <ListRestart size={11} />
+            <ListRestart size={16} />
           </button>
           {isLocal && (
             <button
@@ -231,7 +236,7 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
               title={`Delete ${name}`}
               className="cursor-pointer rounded p-0.5 text-ink-faint hover:text-err"
             >
-              <Trash2 size={11} />
+              <Trash2 size={16} />
             </button>
           )}
         </span>
@@ -250,16 +255,16 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
           <button
             onClick={() => toggleFolder(node.path)}
             style={{ paddingLeft: 8 + depth * 12 }}
-            className="flex w-full cursor-pointer items-center gap-1 rounded-md py-0.5 pr-2 text-left text-ink-muted hover:bg-surface-2 hover:text-ink"
+            className="flex w-full cursor-pointer items-center gap-1 rounded-md py-0.5 pr-2 text-left text-ink-muted hover:bg-white/6 hover:text-ink"
             title={`${expanded ? "Collapse" : "Expand"} ${node.path}`}
           >
             <ChevronRight
-              size={11}
+              size={16}
               className={cn("shrink-0 transition-transform", expanded && "rotate-90")}
             />
-            <Folder size={11} className="shrink-0 text-ink-faint" />
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{node.label}</span>
-            <span className="shrink-0 text-[10px] text-ink-faint">{node.count}</span>
+            <Folder size={16} className="shrink-0 text-ink-faint" />
+            <span className="min-w-0 flex-1 truncate font-mono m3-label-sm">{node.label}</span>
+            <span className="shrink-0 m3-label-sm text-ink-faint">{node.count}</span>
           </button>
           {expanded && nodeRows(node.children, isLocal, depth + 1)}
         </div>
@@ -270,18 +275,18 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
     <div ref={boxRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full cursor-pointer items-center gap-1.5 rounded-md border border-hairline px-2 py-1 text-[11px] text-ink-muted hover:border-hairline-strong hover:text-ink"
+        className="flex w-full cursor-pointer items-center gap-1.5 rounded-md border border-hairline px-2 py-1 m3-label-sm text-ink-muted hover:border-hairline-strong hover:text-ink"
         title="Branch operations"
       >
-        <GitBranch size={11} className="text-accent" />
+        <GitBranch size={16} className="text-accent" />
         <span className="min-w-0 flex-1 truncate text-left font-mono">
           {run.isPending ? "working…" : current}
         </span>
-        <ChevronDown size={11} />
+        <ChevronDown size={16} />
       </button>
 
       {data?.inProgress && (
-        <div className="mt-1 flex items-center justify-between rounded-md border border-warn/40 bg-warn/10 px-2 py-1 text-[10.5px] text-warn">
+        <div className="mt-1 flex items-center justify-between rounded-md border border-warn/40 bg-warn/10 px-2 py-1 m3-label-sm text-warn">
           {data.inProgress} in progress — resolve in a terminal
           <button
             onClick={() => doOp("abort")}
@@ -309,13 +314,13 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
               else setOpen(false);
             }}
             placeholder="Search branches…"
-            className="mb-1.5 h-7 w-full rounded-md border border-edge bg-surface px-2 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+            className="mb-1.5 m3-body-sm h-8 w-full rounded-md px-2.5 border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none placeholder:text-ink-faint focus:border-accent focus:outline-none"
           />
           <div className="mb-1.5 border-b border-hairline pb-1.5">
-            {topAction(<RefreshCw size={11} />, "Fetch all", () => doOp("fetch"))}
-            {topAction(<ArrowDownToLine size={11} />, "Pull", () => doOp("pull"))}
-            {topAction(<ArrowDownToLine size={11} />, "Pull --rebase", () => doOp("pull-rebase"))}
-            {topAction(<ArrowUpFromLine size={11} />, "Push", () => doOp("push"))}
+            {topAction(<RefreshCw size={16} />, "Fetch all", () => doOp("fetch"))}
+            {topAction(<ArrowDownToLine size={16} />, "Pull", () => doOp("pull"))}
+            {topAction(<ArrowDownToLine size={16} />, "Pull --rebase", () => doOp("pull-rebase"))}
+            {topAction(<ArrowUpFromLine size={16} />, "Push", () => doOp("push"))}
             {creating ? (
               <form
                 onSubmit={(e) => {
@@ -334,34 +339,32 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="new-branch-name"
-                  className="h-6 min-w-0 flex-1 rounded-md border border-edge bg-surface px-1.5 font-mono text-[11px] text-ink focus:border-accent focus:outline-none"
+                  className="m3-label-md h-7 min-w-0 flex-1 rounded-md px-2 font-mono border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none"
                 />
-                <button type="submit" className="cursor-pointer text-[11px] text-accent">
+                <button type="submit" className="cursor-pointer m3-label-sm text-accent">
                   create
                 </button>
               </form>
             ) : (
-              topAction(<Plus size={11} />, `New branch from ${current}…`, () =>
-                setCreating(true),
-              )
+              topAction(<Plus size={16} />, `New branch from ${current}…`, () => setCreating(true))
             )}
           </div>
 
           <div className="max-h-64 overflow-y-auto">
             {localNames.length > 0 && (
-              <p className="px-2 py-0.5 text-[10px] font-bold tracking-wide text-ink-faint uppercase">
+              <p className="px-2 py-0.5 m3-label-sm font-bold tracking-wide text-ink-faint uppercase">
                 Local
               </p>
             )}
             {nodeRows(localTree, true)}
             {remoteNames.length > 0 && (
-              <p className="px-2 py-0.5 pt-1.5 text-[10px] font-bold tracking-wide text-ink-faint uppercase">
+              <p className="px-2 py-0.5 pt-1.5 m3-label-sm font-bold tracking-wide text-ink-faint uppercase">
                 Remote
               </p>
             )}
             {nodeRows(remoteTree, false)}
             {localNames.length === 0 && remoteNames.length === 0 && (
-              <p className="px-2 py-1 text-[11px] text-ink-faint">No branch matches “{filter}”</p>
+              <p className="px-2 py-1 m3-label-sm text-ink-faint">No branch matches “{filter}”</p>
             )}
           </div>
         </div>
@@ -379,7 +382,7 @@ export function BranchMenu({ projectId, pathId, onChanged, onNotice }: Props) {
               This branch is checked out in a worktree Claude Station made for a session, so git
               won't let you switch to it or delete it:
             </p>
-            <p className="rounded-md border border-hairline bg-white/4 px-2 py-1.5 font-mono text-[11px] break-all text-ink-muted">
+            <p className="rounded-md border border-hairline bg-white/4 px-2 py-1.5 font-mono m3-label-sm break-all text-ink-muted">
               {blocking.worktreePath}
             </p>
             {blocking.holdsWork ? (

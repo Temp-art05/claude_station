@@ -10,7 +10,9 @@ import {
   GitPullRequest,
   Users,
   X,
-} from "lucide-react";
+} from "@/components/ui/icons";
+import { useConfirm } from "@/components/ui/confirm";
+import { Select } from "@/components/ui/select";
 import { Badge, Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
@@ -116,6 +118,7 @@ export function PrDetail({
   number: number;
   onBack: () => void;
 }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const base = `/api/github/${owner}/${name}/pulls/${number}`;
   // Its own param, so a link can point at a PR's Files tab and Back still works.
@@ -180,7 +183,7 @@ export function PrDetail({
     return (
       <div>
         <BackButton onBack={onBack} />
-        <p className="text-xs text-err">{error instanceof Error ? error.message : "Failed"}</p>
+        <p className="m3-body-sm text-err">{error instanceof Error ? error.message : "Failed"}</p>
       </div>
     );
   }
@@ -188,7 +191,7 @@ export function PrDetail({
     return (
       <div>
         <BackButton onBack={onBack} />
-        <p className="text-sm text-ink-muted">Loading…</p>
+        <p className="m3-body-md text-ink-muted">Loading…</p>
       </div>
     );
   }
@@ -223,25 +226,25 @@ export function PrDetail({
       <BackButton onBack={onBack} />
 
       <div className="mb-1 flex items-start gap-2">
-        <h2 className="min-w-0 flex-1 text-lg leading-snug font-semibold text-ink">
+        <h2 className="m3-headline-sm min-w-0 flex-1 leading-snug text-ink">
           {pr.title} <span className="font-normal text-ink-muted">#{pr.number}</span>
         </h2>
         <a
           href={pr.url}
           target="_blank"
           rel="noreferrer"
-          className="mt-1 text-ink-faint hover:text-ink"
+          className="mt-1 text-ink-faint transition-colors duration-150 hover:text-ink"
         >
-          <ExternalLink size={14} />
+          <ExternalLink size={16} />
         </a>
       </div>
 
       <div className="mb-3 flex items-start gap-3">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-[12.5px] text-ink-muted">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 m3-label-md text-ink-muted">
           <span
             className={`flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${badge.cls}`}
           >
-            {pr.state === "MERGED" ? <GitMerge size={11} /> : <GitPullRequest size={11} />}
+            {pr.state === "MERGED" ? <GitMerge size={16} /> : <GitPullRequest size={16} />}
             {badge.label}
           </span>
           <span>
@@ -272,15 +275,15 @@ export function PrDetail({
           {pr.checks.map((c) => (
             <span
               key={c.name}
-              className="flex items-center gap-0.5 text-[11.5px] text-ink-muted"
+              className="flex items-center gap-0.5 m3-label-md text-ink-muted"
               title={c.name}
             >
               {["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.state) ? (
-                <Check size={10} className="text-ok" />
+                <Check size={16} className="text-ok" />
               ) : ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"].includes(c.state) ? (
-                <X size={10} className="text-err" />
+                <X size={16} className="text-err" />
               ) : (
-                <span className="inline-block h-2 w-2 rounded-full bg-warn" />
+                <span className="inline-block size-2 rounded-full bg-warn" />
               )}
               {c.name}
             </span>
@@ -292,7 +295,7 @@ export function PrDetail({
         <div className="flex shrink-0 flex-col items-end gap-2">
           <div className="flex items-center gap-2">
             {assign.isError && (
-              <span className="text-[13px] text-err">
+              <span className="m3-body-sm text-err">
                 {assign.error instanceof Error ? assign.error.message : "Assign failed"}
               </span>
             )}
@@ -362,7 +365,7 @@ export function PrDetail({
           <TimelineCard author={pr.author} at={pr.createdAt} body={pr.body || "(no description)"} />
           {timeline.map((item, i) =>
             item.kind === "review" && !item.body ? (
-              <p key={i} className="px-1 text-[12.5px] text-ink-muted">
+              <p key={i} className="px-1 m3-label-md text-ink-muted">
                 <span
                   className="font-bold tracking-tight"
                   style={{ color: authorColor(item.author) }}
@@ -393,10 +396,10 @@ export function PrDetail({
                 onChange={(e) => setComment(e.target.value)}
                 rows={4}
                 placeholder="Leave a comment"
-                className="w-full rounded-md border border-edge-strong bg-surface px-3 py-2.5 text-sm leading-relaxed text-ink placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
+                className="w-full rounded-md px-3.5 py-2.5 text-sm leading-relaxed placeholder:text-ink-faint border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none"
               />
               {send.isError && (
-                <p className="text-[13px] text-err">
+                <p className="m3-body-sm text-err">
                   {send.error instanceof Error ? send.error.message : "Failed"}
                 </p>
               )}
@@ -409,7 +412,7 @@ export function PrDetail({
                     disabled={!canReview || send.isPending}
                     onClick={() => send.mutate({ kind: "approve" })}
                   >
-                    <Check size={14} /> Approve
+                    <Check size={16} /> Approve
                   </Button>
                   <Button
                     variant="secondary"
@@ -428,7 +431,7 @@ export function PrDetail({
                 </Button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 border-t border-edge-strong pt-3">
+              <div className="flex flex-wrap items-center gap-2 border-t border-hairline-strong pt-3.5">
                 <Button
                   variant="secondary"
                   disabled={draftToggle.isPending}
@@ -437,7 +440,7 @@ export function PrDetail({
                   {pr.isDraft ? "Ready for review" : "Convert to draft"}
                 </Button>
                 {(draftToggle.isError || closeReopen.isError || editBase.isError) && (
-                  <span className="text-[13px] text-err">
+                  <span className="m3-body-sm text-err">
                     {[draftToggle.error, closeReopen.error, editBase.error]
                       .filter((e): e is Error => e instanceof Error)
                       .map((e) => e.message)[0] ?? "Action failed"}
@@ -448,27 +451,30 @@ export function PrDetail({
                     variant="danger"
                     disabled={closeReopen.isPending}
                     onClick={() => {
-                      if (window.confirm(`Close PR #${pr.number} without merging?`)) {
-                        closeReopen.mutate("close");
-                      }
+                      void confirm({
+                        title: `Close PR #${pr.number} without merging?`,
+                        confirmLabel: "Close pull request",
+                        tone: "danger",
+                      }).then((ok) => ok && closeReopen.mutate("close"));
                     }}
                   >
-                    <X size={14} /> Close pull request
+                    <X size={16} /> Close pull request
                   </Button>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 border-t border-edge-strong pt-3">
+              <div className="flex flex-wrap items-center gap-2 border-t border-hairline-strong pt-3.5">
                 <GitMerge size={16} className="text-ink" />
-                <select
+                <Select
+                  size="md"
                   value={mergeMethod}
-                  onChange={(e) => setMergeMethod(e.target.value as typeof mergeMethod)}
-                  className="h-9 rounded-md border border-edge-strong bg-surface px-3 text-sm text-ink"
-                >
-                  <option value="squash">Squash and merge</option>
-                  <option value="merge">Create a merge commit</option>
-                  <option value="rebase">Rebase and merge</option>
-                </select>
+                  onChange={(v) => setMergeMethod(v as typeof mergeMethod)}
+                  options={[
+                    { value: "squash", label: "Squash and merge" },
+                    { value: "merge", label: "Create a merge commit" },
+                    { value: "rebase", label: "Rebase and merge" },
+                  ]}
+                />
                 <label className="flex items-center gap-1.5 text-sm text-ink">
                   <input
                     type="checkbox"
@@ -479,10 +485,10 @@ export function PrDetail({
                   delete branch
                 </label>
                 {conflicted && (
-                  <span className="text-[13px] font-semibold text-err">has conflicts</span>
+                  <span className="m3-body-sm font-semibold text-err">has conflicts</span>
                 )}
                 {merge.isError && (
-                  <span className="text-[13px] text-err">
+                  <span className="m3-body-sm text-err">
                     {merge.error instanceof Error ? merge.error.message : "Merge failed"}
                   </span>
                 )}
@@ -491,17 +497,16 @@ export function PrDetail({
                     variant="primary"
                     disabled={!viewer?.canPush || conflicted || merge.isPending}
                     onClick={() => {
-                      if (
-                        window.confirm(
-                          `${mergeMethod} PR #${pr.number} into ${pr.baseRefName}?` +
-                            (deleteBranch ? ` The branch ${pr.headRefName} will be deleted.` : ""),
-                        )
-                      ) {
-                        merge.mutate();
-                      }
+                      void confirm({
+                        title: `${mergeMethod} PR #${pr.number} into ${pr.baseRefName}?`,
+                        body: deleteBranch
+                          ? `The branch ${pr.headRefName} will be deleted.`
+                          : undefined,
+                        confirmLabel: "Merge",
+                      }).then((ok) => ok && merge.mutate());
                     }}
                   >
-                    <GitMerge size={14} /> Merge
+                    <GitMerge size={16} /> Merge
                   </Button>
                 </div>
               </div>
@@ -509,8 +514,8 @@ export function PrDetail({
           )}
 
           {pr.state === "CLOSED" && (
-            <Card className="flex flex-wrap items-center gap-2 p-3">
-              <span className="text-xs text-ink-muted">
+            <Card className="flex flex-wrap items-center gap-2 p-3.5">
+              <span className="m3-body-sm text-ink-muted">
                 This pull request is closed without being merged.
               </span>
               {closeReopen.isError && (
@@ -525,7 +530,7 @@ export function PrDetail({
                   disabled={closeReopen.isPending}
                   onClick={() => closeReopen.mutate("reopen")}
                 >
-                  <GitPullRequest size={12} /> Reopen pull request
+                  <GitPullRequest size={16} /> Reopen pull request
                 </Button>
               </div>
             </Card>
@@ -538,15 +543,15 @@ export function PrDetail({
           {pr.commits.map((c) => (
             <Card key={c.sha} className="p-3">
               <div className="flex items-center gap-2">
-                <GitCommitHorizontal size={12} className="shrink-0 text-ink-faint" />
+                <GitCommitHorizontal size={16} className="shrink-0 text-ink-faint" />
                 <span className="min-w-0 flex-1 truncate text-sm text-ink">{c.message}</span>
                 <span
-                  className="shrink-0 text-[12.5px] font-bold tracking-tight"
+                  className="shrink-0 m3-label-md font-bold tracking-tight"
                   style={{ color: authorColor(c.author) }}
                 >
                   {c.author}
                 </span>
-                <span className="shrink-0 text-[11.5px] text-ink-muted">{fmtDate(c.date)}</span>
+                <span className="shrink-0 m3-label-md text-ink-muted">{fmtDate(c.date)}</span>
                 <a
                   href={`https://github.com/${owner}/${name}/commit/${c.sha}`}
                   target="_blank"
@@ -569,7 +574,7 @@ export function PrDetail({
             </p>
           )}
           {diff.data?.truncated && (
-            <p className="text-[10.5px] text-warn">
+            <p className="m3-label-sm text-warn">
               Diff is over 2 MB — showing a truncated version, open GitHub for the rest.
             </p>
           )}
@@ -577,18 +582,18 @@ export function PrDetail({
             const stat = pr.files.find((x) => x.path === f.path);
             return (
               <Card key={f.path} className="overflow-hidden p-0">
-                <div className="flex items-center gap-2 border-b border-edge bg-surface-2 px-3 py-2">
-                  <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] font-medium text-ink">
+                <div className="flex items-center gap-2.5 border-b border-hairline bg-surface-2 px-4 py-3">
+                  <span className="min-w-0 flex-1 truncate font-mono m3-label-md font-medium text-ink">
                     {f.path}
                   </span>
                   {stat && (
-                    <span className="text-[11.5px] font-medium">
+                    <span className="m3-label-md font-medium">
                       <span className="text-ok">+{stat.additions}</span>{" "}
                       <span className="text-err">−{stat.deletions}</span>
                     </span>
                   )}
                 </div>
-                <pre className="max-h-[50vh] overflow-auto font-mono text-[12px] leading-[1.6]">
+                <pre className="max-h-[50vh] overflow-auto font-mono m3-label-md leading-[1.6]">
                   {f.patch
                     .split("\n")
                     .filter((l) => !isDiffMeta(l))
@@ -637,6 +642,7 @@ function BaseBranchControl({
   pending: boolean;
   onPick: (branch: string) => void;
 }) {
+  const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
   useClickOutside(ref, open, () => setOpen(false));
@@ -661,9 +667,9 @@ function BaseBranchControl({
         onClick={() => setOpen((v) => !v)}
         disabled={pending}
         title="Change base branch"
-        className="inline-flex cursor-pointer items-center gap-0.5 rounded border border-edge bg-surface px-1 font-mono text-ink hover:border-accent/60 disabled:opacity-50"
+        className="inline-flex cursor-pointer items-center gap-0.5 rounded-sm border border-outline/50 bg-white/4 px-1.5 font-mono text-ink transition-colors duration-150 hover:border-primary/60 disabled:opacity-50"
       >
-        {pending ? "changing…" : pr.baseRefName} <ChevronDown size={10} />
+        {pending ? "changing…" : pr.baseRefName} <ChevronDown size={16} />
       </button>
       {open && (
         <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-hairline-strong bg-surface-2 p-1 shadow-xl backdrop-blur-md">
@@ -678,13 +684,11 @@ function BaseBranchControl({
               key={b.name}
               onClick={() => {
                 setOpen(false);
-                if (
-                  window.confirm(
-                    `Change base of #${pr.number} from ${pr.baseRefName} to ${b.name}?`,
-                  )
-                ) {
-                  onPick(b.name);
-                }
+                void confirm({
+                  title: `Change base of #${pr.number}?`,
+                  body: `From ${pr.baseRefName} to ${b.name}.`,
+                  confirmLabel: "Change base",
+                }).then((ok) => ok && onPick(b.name));
               }}
               className="block w-full cursor-pointer truncate rounded px-2 py-1 text-left font-mono text-xs text-ink hover:bg-surface"
             >
@@ -736,7 +740,7 @@ function AssigneeMenu({
           setOpen((v) => !v);
         }}
       >
-        <Users size={14} /> Assign{assignees.length > 0 ? ` (${assignees.length})` : ""}
+        <Users size={16} /> Assign{assignees.length > 0 ? ` (${assignees.length})` : ""}
       </Button>
       {open && (
         <div className="absolute top-full right-0 z-20 mt-1 flex max-h-80 w-72 flex-col rounded-lg border border-hairline-strong bg-surface-2 p-1.5 shadow-xl backdrop-blur-md">
@@ -745,7 +749,7 @@ function AssigneeMenu({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search people…"
-            className="mb-1.5 w-full rounded-md border border-edge-strong bg-surface px-2.5 py-1.5 text-sm text-white placeholder:text-ink-faint focus:border-accent/60 focus:outline-none"
+            className="mb-1.5 w-full rounded-md px-3 py-1.5 text-sm placeholder:text-ink-faint border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none"
           />
           <div className="min-h-0 flex-1 overflow-y-auto">
             {users.isLoading && <p className="px-2 py-1.5 text-sm text-ink-muted">Loading…</p>}
@@ -763,7 +767,7 @@ function AssigneeMenu({
                   onClick={() => onToggle(u, assigned)}
                   className="flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm font-semibold text-white hover:bg-surface disabled:opacity-50"
                 >
-                  <Check size={14} className={assigned ? "text-ok" : "invisible"} />
+                  <Check size={16} className={assigned ? "text-ok" : "invisible"} />
                   {u}
                 </button>
               );
@@ -784,9 +788,9 @@ function BackButton({ onBack }: { onBack: () => void }) {
   return (
     <button
       onClick={onBack}
-      className="mb-3 flex items-center gap-1 text-[13px] text-ink-muted hover:text-ink"
+      className="mb-3 flex items-center gap-1 m3-body-sm text-ink-muted hover:text-ink"
     >
-      <ArrowLeft size={12} /> Pull requests
+      <ArrowLeft size={16} /> Pull requests
     </button>
   );
 }
@@ -804,12 +808,12 @@ function TimelineCard({
 }) {
   return (
     <Card className="p-0">
-      <div className="flex items-center gap-2 border-b border-edge bg-surface-2 px-3.5 py-2 text-[13px]">
+      <div className="m3-body-sm flex items-center gap-2.5 border-b border-hairline bg-surface-2 px-4 py-3">
         <span className="font-bold tracking-tight" style={{ color: authorColor(author) }}>
           {author}
         </span>
         {tag && <Badge>{tag}</Badge>}
-        <span className="ml-auto text-[11.5px] text-ink-faint">{fmtDate(at)}</span>
+        <span className="ml-auto m3-label-md text-ink-faint">{fmtDate(at)}</span>
       </div>
       <MarkdownBody source={body} breaks className="px-3.5 py-3" />
     </Card>

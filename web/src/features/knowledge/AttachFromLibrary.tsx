@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, FolderOpen, Library } from "lucide-react";
+import { Check, FolderOpen, Library } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { FilterChip } from "@/components/ui/chip";
 import type { KnowledgeRow } from "./KnowledgePanel";
 
 /**
@@ -55,7 +55,7 @@ export function AttachFromLibrary({ projectId }: { projectId: string }) {
   return (
     <>
       <Button variant="ghost" onClick={() => setOpen(true)}>
-        <Library size={14} /> Attach from library
+        <Library size={16} /> Attach from library
       </Button>
       <Dialog
         open={open}
@@ -70,30 +70,17 @@ export function AttachFromLibrary({ projectId }: { projectId: string }) {
           </p>
 
           <div className="flex flex-wrap gap-1.5">
-            <button
-              onClick={() => setFolder(null)}
-              className={cn(
-                "cursor-pointer rounded-pill border px-2.5 py-1 text-xs transition-colors",
-                folder === null
-                  ? "border-accent/40 bg-accent/12 text-accent"
-                  : "border-hairline text-ink-muted hover:text-ink",
-              )}
-            >
+            <FilterChip onClick={() => setFolder(null)} selected={folder === null}>
               all
-            </button>
+            </FilterChip>
             {folders.map((f) => (
-              <button
+              <FilterChip
                 key={f.folder}
                 onClick={() => setFolder(f.folder)}
-                className={cn(
-                  "cursor-pointer rounded-pill border px-2.5 py-1 text-xs transition-colors",
-                  folder === f.folder
-                    ? "border-accent/40 bg-accent/12 text-accent"
-                    : "border-hairline text-ink-muted hover:text-ink",
-                )}
+                selected={folder === f.folder}
               >
                 {f.folder || "unfiled"} · {f.count}
-              </button>
+              </FilterChip>
             ))}
           </div>
 
@@ -117,7 +104,7 @@ export function AttachFromLibrary({ projectId }: { projectId: string }) {
                       disabled={detach.isPending}
                       title="Attached — click to detach from this project"
                     >
-                      <Check size={12} /> attached
+                      <Check size={16} /> attached
                     </Button>
                   ) : (
                     <Button
@@ -135,7 +122,7 @@ export function AttachFromLibrary({ projectId }: { projectId: string }) {
           </div>
 
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-ink-faint">
+            <span className="m3-label-sm text-ink-faint">
               {folder === null
                 ? "Pick a folder to attach it whole."
                 : `Attach every asset in "${folder || "unfiled"}".`}
@@ -149,7 +136,7 @@ export function AttachFromLibrary({ projectId }: { projectId: string }) {
                 disabled={folder === null || attach.isPending}
                 onClick={() => folder !== null && attach.mutate({ folder })}
               >
-                <FolderOpen size={14} /> Attach folder
+                <FolderOpen size={16} /> Attach folder
               </Button>
             </div>
           </div>

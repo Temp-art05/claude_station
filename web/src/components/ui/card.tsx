@@ -1,37 +1,59 @@
 import type { HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
-export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+/**
+ * An M3 surface-container sheet in liquid glass. `interactive` adds the hover
+ * sheen and press squash — use it only where the whole card is clickable, so
+ * the motion means "this responds" rather than being decoration.
+ */
+export function Card({
+  className,
+  interactive = false,
+  ...props
+}: HTMLAttributes<HTMLDivElement> & { interactive?: boolean }) {
   return (
-    <div className={cn("glass rounded-lg p-4 transition-all duration-150", className)} {...props} />
+    <div
+      className={cn(
+        "liquid rounded-xl p-4",
+        interactive && "liquid-interactive cursor-pointer",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 
+/**
+ * M3 label chip. Tonal fill, no outline — the outline was what made these read
+ * as small buttons. `glow` keeps the lit ring for status that must carry across
+ * a long list.
+ */
 export function Badge({
   className,
   tone = "default",
   glow = false,
   ...props
 }: HTMLAttributes<HTMLSpanElement> & {
-  tone?: "default" | "accent" | "ok" | "warn" | "err";
-  /** Lit border + halo in the tone's own colour, for status that must be seen at a glance. */
+  tone?: "default" | "accent" | "ok" | "warn" | "err" | "think";
+  /** Lit border + halo in the tone's own colour, for status seen at a glance. */
   glow?: boolean;
 }) {
   const tones = {
-    default: "border-hairline bg-white/6 text-ink-muted",
-    accent: "border-accent/30 bg-accent/12 text-accent",
-    ok: "border-ok/30 bg-ok/12 text-ok",
-    warn: "border-warn/30 bg-warn/12 text-warn",
-    err: "border-err/30 bg-err/12 text-err",
+    default: "bg-white/8 text-ink-muted",
+    accent: "bg-primary/16 text-primary",
+    ok: "bg-ok/16 text-ok",
+    warn: "bg-warn/16 text-warn",
+    err: "bg-err/16 text-err",
+    think: "bg-tertiary/16 text-tertiary",
   };
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-pill border px-2 py-0.5 text-[11px] font-medium backdrop-blur-sm",
+        "m3-label-sm inline-flex items-center rounded-pill px-2.5 py-1 font-semibold",
         tones[tone],
         // currentColor keeps the halo in sync with whichever tone is applied.
         glow &&
-          "border-current px-2.5 py-1 text-[11.5px] font-semibold shadow-[0_0_12px_-2px_currentColor]",
+          "m3-label-md border border-current px-3 font-semibold shadow-[0_0_14px_-4px_currentColor]",
         className,
       )}
       {...props}

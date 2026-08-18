@@ -20,8 +20,7 @@ export function HistoryTab({ projectId }: { projectId: string }) {
   const scrollRef = useScrollMemory<HTMLDivElement>(projectKey(projectId, "history", "scroll"));
 
   if (isLoading) return <p className="p-6 text-sm text-ink-muted">Loading…</p>;
-  if (rows.length === 0)
-    return <p className="p-6 text-sm text-ink-muted">Nothing recorded yet.</p>;
+  if (rows.length === 0) return <p className="p-6 text-sm text-ink-muted">Nothing recorded yet.</p>;
 
   const groups = new Map<string, WorkHistory[]>();
   for (const row of rows) {
@@ -39,7 +38,7 @@ export function HistoryTab({ projectId }: { projectId: string }) {
           <div className="space-y-1">
             {items.map((row) => (
               <div key={row.id} className="flex items-baseline gap-3 text-sm">
-                <span className="w-14 shrink-0 font-mono text-[11px] text-ink-faint">
+                <span className="w-14 shrink-0 font-mono m3-label-sm text-ink-faint">
                   {new Date(row.createdAt).toLocaleTimeString(undefined, {
                     hour: "2-digit",
                     minute: "2-digit",

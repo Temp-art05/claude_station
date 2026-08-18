@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { Search } from "lucide-react";
+import { Search as SearchIcon } from "@/components/ui/icons";
 import { Badge, Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { globalKey, useUiState } from "@/lib/uiStore";
@@ -53,9 +54,9 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
-      <h1 className="mb-3 text-lg font-semibold">Search</h1>
+      <PageHeader title="Search" icon={SearchIcon} className="mb-4" />
       <div className="relative mb-5">
-        <Search size={15} className="absolute left-3 top-2.5 text-ink-faint" />
+        <SearchIcon size={18} className="absolute top-2.5 left-3 text-ink-faint" />
         <Input
           value={term}
           onChange={(e) => setTerm(e.target.value)}
@@ -75,11 +76,11 @@ export function SearchPage() {
 
           {data.chat.length > 0 && (
             <section className="mb-5">
-              <h2 className="mb-2 text-xs font-medium text-ink-faint">Chat</h2>
+              <h2 className="m3-label-md mb-2 font-semibold text-ink-faint uppercase">Chat</h2>
               <div className="space-y-2">
                 {data.chat.map((hit) => (
                   <Link key={hit.messageId} to={`/projects/${hit.projectId}`}>
-                    <Card className="hover:border-edge-strong hover:bg-surface-2">
+                    <Card className="hover:border-edge-strong hover:bg-white/6">
                       <div className="mb-1 flex items-center gap-2">
                         <span className="text-xs font-medium">{hit.sessionTitle}</span>
                         <Badge>#{hit.seq}</Badge>
@@ -94,7 +95,7 @@ export function SearchPage() {
 
           {data.knowledge.length > 0 && (
             <section>
-              <h2 className="mb-2 text-xs font-medium text-ink-faint">Knowledge</h2>
+              <h2 className="m3-label-md mb-2 font-semibold text-ink-faint uppercase">Knowledge</h2>
               <div className="space-y-2">
                 {data.knowledge.map((hit) => (
                   <Card key={hit.itemId}>

@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
  * a README preview and a PR description render identically instead of drifting.
  */
 const PROSE = [
-  "text-[14px] leading-[1.65] text-ink",
+  "m3-body-md leading-[1.65] text-ink",
   // Headings
   "[&_h1]:mt-6 [&_h1]:mb-3 [&_h1]:border-b [&_h1]:border-hairline [&_h1]:pb-2 [&_h1]:text-xl [&_h1]:font-semibold",
   "[&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:border-b [&_h2]:border-hairline [&_h2]:pb-1.5 [&_h2]:text-lg [&_h2]:font-semibold",
@@ -26,11 +26,11 @@ const PROSE = [
   "[&_li:has(>input[type=checkbox])]:list-none [&_li:has(>input[type=checkbox])]:-ml-5",
   "[&_input[type=checkbox]]:mr-1.5 [&_input[type=checkbox]]:align-middle",
   // Code
-  "[&_code]:rounded [&_code]:bg-white/8 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12.5px]",
-  "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-hairline [&_pre]:bg-surface-2 [&_pre]:p-3 [&_pre]:text-[12.5px] [&_pre]:leading-relaxed",
+  "[&_code]:rounded [&_code]:bg-white/8 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:m3-label-md",
+  "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-hairline [&_pre]:bg-surface-2 [&_pre]:p-3 [&_pre]:m3-label-md [&_pre]:leading-relaxed",
   "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
   // Tables — wide ones scroll rather than blowing out the card
-  "[&_table]:my-3 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-[13px]",
+  "[&_table]:my-3 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:m3-body-sm",
   "[&_th]:border [&_th]:border-hairline [&_th]:bg-surface-2 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold",
   "[&_td]:border [&_td]:border-hairline [&_td]:px-2.5 [&_td]:py-1.5",
   // Images

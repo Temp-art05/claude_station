@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Play } from "lucide-react";
+import { Bot, Play } from "@/components/ui/icons";
 import type { ChatSession } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
@@ -63,7 +63,7 @@ export function AgentsTab({ projectId }: { projectId: string }) {
               <button
                 key={w.id}
                 onClick={() => navigate(`/projects/${projectId}?tab=agent:${w.id}`)}
-                className="glass inline-flex cursor-pointer items-center gap-2 rounded-pill px-3 py-1.5 text-xs hover:border-hairline-strong"
+                className="liquid liquid-interactive m3-label-md inline-flex cursor-pointer items-center gap-2 rounded-pill px-3.5 py-2 font-semibold"
               >
                 <span
                   className={
@@ -94,7 +94,7 @@ export function AgentsTab({ projectId }: { projectId: string }) {
                 disabled={start.isPending}
                 title={a.description}
               >
-                <Play size={12} /> {a.name}
+                <Play size={16} /> {a.name}
               </Button>
             ))}
           </div>

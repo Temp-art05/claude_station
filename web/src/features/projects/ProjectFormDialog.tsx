@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "@/components/ui/icons";
 import type { Project, ProjectInput, ProjectPathInput } from "@claude-station/shared";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -60,7 +60,9 @@ export function ProjectFormDialog({ open, onClose, project }: Props) {
     const input: ProjectInput = {
       name: name.trim(),
       description: description.trim(),
-      paths: paths.filter((p) => p.path.trim()).map((p) => ({ ...p, label: p.label.trim() || p.path.split("/").pop() || p.path })),
+      paths: paths
+        .filter((p) => p.path.trim())
+        .map((p) => ({ ...p, label: p.label.trim() || p.path.split("/").pop() || p.path })),
     };
     if (!input.name) return setError("Name is required");
     try {
@@ -72,11 +74,21 @@ export function ProjectFormDialog({ open, onClose, project }: Props) {
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title={project ? "Edit project" : "New project"} className="max-w-2xl">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={project ? "Edit project" : "New project"}
+      className="max-w-2xl"
+    >
       <div className="space-y-4">
         <div>
           <Label>Name</Label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ReelMe" autoFocus />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="ReelMe"
+            autoFocus
+          />
         </div>
         <div>
           <Label>Description</Label>
@@ -90,13 +102,17 @@ export function ProjectFormDialog({ open, onClose, project }: Props) {
         <div>
           <div className="mb-2 flex items-center justify-between">
             <Label className="mb-0">Repo paths</Label>
-            <Button size="sm" variant="ghost" onClick={() => setPaths((p) => [...p, { ...emptyPath }])}>
-              <Plus size={14} /> Add path
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setPaths((p) => [...p, { ...emptyPath }])}
+            >
+              <Plus size={16} /> Add path
             </Button>
           </div>
           <div className="space-y-3">
             {paths.map((p, i) => (
-              <div key={i} className="rounded-md border border-edge bg-surface p-3 space-y-2">
+              <div key={i} className="liquid rounded-lg p-3.5 space-y-2">
                 <div className="flex items-center gap-2">
                   <Input
                     className="font-mono text-xs"
@@ -111,7 +127,7 @@ export function ProjectFormDialog({ open, onClose, project }: Props) {
                     disabled={paths.length === 1}
                     aria-label="Remove path"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={16} />
                   </Button>
                 </div>
                 <div className="flex gap-2">
@@ -132,7 +148,9 @@ export function ProjectFormDialog({ open, onClose, project }: Props) {
                     type="radio"
                     name="default-path"
                     checked={p.isDefault}
-                    onChange={() => setPaths((prev) => prev.map((q, j) => ({ ...q, isDefault: j === i })))}
+                    onChange={() =>
+                      setPaths((prev) => prev.map((q, j) => ({ ...q, isDefault: j === i })))
+                    }
                     className="accent-(--color-accent)"
                   />
                   Default working directory

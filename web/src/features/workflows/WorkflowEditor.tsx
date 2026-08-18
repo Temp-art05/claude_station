@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react";
+import { Select } from "@/components/ui/select";
+import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "@/components/ui/icons";
 import {
   KNOWLEDGE_FOLDER_SUGGESTIONS,
   PERMISSION_MODE_CHOICES,
@@ -142,18 +143,15 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
 
         <div className="w-40">
           <Label>Folder</Label>
-          <select
+          <Select
+            className="w-full"
             value={draft.folder}
-            onChange={(e) => setDraft({ ...draft, folder: e.target.value })}
-            className="h-9 w-full px-2 text-sm"
-          >
-            <option value="">unfiled</option>
-            {KNOWLEDGE_FOLDER_SUGGESTIONS.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setDraft({ ...draft, folder: v })}
+            options={[
+              { value: "", label: "unfiled" },
+              ...KNOWLEDGE_FOLDER_SUGGESTIONS.map((f) => ({ value: f, label: f })),
+            ]}
+          />
         </div>
 
         <div>
@@ -163,11 +161,14 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
               size="sm"
               variant="ghost"
               onClick={() => {
-                setDraft((prev) => ({ ...prev, steps: [...prev.steps, blankStep(prev.steps.length)] }));
+                setDraft((prev) => ({
+                  ...prev,
+                  steps: [...prev.steps, blankStep(prev.steps.length)],
+                }));
                 setOpenStep(draft.steps.length);
               }}
             >
-              <Plus size={13} /> Add step
+              <Plus size={16} /> Add step
             </Button>
           </div>
 
@@ -175,8 +176,8 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
             {draft.steps.map((step, i) => (
               <div key={i} className="rounded-md border border-hairline bg-white/4">
                 <div className="flex items-center gap-2 px-2.5 py-2">
-                  <GripVertical size={13} className="shrink-0 text-ink-faint" />
-                  <span className="w-6 shrink-0 text-center font-mono text-[11px] text-ink-faint">
+                  <GripVertical size={16} className="shrink-0 text-ink-faint" />
+                  <span className="w-6 shrink-0 text-center font-mono m3-label-sm text-ink-faint">
                     {i + 1}
                   </span>
                   <button
@@ -184,7 +185,7 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                     className="min-w-0 flex-1 cursor-pointer text-left"
                   >
                     <span className="text-sm">{step.title || "(untitled step)"}</span>
-                    <span className="ml-2 font-mono text-[10.5px] text-ink-faint">{step.key}</span>
+                    <span className="ml-2 font-mono m3-label-sm text-ink-faint">{step.key}</span>
                   </button>
                   <Badge tone={step.type === "agent" ? "accent" : "default"}>{step.type}</Badge>
                   {step.requiresConfirm && <Badge tone="accent">confirm</Badge>}
@@ -193,10 +194,10 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                   )}
                   {step.condition && <Badge>conditional</Badge>}
                   <Button size="icon" variant="ghost" onClick={() => move(i, -1)} aria-label="Up">
-                    <ChevronUp size={13} />
+                    <ChevronUp size={16} />
                   </Button>
                   <Button size="icon" variant="ghost" onClick={() => move(i, 1)} aria-label="Down">
-                    <ChevronDown size={13} />
+                    <ChevronDown size={16} />
                   </Button>
                   <Button
                     size="icon"
@@ -207,7 +208,7 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                     }
                     aria-label="Remove step"
                   >
-                    <Trash2 size={13} />
+                    <Trash2 size={16} />
                   </Button>
                 </div>
 
@@ -224,19 +225,12 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                       </div>
                       <div>
                         <Label>Type</Label>
-                        <select
+                        <Select
+                          className="w-full"
                           value={step.type}
-                          onChange={(e) =>
-                            patchStep(i, { type: e.target.value as WorkflowStepType })
-                          }
-                          className="h-9 w-full px-2 text-sm"
-                        >
-                          {STEP_TYPES.map((t) => (
-                            <option key={t} value={t}>
-                              {t}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(v) => patchStep(i, { type: v as WorkflowStepType })}
+                          options={STEP_TYPES.map((t) => ({ value: t, label: t }))}
+                        />
                       </div>
                       <div>
                         <Label>Title</Label>
@@ -247,44 +241,43 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                         />
                       </div>
                     </div>
-                    <p className="text-[10.5px] text-ink-faint">{TYPE_HINT[step.type]}</p>
+                    <p className="m3-label-sm text-ink-faint">{TYPE_HINT[step.type]}</p>
 
                     {step.type === "agent" && (
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <Label>Agent</Label>
-                          <select
+                          <Select
+                            className="w-full"
                             value={step.agentName ?? ""}
-                            onChange={(e) => patchStep(i, { agentName: e.target.value || null })}
-                            className="h-9 w-full px-2 text-sm"
-                          >
-                            <option value="">choose an agent…</option>
-                            {agents.map((a) => (
-                              <option key={a.id} value={a.name}>
-                                {a.name}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(v) => patchStep(i, { agentName: v || null })}
+                            options={[
+                              { value: "", label: "choose an agent…" },
+                              ...agents.map((a) => ({ value: a.name, label: a.name })),
+                            ]}
+                          />
                         </div>
                         <div>
                           <Label>Permission mode</Label>
-                          <select
+                          <Select
+                            className="w-full"
                             value={step.permissionMode ?? ""}
-                            onChange={(e) =>
+                            onChange={(v) =>
                               patchStep(i, {
-                                permissionMode: (e.target.value || null) as PermissionMode | null,
+                                permissionMode: (v || null) as PermissionMode | null,
                               })
                             }
-                            className="h-9 w-full px-2 text-sm"
-                          >
-                            <option value="">default (ask every edit)</option>
-                            {PERMISSION_MODE_CHOICES.filter((m) => m !== "default").map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                          </select>
-                          <p className="mt-1 text-[10.5px] text-ink-faint">
+                            options={[
+                              { value: "", label: "default (ask every edit)" },
+                              ...PERMISSION_MODE_CHOICES.filter((m) => m !== "default").map(
+                                (m) => ({
+                                  value: m,
+                                  label: m,
+                                }),
+                              ),
+                            ]}
+                          />
+                          <p className="mt-1 m3-label-sm text-ink-faint">
                             Use acceptEdits for long implement steps so it runs unattended.
                           </p>
                         </div>
@@ -300,7 +293,7 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                           onChange={(e) => patchStep(i, { commandName: e.target.value || null })}
                           placeholder="Test"
                         />
-                        <p className="mt-1 text-[10.5px] text-ink-faint">
+                        <p className="mt-1 m3-label-sm text-ink-faint">
                           Matched by name against the project's Commands at run time.
                         </p>
                       </div>

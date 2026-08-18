@@ -1,8 +1,18 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { Brain, Download, Pin, PinOff, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import {
+  Brain,
+  Download,
+  Pin,
+  PinOff,
+  Plus,
+  Sparkles,
+  Trash2,
+  Upload,
+} from "@/components/ui/icons";
 import type { ProjectMemory, ProjectMemoryInput } from "@claude-station/shared";
+import { useConfirm } from "@/components/ui/confirm";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
@@ -29,6 +39,7 @@ export const memoryBase = (projectId: string | null) =>
  * demand, so a big memory bank doesn't eat the context window.
  */
 export function MemoryTab({ projectId }: { projectId: string | null }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const scope = projectId ?? "global";
   const key = ["memory", scope];
@@ -82,12 +93,12 @@ export function MemoryTab({ projectId }: { projectId: string | null }) {
               : "Rules that hold in every project — how you want work done, not what a repo contains. These ride along with every session, on top of each project's own notes."}
           </p>
           {memories.length > 0 && (
-            <p className="mt-1 text-[11px] text-ink-faint">
+            <p className="mt-1 m3-label-sm text-ink-faint">
               {pinnedCount} pinned · {memories.length - pinnedCount} on demand
             </p>
           )}
           {projectId && (
-            <p className="mt-1 text-[11px] text-ink-faint">
+            <p className="mt-1 m3-label-sm text-ink-faint">
               Rules that apply to every project live in{" "}
               <Link to="/memory" className="text-accent hover:underline">
                 global memory
@@ -98,10 +109,10 @@ export function MemoryTab({ projectId }: { projectId: string | null }) {
         </div>
         <div className="flex shrink-0 gap-2">
           <Button variant="ghost" onClick={() => fileRef.current?.click()}>
-            <Upload size={14} /> Import .md
+            <Upload size={16} /> Import .md
           </Button>
           <Button variant="primary" onClick={() => setEditing("new")}>
-            <Plus size={15} /> New memory
+            <Plus size={16} /> New memory
           </Button>
         </div>
         <input
@@ -144,7 +155,7 @@ export function MemoryTab({ projectId }: { projectId: string | null }) {
                     m.pinned ? "text-accent" : "text-ink-faint hover:text-ink-muted"
                   }`}
                 >
-                  {m.pinned ? <Pin size={14} /> : <PinOff size={14} />}
+                  {m.pinned ? <Pin size={16} /> : <PinOff size={16} />}
                 </button>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -152,11 +163,13 @@ export function MemoryTab({ projectId }: { projectId: string | null }) {
                     {m.pinned && <Badge tone="accent">pinned</Badge>}
                     {m.source === "claude" && (
                       <Badge>
-                        <Sparkles size={9} className="mr-1" />
+                        <Sparkles size={16} className="mr-1" />
                         {SOURCE_LABEL[m.source]}
                       </Badge>
                     )}
-                    {m.tags?.map((t) => <Badge key={t}>{t}</Badge>)}
+                    {m.tags?.map((t) => (
+                      <Badge key={t}>{t}</Badge>
+                    ))}
                   </div>
                   <p className="mt-1 line-clamp-3 text-xs whitespace-pre-wrap text-ink-muted">
                     {m.body}
@@ -168,7 +181,7 @@ export function MemoryTab({ projectId }: { projectId: string | null }) {
                     className="inline-flex h-8 w-8 items-center justify-center rounded-pill text-ink-muted hover:bg-white/6 hover:text-ink"
                     title="Export as .md"
                   >
-                    <Download size={14} />
+                    <Download size={16} />
                   </a>
                   <Button size="sm" variant="ghost" onClick={() => setEditing(m)}>
                     Edit
@@ -177,11 +190,15 @@ export function MemoryTab({ projectId }: { projectId: string | null }) {
                     size="icon"
                     variant="ghost"
                     onClick={() => {
-                      if (confirm(`Delete memory "${m.title}"?`)) remove.mutate(m.id);
+                      void confirm({
+                        title: `Delete memory "${m.title}"?`,
+                        confirmLabel: "Delete",
+                        tone: "danger",
+                      }).then((ok) => ok && remove.mutate(m.id));
                     }}
                     aria-label="Delete memory"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={16} />
                   </Button>
                 </div>
               </div>
@@ -231,7 +248,9 @@ function MemoryEditor({
 
   const save = useMutation({
     mutationFn: (input: ProjectMemoryInput) =>
-      memory ? api.patch(`/api/memory/${memory.id}`, input) : api.post(memoryBase(projectId), input),
+      memory
+        ? api.patch(`/api/memory/${memory.id}`, input)
+        : api.post(memoryBase(projectId), input),
     onSuccess: () => {
       clearDraft(); // saved — nothing left unsaved to restore
       void qc.invalidateQueries({ queryKey: ["memory"] });
@@ -241,7 +260,12 @@ function MemoryEditor({
   });
 
   return (
-    <Dialog open onClose={onClose} title={memory ? "Edit memory" : "New memory"} className="max-w-2xl">
+    <Dialog
+      open
+      onClose={onClose}
+      title={memory ? "Edit memory" : "New memory"}
+      className="max-w-2xl"
+    >
       <div className="space-y-3">
         {restored && <DraftNotice onDiscard={discard} />}
         <div>
@@ -288,7 +312,7 @@ function MemoryEditor({
           />
           <span>
             Pin to every session
-            <span className="block text-[10.5px] text-ink-faint">
+            <span className="block m3-label-sm text-ink-faint">
               Pinned notes go into the prompt in full. Leave off and Claude fetches it by title when
               relevant.
             </span>

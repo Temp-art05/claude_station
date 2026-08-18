@@ -12,7 +12,7 @@ import {
   Search,
   Settings,
   TerminalSquare,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import type { Project } from "@claude-station/shared";
 import { cn } from "@/lib/utils";
 import { globalKey, useUiState } from "@/lib/uiStore";
@@ -73,26 +73,27 @@ export function AppShell() {
 
   return (
     <div className="flex h-full gap-2 p-2">
-      <aside className="glass flex w-56 shrink-0 flex-col rounded-xl">
-        <div className="flex items-center gap-3 px-3.5 py-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-ink shadow-[inset_0_1px_0_rgb(255_255_255/35%),0_6px_16px_-8px_var(--color-accent)]">
-            <TerminalSquare size={18} />
+      {/* M3 navigation drawer: 28px shape, tonal pill on the selected item. */}
+      <aside className="liquid flex w-60 shrink-0 flex-col rounded-2xl">
+        <div className="flex items-center gap-3 px-4 py-4">
+          <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-primary text-on-primary shadow-e2">
+            <TerminalSquare size={20} fill={1} />
           </div>
           <div className="min-w-0">
-            <p className="font-display truncate text-lg leading-tight font-bold">Claude Station</p>
-            <p className="truncate text-[11px] font-medium text-ink-faint">local workspace</p>
+            <p className="m3-title-lg truncate">Claude Station</p>
+            <p className="m3-label-sm truncate font-medium text-ink-faint">local workspace</p>
           </div>
         </div>
 
-        <nav className="flex flex-col px-2">
+        <nav className="flex flex-col px-2.5">
           {GROUPS.map((group, i) => (
             <div
               key={group.label ?? i}
               // A hairline separates each group; the first sits under the brand.
-              className="flex flex-col gap-0.5 border-t border-hairline pt-2.5 pb-1 first:border-t-0"
+              className="flex flex-col gap-0.5 border-t border-hairline pt-3 pb-1 first:border-t-0"
             >
               {group.label && (
-                <p className="px-3 pb-1.5 text-xs font-bold tracking-[0.14em] text-ink-muted uppercase">
+                <p className="m3-label-sm px-3.5 pb-2 font-bold tracking-[0.14em] text-ink-faint uppercase">
                   {group.label}
                 </p>
               )}
@@ -105,13 +106,16 @@ export function AppShell() {
                     key={to}
                     to={to === "/projects" && lastProject ? `/projects/${lastProject}` : to}
                     className={cn(
-                      "group flex items-center gap-2.5 rounded-pill px-3 py-2 text-sm transition-all duration-150",
+                      "state-layer m3-label-lg group flex h-11 items-center gap-3 rounded-pill px-3.5 font-semibold",
+                      "transition-[background-color,color] duration-200 ease-emphasized",
                       active
-                        ? "border border-hairline-strong bg-white/8 font-bold text-ink shadow-[inset_0_1px_0_rgb(255_255_255/10%)] backdrop-blur-md"
-                        : "border border-transparent font-semibold text-ink-muted hover:bg-white/5 hover:text-ink",
+                        ? "bg-inverse-surface text-on-inverse-surface"
+                        : "text-ink-muted hover:text-ink",
                     )}
                   >
-                    <Icon size={16} strokeWidth={2.25} className={active ? "text-accent" : undefined} />
+                    {/* FILL is a live axis on Material Symbols, so the selected
+                        item's glyph fills in rather than being a second asset. */}
+                    <Icon size={20} fill={active ? 1 : 0} />
                     {label}
                   </NavLink>
                 );
@@ -120,15 +124,14 @@ export function AppShell() {
           ))}
         </nav>
 
-        <div className="mt-auto border-t border-hairline px-3.5 py-3 text-[11px] font-medium text-ink-faint">
-          v0.1.0 · 127.0.0.1
+        <div className="mt-auto px-4 py-4">
+          <span className="m3-label-sm inline-flex rounded-pill bg-white/5 px-2.5 py-1 font-medium text-ink-faint">
+            v0.1.0 · 127.0.0.1
+          </span>
         </div>
       </aside>
 
-      <main
-        ref={mainRef}
-        className="glass-flat min-w-0 flex-1 overflow-y-auto rounded-xl border border-hairline"
-      >
+      <main ref={mainRef} className="liquid-flat min-w-0 flex-1 overflow-y-auto rounded-2xl">
         <TokenGate>
           {/* Project pages live here, not in the outlet, so leaving for GitHub
               or Jira hides them instead of tearing down their terminals. Every

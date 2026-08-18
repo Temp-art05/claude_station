@@ -39,10 +39,11 @@ for the GitHub views.
 
 Group the repos that belong together. Each path gets a label and a description, and the description
 is what Claude reads to tell your backend from your iOS app. `~` and relative paths are accepted.
+Leaving a project keeps its terminals alive; the sidebar brings you back to the one you were in.
 
 ### Claude, in a real terminal
 
-![Terminals](docs/images/terminals.png)
+![Claude in a terminal](docs/images/claude.png)
 
 Each repo gets embedded `claude` CLI terminals — a real PTY rendered with xterm, so the CLI's own
 TUI handles approvals exactly as it does in your shell. Scrollback survives a reconnect, and a
@@ -74,9 +75,15 @@ worktree so two agents never share a working tree.
 The sequence you repeat for a kind of work — read docs → plan → confirm → update docs → implement →
 test — stored as a library asset you import into projects. Each step is an agent, a project command,
 or a stop for your decision, and each sets its own permission mode: a long implement step can run
-unattended while the planning step still asks. An agent pauses the run by calling `workflow_ask`;
-you answer on the run view and later steps receive those answers. Artifacts (plans, reports) are
-downloadable per step. A restart marks the in-flight step interrupted rather than re-running it blind.
+unattended while the planning step still asks.
+
+![A workflow run](docs/images/workflow-run.png)
+
+A run shows every step's state and the goal it was started with, over the Claude terminal driving it —
+which you can talk to mid-run to skip, confirm or redirect a step. An agent pauses the run by calling
+`workflow_ask`; you answer on the run view and later steps receive those answers. Artifacts (plans,
+reports) are downloadable per step. A restart marks the in-flight step interrupted rather than
+re-running it blind.
 
 ### Agents
 
@@ -86,6 +93,16 @@ Subagents the main session can delegate to, each with its own prompt, tool allow
 and turn cap — so a build fixer can run gradle without ever touching Jira. Enable one globally or
 per project. Imports and exports `.agent.md`, so they stay portable to plain Claude Code.
 
+An agent can also be a whole app rather than a prompt: import a folder with a `start.sh` and it gets
+a workspace tab that runs it and embeds its own UI above the terminal.
+
+![An app agent running](docs/images/agent-run.png)
+
+Above is `jira-ai-fixer` — a webhook server that picks up Jira bugs labelled `AI-Fix`, fixes them
+with headless Claude Code, opens the PR and reports back. Start / stop and the env set it runs with
+are in the tab's toolbar; the terminal stays in the foreground so a fix that needs your confirmation
+can ask for it there. (The webhook URL and token in the terminal are redacted in this screenshot.)
+
 ### Env sets
 
 ![Env sets](docs/images/env.png)
@@ -93,17 +110,61 @@ per project. Imports and exports `.agent.md`, so they stay portable to plain Cla
 Global or per project, injected into terminals, build commands and Claude sessions. Values marked
 secret are masked in the UI.
 
+### Knowledge
+
+![Knowledge](docs/images/knowledge.png)
+
+Docs and spreadsheets per project, or a global library organised in folders and attached to projects
+by reference — the file is stored once and several projects can read it. `.xlsx` is flattened to CSV
+per sheet so Claude reads it reliably, whole folders can be dropped in at once, and skills are
+symlinked into `~/.claude/skills` so they load in every session, not just here.
+
+### Memory
+
+![Memory](docs/images/memory.png)
+
+Conventions, decisions and gotchas that aren't in the code. Claude writes these as it works — when
+you correct it, when a decision is settled, when a gotcha costs it time — and reads them next
+session. Global notes apply to every project, on top of each project's own. Pinned notes go into the
+prompt in full; the rest are titles Claude fetches on demand.
+
+### GitHub
+
+![GitHub](docs/images/github.png)
+
+PRs, issues, branches, releases and a read-only file browser, all through your existing `gh` login —
+no token to paste. Open a PR to review it in place:
+
+![A pull request](docs/images/github-pr.png)
+
+Conversation, commits and the diff; approve or request changes, assign, toggle draft, change base,
+merge (squash / merge / rebase) or close. "Work with Claude" hands the whole PR context to a Claude
+terminal in the matching project.
+
+### Jira
+
+![Jira](docs/images/jira.png)
+
+Cloud and self-hosted (Server/DC, Bearer PAT, API v2): my-issues plus any JQL, ADF→markdown detail,
+and comment / transition / log work without leaving the app. Every issue has the same
+"work on this with Claude" hand-off.
+
+### Settings
+
+![Settings](docs/images/settings.png)
+
+Behaviour that applies everywhere — approval timeout, parallel-turn cap, repo lock, IDE command, log
+tail sizes, worktree default — plus the Jira/GitHub credentials, a Doctor that checks versions, the
+`claude` login, PTY health and data-dir writability, and a whole-app export/import for moving the
+station to another machine.
+
 ### And the rest
 
-| | |
-|---|---|
-| **Jira** | Cloud and self-hosted (Server/DC, Bearer PAT, API v2): my-issues + JQL, ADF→markdown detail, comment / transition / log work from the UI. |
-| **GitHub** | PRs, issues, branches, releases and a read-only file browser through your existing `gh` login. |
-| **Knowledge** | Docs and spreadsheets per project, or a global library organised in folders and attached to projects by reference. `.xlsx` is flattened to CSV per sheet so Claude reads it reliably. Skills are symlinked into `~/.claude/skills`. |
+|                              |                                                                                                                                                                                                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Claude's own tools** (MCP) | `jira_*`, `excel_*`, `knowledge_search`, `list_project_commands`, `run_project_command`, `read_command_log`, `memory_*`. Every mutating call goes through the approval modal, except memory writes — those are this app's own notes, reviewable in the Memory tab. |
-| **Memory** | Conventions, decisions and gotchas that aren't in the code. Claude writes these as it works — when you correct it, when a decision is settled, when a gotcha costs it time — and reads them next session. Global notes apply to every project, on top of each project's own. Pinned notes go into the prompt in full; the rest are titles Claude fetches on demand. |
-| **Search** | SQLite FTS5 across chat history and imported knowledge. |
-| **History / Doctor** | Audit feed of everything the app and Claude did; versions, login state, PTY health and data-dir writability. |
+| **Search**                   | SQLite FTS5 across chat history and imported knowledge.                                                                                                                                                                                                            |
+| **History**                  | Audit feed of everything the app and Claude did, per project.                                                                                                                                                                                                      |
 
 ## Where things live
 
@@ -131,11 +192,39 @@ because that is where Claude Code looks for user-level skills (`CLAUDE_SKILLS_DI
 
 ## Configuration
 
-| Layer | Where | Examples |
-|---|---|---|
-| Infrastructure | `.env`, read at boot | `PORT`, `WEB_PORT`, `CLAUDE_STATION_DATA`, `CLAUDE_SKILLS_DIR`, `MCP_TOOL_TIMEOUT` |
-| Behaviour | Settings page → `app_settings` table | approval timeout, parallel-turn cap, repo lock, IDE command, log tail sizes, worktree default |
-| Per project | project detail → DB | repo paths, labels, descriptions, build/test commands, env sets |
+| Layer          | Where                                | Examples                                                                                           |
+| -------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Infrastructure | `.env`, read at boot                 | `PORT`, `WEB_PORT`, `STATION_HOST`, `CLAUDE_STATION_DATA`, `CLAUDE_SKILLS_DIR`, `MCP_TOOL_TIMEOUT` |
+| Behaviour      | Settings page → `app_settings` table | approval timeout, parallel-turn cap, repo lock, IDE command, log tail sizes, worktree default      |
+| Per project    | project detail → DB                  | repo paths, labels, descriptions, build/test commands, env sets                                    |
+
+### Local domain
+
+`http://localhost:5173` is a poor address for something you keep open all day. On macOS, one setup
+gives it a real one:
+
+```sh
+sudo npm run setup:host      # → http://claude.station
+```
+
+It adds a `/etc/hosts` alias for `127.0.0.1`, and a pf rule redirecting port 80 on loopback to the
+dev server — that is what removes the port from the URL without running Vite as root. A launchd job
+reloads the rule at boot. Then set `STATION_HOST=claude.station` in `.env` so the server whitelists
+the new Origin and prints the matching token link.
+
+Nothing becomes reachable from the network: the alias points at loopback and the server still binds
+to `127.0.0.1`.
+
+The alias then becomes the only way in. While the redirect is installed, `http://127.0.0.1:5173` and
+`http://localhost:5173` stop answering: pf owns that port as its redirect target, and reverse-
+translates the replies of a direct connection as if they belonged to a redirected one. Vite still
+prints its own `http://127.0.0.1:5173/` line at startup — ignore it and use the URL the server
+prints. `sudo npm run teardown:host` gives the direct address back.
+
+Two things worth knowing. Port 80 can only point at one place, and the default is the dev server —
+for `npm start` instead, run `sudo bash scripts/setup-host.sh --port 3789`. And a major macOS
+upgrade can reset `/etc/pf.conf`; re-running the setup fixes it, the script is idempotent. Undo it
+all with `sudo npm run teardown:host`.
 
 ## Platform support
 
@@ -153,6 +242,9 @@ npm run build       # build the web app
 npm start           # production, single port
 npm run db:generate # regenerate drizzle migrations after a schema change
 npm run fix:pty     # re-apply +x on node-pty's spawn-helper
+
+sudo npm run setup:host     # macOS: serve the UI at http://claude.station
+sudo npm run teardown:host  # remove it again
 ```
 
 ## Troubleshooting
@@ -166,7 +258,7 @@ check.
 changed, or `data/.token` was regenerated. Reopen the URL the server printed, or paste the token in.
 
 **"Another session is already working in this repo."** Two Claude sessions must not write the same
-working tree. Wait, or create the session with *own git worktree* checked — it gets its own checkout
+working tree. Wait, or create the session with _own git worktree_ checked — it gets its own checkout
 under `data/worktrees/`.
 
 ---

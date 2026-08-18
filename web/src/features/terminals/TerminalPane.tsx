@@ -5,20 +5,21 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { wsUrl } from "@/lib/token";
 
+/** Mirrors the M3 tokens in index.css — the terminal is a surface too. */
 const THEME = {
-  background: "#0e1013",
-  foreground: "#e7e9ee",
-  cursor: "#2dd4bf",
-  selectionBackground: "#2dd4bf40",
-  black: "#15181d",
-  brightBlack: "#5c6270",
-  red: "#fb7185",
-  green: "#34d399",
-  yellow: "#fbbf24",
-  blue: "#60a5fa",
-  magenta: "#a78bfa",
-  cyan: "#2dd4bf",
-  white: "#e7e9ee",
+  background: "#1c1c1d",
+  foreground: "#f2f2f3",
+  cursor: "#3fd898",
+  selectionBackground: "#3fd89840",
+  black: "#252527",
+  brightBlack: "#7b7b7d",
+  red: "#ff6259",
+  green: "#3fd898",
+  yellow: "#ffb020",
+  blue: "#5aa9ff",
+  magenta: "#b79cf8",
+  cyan: "#5ad8c0",
+  white: "#ffffff",
 };
 
 interface Props {
@@ -109,8 +110,7 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
         if (typeof event.data === "string") {
           try {
             const msg = JSON.parse(event.data) as
-              | { t: "exit"; code: number | null }
-              | { t: "error"; message: string };
+              { t: "exit"; code: number | null } | { t: "error"; message: string };
             if (msg.t === "exit") {
               closedByServer = true;
               term.writeln(`\r\n\x1b[90m[process exited with code ${msg.code ?? "?"}]\x1b[0m`);

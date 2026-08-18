@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, ExternalLink, Pencil, Trash2 } from "lucide-react";
+import { ChevronRight, ExternalLink, Pencil, Trash2 } from "@/components/ui/icons";
 import type { ChatSession, EnvSet } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
@@ -109,8 +109,7 @@ export function ProjectDetailPage({ projectId: id }: { projectId: string }) {
 
   // Closing a workspace tab archives its session — history stays, tab goes.
   const closeWorkspace = useMutation({
-    mutationFn: (sessionId: string) =>
-      api.patch(`/api/sessions/${sessionId}`, { archived: true }),
+    mutationFn: (sessionId: string) => api.patch(`/api/sessions/${sessionId}`, { archived: true }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["sessions", id] }),
   });
 
@@ -128,17 +127,20 @@ export function ProjectDetailPage({ projectId: id }: { projectId: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-edge px-6 pt-4">
-        <div className="mb-2 flex items-center gap-1.5 text-xs text-ink-muted">
-          <Link to="/projects" className="hover:text-ink">
+      <div className="border-b border-hairline px-6 pt-4 pb-3">
+        <div className="m3-label-md mb-2 flex items-center gap-1 text-ink-muted">
+          <Link
+            to="/projects"
+            className="rounded-pill px-1 transition-colors duration-150 hover:text-ink"
+          >
             Projects
           </Link>
-          <ChevronRight size={12} />
+          <ChevronRight size={16} />
           <span className="text-ink">{project.name}</span>
         </div>
         <div className="mb-3 flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-lg font-semibold">{project.name}</h1>
+            <h1 className="m3-headline-sm truncate">{project.name}</h1>
             {project.description && (
               // The description is context for Claude, not for the human every
               // visit — one clamped line, click to unfold when actually needed.
@@ -170,7 +172,7 @@ export function ProjectDetailPage({ projectId: id }: { projectId: string }) {
                         title={`Open ${p.label} on GitHub`}
                         className="text-ink-faint hover:text-ink"
                       >
-                        <ExternalLink size={11} />
+                        <ExternalLink size={16} />
                       </a>
                     )}
                   </span>
@@ -180,7 +182,7 @@ export function ProjectDetailPage({ projectId: id }: { projectId: string }) {
           </div>
           <div className="flex items-center gap-1">
             <Button size="sm" variant="ghost" onClick={() => setEditOpen(true)}>
-              <Pencil size={13} /> Edit
+              <Pencil size={16} /> Edit
             </Button>
             <Button
               size="icon"
@@ -190,7 +192,7 @@ export function ProjectDetailPage({ projectId: id }: { projectId: string }) {
               className="hover:text-err"
               onClick={() => setDeleteOpen(true)}
             >
-              <Trash2 size={14} />
+              <Trash2 size={16} />
             </Button>
           </div>
         </div>
@@ -253,7 +255,12 @@ export function ProjectDetailPage({ projectId: id }: { projectId: string }) {
         {tab === "history" && <HistoryTab projectId={project.id} />}
       </div>
 
-      <ProjectFormDialog key={`${project.id}-${editOpen}`} open={editOpen} onClose={() => setEditOpen(false)} project={project} />
+      <ProjectFormDialog
+        key={`${project.id}-${editOpen}`}
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        project={project}
+      />
       <DeleteProjectDialog
         project={project}
         open={deleteOpen}

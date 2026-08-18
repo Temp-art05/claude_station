@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "@/components/ui/icons";
 import type { Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -45,8 +45,8 @@ export function DeleteProjectDialog({
         <TriangleAlert size={18} className="mt-0.5 shrink-0 text-err" />
         <div className="space-y-3">
           <p className="text-sm">
-            Delete <span className="font-medium">{project.name}</span> and everything it holds?
-            This cannot be undone.
+            Delete <span className="font-medium">{project.name}</span> and everything it holds? This
+            cannot be undone.
           </p>
           <ul className="list-disc space-y-1 pl-4 text-xs text-ink-muted">
             <li>Running terminals and commands are killed</li>

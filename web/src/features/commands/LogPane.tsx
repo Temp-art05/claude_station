@@ -86,7 +86,7 @@ export function LogPane({ runId }: { runId: string }) {
       <div ref={hostRef} className="min-h-0 flex-1 bg-[#0e1013] px-2 py-1.5" />
       {exitCode !== undefined && (
         <div
-          className={`border-t border-edge px-3 py-1.5 font-mono text-[11px] ${
+          className={`border-t border-hairline px-3.5 py-2 font-mono m3-label-sm ${
             exitCode === 0 ? "text-ok" : "text-err"
           }`}
         >

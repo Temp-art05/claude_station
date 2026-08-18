@@ -1,3 +1,5 @@
+import { Brain } from "@/components/ui/icons";
+import { PageHeader } from "@/components/ui/page-header";
 import { MemoryTab } from "@/features/memory/MemoryTab";
 
 /**
@@ -9,7 +11,7 @@ export function MemoryPage() {
   return (
     <div className="mx-auto flex h-full max-w-4xl flex-col px-0 py-6">
       <div className="px-6">
-        <h1 className="mb-1 text-lg font-semibold">Memory</h1>
+        <PageHeader title="Memory" icon={Brain} className="mb-4" />
       </div>
       <MemoryTab projectId={null} />
     </div>
