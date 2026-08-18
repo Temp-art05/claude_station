@@ -257,11 +257,103 @@ export function revertFiles(cwd: string, files: string[]): void {
 }
 
 /** Tracked + untracked-but-not-ignored paths — what the project tree shows. */
-export function listFiles(cwd: string, cap = 30_000): { files: string[]; truncated: boolean } {
-  if (!isGitRepo(cwd)) return { files: [], truncated: false };
+export function listFiles(
+  cwd: string,
+  cap = 30_000,
+): { files: string[]; ignored: string[]; truncated: boolean } {
+  if (!isGitRepo(cwd)) return { files: [], ignored: [], truncated: false };
   const out = git(cwd, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
   const files = out.split("\0").filter(Boolean).sort();
-  return { files: files.slice(0, cap), truncated: files.length > cap };
+
+  /*
+   * Ignored files are listed separately, because `--exclude-standard` above hides
+   * them and `.env` is exactly the file people come to this tree to read.
+   *
+   * `--directory` is what makes this safe: an ignored directory collapses to one
+   * entry (`node_modules/`, `.next/`) instead of expanding to tens of thousands
+   * of paths. Those directory entries are then dropped — opening `node_modules/`
+   * buys nothing, and walking into it is the flood the flag exists to prevent.
+   */
+  const ignoredOut = git(cwd, [
+    "ls-files",
+    "-z",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+  ]);
+  const ignored = ignoredOut
+    .split("\0")
+    .filter((f) => f && !f.endsWith("/"))
+    .sort();
+
+  return {
+    files: files.slice(0, cap),
+    ignored: ignored.slice(0, cap),
+    truncated: files.length > cap || ignored.length > cap,
+  };
+}
+
+export interface SearchHit {
+  path: string;
+  line: number;
+  text: string;
+}
+
+/**
+ * One query, two answers: paths that contain it and lines that contain it. The
+ * caller types a single word and shouldn't have to declare up front whether it
+ * means a filename or a string in the code.
+ */
+export function searchRepo(
+  cwd: string,
+  query: string,
+  limit = 200,
+): { files: string[]; matches: SearchHit[] } {
+  const q = query.trim();
+  // One letter would grep the whole repo for nothing useful.
+  if (q.length < 2 || !isGitRepo(cwd)) return { files: [], matches: [] };
+
+  const needle = q.toLowerCase();
+  const { files, ignored } = listFiles(cwd);
+  const byName = [...files, ...ignored]
+    .filter((f) => f.toLowerCase().includes(needle))
+    .slice(0, limit);
+
+  let matches: SearchHit[] = [];
+  try {
+    const out = git(cwd, [
+      "grep",
+      "-n", // line numbers
+      "-I", // never match inside a binary file
+      "-F", // a literal string: `print(` must not be read as a regex
+      "-i",
+      "--untracked", // a file added but not committed is still yours to search
+      "-m",
+      "20", // one minified bundle must not swallow the whole result set
+      "-e",
+      q,
+    ]);
+    matches = out
+      .split("\n")
+      .filter(Boolean)
+      .slice(0, limit)
+      .map((row) => {
+        // path:line:text — a path may itself contain ':' so only split twice.
+        const first = row.indexOf(":");
+        const second = row.indexOf(":", first + 1);
+        return {
+          path: row.slice(0, first),
+          line: Number(row.slice(first + 1, second)) || 0,
+          text: row.slice(second + 1).slice(0, 400),
+        };
+      })
+      .filter((m) => m.path && m.line);
+  } catch {
+    // git grep exits 1 when nothing matched — that is an answer, not a failure.
+  }
+
+  return { files: byName, matches };
 }
 
 export interface BranchInfo {
@@ -330,6 +422,33 @@ export function readTreeFile(cwd: string, file: string, rev: "worktree" | "head"
     // would look unchanged to the guard below while its tail differs.
     hash: sha256(buf),
   };
+}
+
+const RAW_CAP = 25 * 1024 * 1024;
+
+/**
+ * The same file as raw bytes, for what a JSON string cannot carry — images above
+ * all. `readTreeFile` reports those as `binary` with empty content, which is
+ * right for an editor and useless for a preview.
+ */
+export function readTreeFileRaw(
+  cwd: string,
+  file: string,
+  rev: "worktree" | "head",
+): Buffer | null {
+  if (rev === "head") {
+    try {
+      return execFileSync("git", ["show", `HEAD:${file}`], { cwd, maxBuffer: RAW_CAP });
+    } catch {
+      return null; // not in HEAD — a newly added file
+    }
+  }
+  const abs = join(cwd, file);
+  if (!existsSync(abs) || !statSync(abs).isFile()) return null;
+  if (statSync(abs).size > RAW_CAP) {
+    throw badRequest(`File is larger than ${RAW_CAP / 1024 / 1024} MB`);
+  }
+  return readFileSync(abs);
 }
 
 /**

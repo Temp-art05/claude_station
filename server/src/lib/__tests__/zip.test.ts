@@ -41,14 +41,14 @@ describe("contentDisposition", () => {
     const header = contentDisposition("Trợ lý", ".zip");
     expect(header).toContain('filename="Tr-l.zip"');
     expect(header).toContain("filename*=UTF-8''");
-    expect(decodeURIComponent(header.split("UTF-8''")[1])).toBe("Trợ lý.zip");
+    expect(decodeURIComponent(header.split("UTF-8''")[1]!)).toBe("Trợ lý.zip");
   });
 
   it("cannot inject a header field or a path", () => {
     const header = contentDisposition('evil"\r\nX-Injected: 1', ".yaml");
     expect(header).not.toMatch(/[\r\n"]X/);
-    expect(header.split("UTF-8''")[1]).not.toMatch(/[\r\n"]/);
-    expect(decodeURIComponent(contentDisposition("a/../b", ".zip").split("UTF-8''")[1])).toBe(
+    expect(header.split("UTF-8''")[1]!).not.toMatch(/[\r\n"]/);
+    expect(decodeURIComponent(contentDisposition("a/../b", ".zip").split("UTF-8''")[1]!)).toBe(
       "a-..-b.zip",
     );
   });

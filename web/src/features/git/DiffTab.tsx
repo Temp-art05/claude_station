@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
@@ -12,24 +12,31 @@ import {
   Eye,
   FileDiff,
   FilePlus,
+  FileText,
   FolderPlus,
   LocateFixed,
   Pencil,
   RotateCcw,
   Rows3,
+  Search,
   Trash2,
-} from "lucide-react";
+  X,
+} from "@/components/ui/icons";
 import type { Project } from "@claude-station/shared";
+import { useConfirm } from "@/components/ui/confirm";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
 import { Splitter } from "@/components/ui/Splitter";
 import { usePanelActive } from "@/components/KeepAlive";
 import { api, ApiError } from "@/lib/api";
 import { projectKey, useUiDraft, useUiSet, useUiState } from "@/lib/uiStore";
+import { fileUrl } from "@/lib/upload";
 import { useScrollMemory } from "@/lib/useScrollMemory";
 import { cn } from "@/lib/utils";
 import { AUTOSAVE_MS, shouldAutosave } from "./autosave";
 import { BranchMenu } from "./BranchMenu";
+import { androidVectorToSvg, svgDataUrl } from "./androidVector";
 import { FileTree } from "./FileTree";
 import { MarkdownView } from "./MarkdownView";
 import { SideBySideDiff, splitHunks } from "./SideBySideDiff";
@@ -42,10 +49,17 @@ interface StatusResponse {
   files: { path: string; status: string; staged: boolean }[];
 }
 
+interface SearchResponse {
+  files: string[];
+  matches: { path: string; line: number; text: string }[];
+}
+
 interface TreeResponse {
   cwd: string;
   isRepo: boolean;
   files: string[];
+  /** Listed but dimmed — `.env` and friends, which git is ignoring. */
+  ignored: string[];
   truncated: boolean;
 }
 
@@ -97,7 +111,7 @@ function UnifiedDiff({ patch }: { patch: string }) {
     return <p className="p-4 text-xs text-ink-faint">No changes against HEAD.</p>;
   }
   return (
-    <pre className="scroll-x h-full overflow-auto bg-base px-3 py-2 font-mono text-[11.5px] leading-relaxed">
+    <pre className="scroll-x h-full overflow-auto bg-base px-3 py-2 font-mono m3-label-md leading-relaxed">
       {patch.split("\n").map((line, i) => (
         <div
           key={i}
@@ -115,14 +129,154 @@ function UnifiedDiff({ patch }: { patch: string }) {
   );
 }
 
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"]);
+
+/** SVG is left out on purpose: it is text, and its source is the useful view. */
+function isImagePath(path: string): boolean {
+  return IMAGE_EXTENSIONS.has(path.slice(path.lastIndexOf(".") + 1).toLowerCase());
+}
+
+/**
+ * `<img>` cannot send the token header, so the bytes endpoint takes it as `?t=`
+ * — the same deal the knowledge downloads use.
+ */
+function rawSrc(projectId: string, pathId: string, file: string, rev: "worktree" | "head"): string {
+  return fileUrl(
+    `/api/projects/${projectId}/git/file/raw?pathId=${encodeURIComponent(pathId)}` +
+      `&file=${encodeURIComponent(file)}&rev=${rev}`,
+  );
+}
+
+/** One image on the pane's own backdrop, with the "missing on this side" case. */
+function ImagePane({ src, label, missing }: { src: string; label: string; missing?: boolean }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <p className="m3-label-sm border-b border-hairline px-3 py-2 font-semibold text-ink-faint uppercase">
+        {label}
+      </p>
+      <div className="grid min-h-0 flex-1 place-items-center overflow-auto p-4">
+        {missing ? (
+          <p className="m3-body-sm text-ink-faint">— none —</p>
+        ) : (
+          <img
+            src={src}
+            alt={label}
+            className="max-h-full max-w-full object-contain"
+            // A checkerboard would fight the UI; a mid grey shows both a white
+            // logo and a dark one without lying about the image's own background.
+            style={{ backgroundColor: "rgb(255 255 255 / 6%)" }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * SVG and Android vector drawables, drawn instead of dumped as markup. Both go
+ * through `<img>`: a repo file is untrusted input, and an `<img>` neither runs
+ * script inside an SVG nor lets it reach out of the page.
+ */
+function VectorPane({ src, note }: { src: string; note?: string }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="grid min-h-0 flex-1 place-items-center overflow-auto p-6 text-ink">
+        {/* An icon declares its own 14dp and would render 14px. Vectors scale, so
+            the preview is sized by the pane and capped, not by the file. */}
+        <img
+          src={src}
+          alt="Vector preview"
+          className="h-[min(100%,20rem)] w-[min(100%,20rem)] object-contain"
+        />
+      </div>
+      {note && <p className="m3-label-sm border-t border-hairline px-3 py-2 text-warn">{note}</p>}
+    </div>
+  );
+}
+
+/**
+ * One query, two groups: paths that match, then lines that match. Clicking a hit
+ * opens the file; jumping to the exact line needs the editor's scroll API and is
+ * not here yet, so the matching line is printed in full instead.
+ */
+function SearchResults({
+  data,
+  loading,
+  query,
+  ignored,
+  onOpen,
+}: {
+  data?: SearchResponse;
+  loading: boolean;
+  query: string;
+  ignored: Set<string>;
+  onOpen: (path: string) => void;
+}) {
+  if (!data) {
+    return <p className="m3-body-sm px-2 py-2 text-ink-faint">{loading ? "Searching…" : ""}</p>;
+  }
+  if (data.files.length === 0 && data.matches.length === 0) {
+    return <p className="m3-body-sm px-2 py-2 text-ink-faint">No match for “{query}”.</p>;
+  }
+  return (
+    <div className="space-y-2">
+      {data.files.length > 0 && (
+        <div>
+          <p className="m3-label-sm px-2 py-1 font-bold tracking-wide text-ink-faint uppercase">
+            Files · {data.files.length}
+          </p>
+          {data.files.map((path) => (
+            <button
+              key={path}
+              onClick={() => onOpen(path)}
+              title={path}
+              className={cn(
+                "m3-label-md flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left font-mono hover:bg-white/6",
+                ignored.has(path) ? "text-ink-faint italic" : "text-ink-muted",
+              )}
+            >
+              <FileText size={16} className="shrink-0 opacity-60" />
+              <span className="truncate">{path}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {data.matches.length > 0 && (
+        <div>
+          <p className="m3-label-sm px-2 py-1 font-bold tracking-wide text-ink-faint uppercase">
+            Matches · {data.matches.length}
+          </p>
+          {data.matches.map((hit, i) => (
+            <button
+              key={`${hit.path}:${hit.line}:${i}`}
+              onClick={() => onOpen(hit.path)}
+              title={`${hit.path}:${hit.line}`}
+              className="block w-full cursor-pointer rounded-md px-2 py-1 text-left hover:bg-white/6"
+            >
+              <span className="m3-label-sm flex items-center gap-1.5 font-mono text-ink-faint">
+                <span className="truncate">{hit.path}</span>
+                <span className="shrink-0 text-primary">:{hit.line}</span>
+              </span>
+              <span className="m3-label-md block truncate font-mono text-ink-muted">
+                {hit.text.trim()}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Read-only file viewer with line numbers — the tree's editor pane. */
-function FileView({ file }: { file: FileResponse }) {
+function FileView({ file, imageSrc }: { file: FileResponse; imageSrc?: string | null }) {
   if (file.binary) {
+    if (imageSrc) return <ImagePane src={imageSrc} label="Working tree" />;
     return <p className="p-4 text-xs text-ink-faint">Binary file — no preview.</p>;
   }
   const lines = file.content.split("\n");
   return (
-    <div className="h-full overflow-auto bg-base font-mono text-[11.5px] leading-relaxed">
+    <div className="h-full overflow-auto bg-base font-mono m3-label-md leading-relaxed">
       {lines.map((line, i) => (
         <div key={i} className="flex">
           <span className="w-12 shrink-0 border-r border-hairline px-1.5 text-right text-ink-faint select-none">
@@ -132,7 +286,7 @@ function FileView({ file }: { file: FileResponse }) {
         </div>
       ))}
       {file.truncated && (
-        <p className="border-t border-hairline px-3 py-1.5 text-[11px] text-warn">
+        <p className="border-t border-hairline px-3 py-1.5 m3-label-sm text-warn">
           File truncated at 1 MB.
         </p>
       )}
@@ -177,6 +331,7 @@ type Selection =
   | null;
 
 export function DiffTab({ project }: { project: Project }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const panelActive = usePanelActive();
   const ui = (...parts: string[]) => projectKey(project.id, "diff", ...parts);
@@ -195,6 +350,9 @@ export function DiffTab({ project }: { project: Project }) {
   const [sideBySide, setSideBySide] = useUiState(ui("sideBySide"), true);
   const [bottomView, setBottomView] = useUiState<"files" | "history">(ui("bottomView"), "files");
   const [mdSource, setMdSource] = useUiState(ui("mdSource"), false); // .md: preview ⟷ source
+  // Same idea for the two file types a browser can draw but not read usefully.
+  const [vectorSource, setVectorSource] = useUiState(ui("vectorSource"), false);
+  const [query, setQuery] = useUiState(ui("search"), "");
   const [collapsed, setCollapsed] = useUiSet(ui(pathId, "collapsedGroups"));
   // Pane sizes in px — dragged by the user, remembered like every other bit of
   // tab state. Height is for the Changes block; the rest of the column flexes.
@@ -237,6 +395,8 @@ export function DiffTab({ project }: { project: Project }) {
 
   const changes = status?.files ?? [];
   const changedSet = new Set(changes.map((f) => f.path));
+  /** An added image has no HEAD side, a deleted one has no worktree side. */
+  const changeStatusOf = (path: string) => changes.find((f) => f.path === path)?.status ?? "";
   // A restored selection can point at a file that has since been committed or
   // reverted. Derived rather than written back — correcting it with a state
   // update would fight the store on every render. Waits for `status`, so the
@@ -250,6 +410,28 @@ export function DiffTab({ project }: { project: Project }) {
     queryKey: ["git-tree", project.id, pathId],
     queryFn: () => api.get<TreeResponse>(`/api/projects/${project.id}/git/tree?pathId=${pathId}`),
     enabled: !!pathId,
+  });
+  // One flat list so the tree keeps its own sort; the set is what dims them.
+  const ignoredSet = useMemo(() => new Set(tree?.ignored ?? []), [tree?.ignored]);
+  const treeFiles = useMemo(
+    () => [...(tree?.files ?? []), ...(tree?.ignored ?? [])].sort(),
+    [tree?.files, tree?.ignored],
+  );
+
+  // Debounced so a five-letter word doesn't run five greps over the repo.
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+  const searching = debouncedQuery.trim().length >= 2;
+  const { data: search, isFetching: searchLoading } = useQuery({
+    queryKey: ["git-search", project.id, pathId, debouncedQuery],
+    queryFn: () =>
+      api.get<SearchResponse>(
+        `/api/projects/${project.id}/git/search?pathId=${pathId}&q=${encodeURIComponent(debouncedQuery)}`,
+      ),
+    enabled: !!pathId && searching,
   });
 
   const { data: history } = useQuery({
@@ -282,6 +464,7 @@ export function DiffTab({ project }: { project: Project }) {
   });
 
   const fileSelected = selected?.type === "file" ? selected.path : null;
+  const isSvg = !!fileSelected && fileSelected.toLowerCase().endsWith(".svg");
   const { data: fileContent } = useQuery({
     queryKey: ["git-file", project.id, pathId, fileSelected],
     queryFn: () =>
@@ -308,6 +491,18 @@ export function DiffTab({ project }: { project: Project }) {
       ),
     enabled: !!pathId && !!commitSel?.file,
   });
+
+  /*
+   * Android vector drawables are converted here rather than on the server: the
+   * text is already loaded for the editor, and a DOMParser costs nothing next to
+   * a round trip. `null` means "not a vector we understand" — the source view.
+   */
+  const vector = useMemo(() => {
+    if (!fileSelected || !fileContent || fileContent.binary) return null;
+    if (!fileSelected.toLowerCase().endsWith(".xml")) return null;
+    return androidVectorToSvg(fileContent.content);
+  }, [fileSelected, fileContent]);
+  const vectorPreview = (isSvg || !!vector) && !vectorSource;
 
   const refreshAll = () => {
     void qc.invalidateQueries({ queryKey: statusKey });
@@ -519,12 +714,13 @@ export function DiffTab({ project }: { project: Project }) {
   // too: right after the rejection the refetch hasn't landed, so the hashes still
   // look equal even though the server just told us otherwise.
   const conflicted =
-    dirty && ((!!fileContent && fileContent.hash !== dirtyBuf.baseHash) || !!conflictPaths[fileSelected!]);
+    dirty &&
+    ((!!fileContent && fileContent.hash !== dirtyBuf.baseHash) || !!conflictPaths[fileSelected!]);
   const onEditorChange = (text: string) => {
     if (!fileSelected) return;
     setBuffers((prev) => ({
       ...prev,
-      [fileSelected]: { text, baseHash: prev[fileSelected]?.baseHash ?? (fileContent?.hash ?? "") },
+      [fileSelected]: { text, baseHash: prev[fileSelected]?.baseHash ?? fileContent?.hash ?? "" },
     }));
   };
 
@@ -581,17 +777,15 @@ export function DiffTab({ project }: { project: Project }) {
 
   const askDelete = (paths: string[]) => {
     const what = paths.length === 1 ? paths[0] : `${paths.length} unversioned files`;
-    if (
-      confirm(
-        `Delete ${what} from disk?\n\nUnversioned files have no committed version to restore from — this cannot be undone.`,
-      )
-    ) {
-      deleteUnversioned.mutate(paths);
-    }
+    void confirm({
+      title: `Delete ${what} from disk?`,
+      body: "Unversioned files have no committed version to restore from — this cannot be undone.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    }).then((ok) => ok && deleteUnversioned.mutate(paths));
   };
 
-  const selectedIsUntracked =
-    !!changeSelected && untracked.some((f) => f.path === changeSelected);
+  const selectedIsUntracked = !!changeSelected && untracked.some((f) => f.path === changeSelected);
 
   // Del/Backspace on the selected row. Scoped to unversioned files on purpose:
   // tracked files already have Rollback, and a mistyped key should never be able
@@ -630,7 +824,9 @@ export function DiffTab({ project }: { project: Project }) {
       }}
       className={cn(
         "group flex items-center gap-1.5 rounded-md px-1.5 py-0.5",
-        changeSelected === f.path ? "bg-surface-3" : "hover:bg-surface-2",
+        changeSelected === f.path
+          ? "bg-secondary-container text-on-secondary-container"
+          : "hover:bg-white/6",
       )}
     >
       <input
@@ -641,7 +837,7 @@ export function DiffTab({ project }: { project: Project }) {
       />
       <span
         className={cn(
-          "w-3 shrink-0 text-center font-mono text-[10px] font-bold",
+          "w-3 shrink-0 text-center font-mono m3-label-sm font-bold",
           STATUS_TONE[f.status[0] ?? ""] ?? "text-ink-muted",
         )}
       >
@@ -649,7 +845,7 @@ export function DiffTab({ project }: { project: Project }) {
       </span>
       <button
         onClick={() => setSelected({ type: "change", path: f.path })}
-        className="min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-[11px]"
+        className="min-w-0 flex-1 cursor-pointer truncate text-left font-mono m3-label-sm"
         title={f.path}
       >
         <span className="text-ink">{f.path.split("/").pop()}</span>
@@ -669,7 +865,7 @@ export function DiffTab({ project }: { project: Project }) {
             title="Add to VCS"
             onClick={() => addToVcs.mutate([f.path])}
           >
-            <FilePlus size={11} />
+            <FilePlus size={16} />
           </Button>
           <Button
             size="icon"
@@ -678,7 +874,7 @@ export function DiffTab({ project }: { project: Project }) {
             title="Delete from disk (Del)"
             onClick={() => askDelete([f.path])}
           >
-            <Trash2 size={11} />
+            <Trash2 size={16} />
           </Button>
         </>
       ) : (
@@ -688,12 +884,15 @@ export function DiffTab({ project }: { project: Project }) {
           className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
           title="Rollback — discard changes to this file"
           onClick={() => {
-            if (confirm(`Discard local changes to ${f.path}? This cannot be undone.`)) {
-              revert.mutate([f.path]);
-            }
+            void confirm({
+              title: `Discard local changes to ${f.path}?`,
+              body: "This cannot be undone.",
+              confirmLabel: "Discard",
+              tone: "danger",
+            }).then((ok) => ok && revert.mutate([f.path]));
           }}
         >
-          <RotateCcw size={11} />
+          <RotateCcw size={16} />
         </Button>
       )}
     </div>
@@ -721,7 +920,7 @@ export function DiffTab({ project }: { project: Project }) {
           className="cursor-pointer text-ink-faint hover:text-ink"
           title={isCollapsed ? "Expand" : "Collapse"}
         >
-          {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+          {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
         </button>
         <TriCheckbox
           checked={allChecked}
@@ -729,7 +928,7 @@ export function DiffTab({ project }: { project: Project }) {
           onToggle={() => toggleGroup(paths, allChecked)}
           title={allChecked ? "Uncheck all in this group" : "Check all in this group"}
         />
-        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-ink">{name}</span>
+        <span className="min-w-0 flex-1 truncate m3-label-md font-medium text-ink">{name}</span>
         <Badge>{files.length}</Badge>
         {extra}
       </div>
@@ -739,24 +938,16 @@ export function DiffTab({ project }: { project: Project }) {
   return (
     <div className="flex h-full min-h-0">
       {/* ── Left: repo + branch, changes + commit, files / history ────────── */}
-      <div
-        className="flex shrink-0 flex-col border-r border-edge"
-        style={{ width: colWidth }}
-      >
+      <div className="flex shrink-0 flex-col border-r border-edge" style={{ width: colWidth }}>
         <div className="space-y-1.5 border-b border-hairline p-3 pb-2">
-          <select
+          <Select
+            className="w-full"
             value={pathId}
             // Selection, unchecks and commit message are keyed by repo path, so
             // switching repos reveals that repo's own state instead of clearing.
-            onChange={(e) => setPathId(e.target.value)}
-            className="h-7 w-full rounded-md border border-edge bg-surface px-2 text-xs text-ink"
-          >
-            {project.paths.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+            onChange={setPathId}
+            options={project.paths.map((p) => ({ value: p.id, label: p.label }))}
+          />
           <div className="flex items-center gap-1.5">
             <div className="min-w-0 flex-1">
               <BranchMenu
@@ -767,14 +958,14 @@ export function DiffTab({ project }: { project: Project }) {
               />
             </div>
             {status?.branch && status.branch.ahead > 0 && (
-              <span className="inline-flex shrink-0 items-center text-[11px] text-ok">
-                <ArrowUp size={10} />
+              <span className="inline-flex shrink-0 items-center m3-label-sm text-ok">
+                <ArrowUp size={16} />
                 {status.branch.ahead}
               </span>
             )}
             {status?.branch && status.branch.behind > 0 && (
-              <span className="inline-flex shrink-0 items-center text-[11px] text-warn">
-                <ArrowDown size={10} />
+              <span className="inline-flex shrink-0 items-center m3-label-sm text-warn">
+                <ArrowDown size={16} />
                 {status.branch.behind}
               </span>
             )}
@@ -802,7 +993,9 @@ export function DiffTab({ project }: { project: Project }) {
               onClick={() => setSelected(null)}
               className={cn(
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-medium",
-                selected === null ? "bg-surface-3" : "hover:bg-surface-2",
+                selected === null
+                  ? "bg-secondary-container text-on-secondary-container"
+                  : "hover:bg-white/6",
               )}
             >
               All changes
@@ -812,7 +1005,10 @@ export function DiffTab({ project }: { project: Project }) {
             {/* No dot = the watcher never came up and the 20s poll is carrying
                 the tab. Worth showing: it explains a laggy list. */}
             {!watching && panelActive && (
-              <span className="shrink-0 text-[10px] text-ink-faint" title="Live watch unavailable — refreshing every 20s">
+              <span
+                className="shrink-0 m3-label-sm text-ink-faint"
+                title="Live watch unavailable — refreshing every 20s"
+              >
                 poll
               </span>
             )}
@@ -826,7 +1022,7 @@ export function DiffTab({ project }: { project: Project }) {
                 if (name) createList.mutate(name);
               }}
             >
-              <FolderPlus size={12} />
+              <FolderPlus size={16} />
             </Button>
           </div>
 
@@ -867,7 +1063,7 @@ export function DiffTab({ project }: { project: Project }) {
                             if (name && name !== g.name) renameList.mutate({ id: g.id, name });
                           }}
                         >
-                          <Pencil size={10} />
+                          <Pencil size={16} />
                         </Button>
                         <Button
                           size="icon"
@@ -876,7 +1072,7 @@ export function DiffTab({ project }: { project: Project }) {
                           title="Delete changelist (files are not touched)"
                           onClick={() => deleteList.mutate(g.id)}
                         >
-                          <Trash2 size={10} />
+                          <Trash2 size={16} />
                         </Button>
                       </span>
                     ) : null,
@@ -885,9 +1081,7 @@ export function DiffTab({ project }: { project: Project }) {
                     <div className="pl-3">
                       {g.files.map((f) => fileRow(f, g.id))}
                       {empty && (
-                        <p className="px-2 py-0.5 text-[10.5px] text-ink-faint">
-                          Drag files here.
-                        </p>
+                        <p className="px-2 py-0.5 m3-label-sm text-ink-faint">Drag files here.</p>
                       )}
                     </div>
                   )}
@@ -904,7 +1098,7 @@ export function DiffTab({ project }: { project: Project }) {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-5 shrink-0 px-1.5 text-[10px]"
+                    className="h-5 shrink-0 px-1.5 m3-label-sm"
                     title="Add every unversioned file to VCS"
                     onClick={() => addToVcs.mutate(untracked.map((f) => f.path))}
                   >
@@ -924,10 +1118,10 @@ export function DiffTab({ project }: { project: Project }) {
               onChange={(e) => setMessage(e.target.value)}
               placeholder="Commit message"
               rows={2}
-              className="w-full resize-y rounded-md border border-edge bg-surface px-2 py-1.5 font-mono text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+              className="m3-body-sm w-full resize-y rounded-md px-2.5 py-1.5 font-mono placeholder:text-ink-faint border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none"
             />
             <div className="flex items-center gap-2">
-              <label className="flex cursor-pointer items-center gap-1 text-[11px] text-ink-muted">
+              <label className="flex cursor-pointer items-center gap-1 m3-label-sm text-ink-muted">
                 <input
                   type="checkbox"
                   checked={amend}
@@ -936,11 +1130,11 @@ export function DiffTab({ project }: { project: Project }) {
                 />
                 Amend
               </label>
-              <span className="ml-auto text-[10.5px] text-ink-faint">
+              <span className="ml-auto m3-label-sm text-ink-faint">
                 {checkedFiles.length}/{changes.length} files
               </span>
               <Button size="sm" disabled={!canCommit} onClick={() => doCommit.mutate(false)}>
-                <Check size={12} /> Commit
+                <Check size={16} /> Commit
               </Button>
               <Button
                 size="sm"
@@ -954,7 +1148,7 @@ export function DiffTab({ project }: { project: Project }) {
             {notice && (
               <p
                 className={cn(
-                  "text-[10.5px]",
+                  "m3-label-sm",
                   // A success line is short, so clipping it is fine. git's failures
                   // carry the fix in their tail ("run 'git branch -D …'"), which a
                   // single truncated line hid completely.
@@ -970,13 +1164,7 @@ export function DiffTab({ project }: { project: Project }) {
           </div>
         </div>
 
-        <Splitter
-          axis="y"
-          size={changesHeight}
-          onResize={setChangesHeight}
-          min={140}
-          max={700}
-        />
+        <Splitter axis="y" size={changesHeight} onResize={setChangesHeight} min={140} max={700} />
 
         {/* Bottom: project files ⟷ history */}
         <div className="flex items-center gap-1 px-3 pt-1.5 pb-0.5">
@@ -985,18 +1173,55 @@ export function DiffTab({ project }: { project: Project }) {
               key={v}
               onClick={() => setBottomView(v)}
               className={cn(
-                "cursor-pointer rounded-pill px-2 py-0.5 text-[10.5px] font-bold tracking-wide uppercase",
-                bottomView === v ? "bg-white/8 text-ink" : "text-ink-faint hover:text-ink-muted",
+                "m3-label-sm cursor-pointer rounded-pill px-2.5 py-1 font-bold tracking-wide uppercase",
+                "transition-colors duration-150",
+                bottomView === v
+                  ? "bg-inverse-surface text-on-inverse-surface"
+                  : "text-ink-faint hover:text-ink-muted",
               )}
             >
               {v === "files" ? `Project files${tree?.truncated ? " (truncated)" : ""}` : "History"}
             </button>
           ))}
+          {bottomView === "files" && (
+            <div className="relative ml-auto min-w-0 flex-1">
+              <Search
+                size={16}
+                className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-ink-faint"
+              />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+                placeholder="Find file or text…"
+                title="Matches file paths and, from two characters up, file contents"
+                className="m3-body-sm h-7 w-full rounded-pill border border-outline/40 bg-white/3 pr-7 pl-8 text-ink placeholder:text-ink-faint focus:border-primary focus:outline-none"
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  className="absolute top-1/2 right-1.5 -translate-y-1/2 cursor-pointer rounded-pill p-0.5 text-ink-faint hover:text-ink"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div ref={bottomScroll} className="min-h-0 flex-1 overflow-y-auto p-1.5 pt-0.5">
-          {bottomView === "files" ? (
+          {bottomView === "files" && searching ? (
+            <SearchResults
+              data={search}
+              loading={searchLoading}
+              query={debouncedQuery}
+              ignored={ignoredSet}
+              onOpen={(path) => setSelected({ type: "file", path })}
+            />
+          ) : bottomView === "files" ? (
             <FileTree
-              files={tree?.files ?? []}
+              files={treeFiles}
+              ignored={ignoredSet}
               selected={fileSelected ?? changeSelected}
               changed={changedSet}
               reveal={reveal}
@@ -1008,23 +1233,23 @@ export function DiffTab({ project }: { project: Project }) {
               {(history?.commits ?? []).map((c) => (
                 <button
                   key={c.hash}
-                  onClick={() =>
-                    setSelected({ type: "commit", hash: c.hash, subject: c.subject })
-                  }
+                  onClick={() => setSelected({ type: "commit", hash: c.hash, subject: c.subject })}
                   className={cn(
                     "flex w-full cursor-pointer items-start gap-1.5 rounded-md px-1.5 py-1 text-left",
-                    commitSel?.hash === c.hash ? "bg-surface-3" : "hover:bg-surface-2",
+                    commitSel?.hash === c.hash
+                      ? "bg-secondary-container text-on-secondary-container"
+                      : "hover:bg-white/6",
                   )}
                 >
                   <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent/60" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11.5px] text-ink">{c.subject}</span>
-                    <span className="block truncate text-[10px] text-ink-faint">
+                    <span className="block truncate m3-label-md text-ink">{c.subject}</span>
+                    <span className="block truncate m3-label-sm text-ink-faint">
                       <span className="font-mono">{c.shortHash}</span> · {c.author} · {c.date}
                       {c.refs.map((r) => (
                         <span
                           key={r}
-                          className="ml-1 rounded-pill border border-accent/30 bg-accent/10 px-1 font-mono text-[9px] text-accent"
+                          className="ml-1 rounded-pill border border-accent/30 bg-accent/10 px-1 font-mono m3-label-sm text-accent"
                         >
                           {r}
                         </span>
@@ -1058,14 +1283,34 @@ export function DiffTab({ project }: { project: Project }) {
                 setReveal((prev) => ({ path: selected.path, nonce: (prev?.nonce ?? 0) + 1 }));
               }}
             >
-              <LocateFixed size={12} />
+              <LocateFixed size={16} />
             </Button>
             {selected.type === "file" && (
               <div className="ml-auto flex items-center gap-1">
                 {fileContent && !editable && (
-                  <span className="text-[10.5px] text-ink-faint">
+                  <span className="m3-label-sm text-ink-faint">
                     {fileContent.binary ? "binary — read only" : "truncated at 1 MB — read only"}
                   </span>
+                )}
+                {(isSvg || vector) && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant={!vectorSource ? "primary" : "ghost"}
+                      onClick={() => setVectorSource(false)}
+                      title="Rendered preview"
+                    >
+                      <Eye size={16} /> Preview
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={vectorSource ? "primary" : "ghost"}
+                      onClick={() => setVectorSource(true)}
+                      title="Editable source"
+                    >
+                      <Code size={16} /> Source
+                    </Button>
+                  </>
                 )}
                 {selected.path.toLowerCase().endsWith(".md") && (
                   <>
@@ -1075,7 +1320,7 @@ export function DiffTab({ project }: { project: Project }) {
                       onClick={() => setMdSource(false)}
                       title="Rendered preview"
                     >
-                      <Eye size={12} /> Preview
+                      <Eye size={16} /> Preview
                     </Button>
                     <Button
                       size="sm"
@@ -1083,7 +1328,7 @@ export function DiffTab({ project }: { project: Project }) {
                       onClick={() => setMdSource(true)}
                       title="Editable source"
                     >
-                      <Code size={12} /> Source
+                      <Code size={16} /> Source
                     </Button>
                   </>
                 )}
@@ -1103,7 +1348,7 @@ export function DiffTab({ project }: { project: Project }) {
                     title="Open this file in the editor"
                     onClick={() => setSelected({ type: "file", path: selected.path })}
                   >
-                    <Pencil size={12} /> Edit
+                    <Pencil size={16} /> Edit
                   </Button>
                   <Button
                     size="sm"
@@ -1111,7 +1356,7 @@ export function DiffTab({ project }: { project: Project }) {
                     onClick={() => setSideBySide(true)}
                     title="Side-by-side"
                   >
-                    <Columns2 size={12} />
+                    <Columns2 size={16} />
                   </Button>
                   <Button
                     size="sm"
@@ -1119,7 +1364,7 @@ export function DiffTab({ project }: { project: Project }) {
                     onClick={() => setSideBySide(false)}
                     title="Unified"
                   >
-                    <Rows3 size={12} />
+                    <Rows3 size={16} />
                   </Button>
                 </div>
               </>
@@ -1134,15 +1379,13 @@ export function DiffTab({ project }: { project: Project }) {
                 variant="ghost"
                 onClick={() => setSelected({ ...commitSel, file: undefined })}
               >
-                <ArrowLeft size={12} /> files
+                <ArrowLeft size={16} /> files
               </Button>
             )}
-            <span className="font-mono text-[11px] text-accent">
-              {commitSel.hash.slice(0, 10)}
-            </span>
+            <span className="font-mono m3-label-sm text-accent">{commitSel.hash.slice(0, 10)}</span>
             <span className="min-w-0 truncate text-xs text-ink">{commitSel.subject}</span>
             {commitSel.file && (
-              <span className="truncate font-mono text-[10.5px] text-ink-faint">
+              <span className="truncate font-mono m3-label-sm text-ink-faint">
                 {commitSel.file}
               </span>
             )}
@@ -1163,30 +1406,43 @@ export function DiffTab({ project }: { project: Project }) {
                   <button
                     key={f.path}
                     onClick={() => setSelected({ ...commitSel, file: f.path })}
-                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-surface-2"
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-white/6"
                   >
                     <span
                       className={cn(
-                        "w-3 shrink-0 text-center font-mono text-[10px] font-bold",
+                        "w-3 shrink-0 text-center font-mono m3-label-sm font-bold",
                         STATUS_TONE[f.status] ?? "text-ink-muted",
                       )}
                     >
                       {f.status}
                     </span>
-                    <span className="truncate font-mono text-[11.5px]">{f.path}</span>
+                    <span className="truncate font-mono m3-label-md">{f.path}</span>
                   </button>
                 ))}
               </div>
             )
           ) : fileSelected ? (
             fileContent ? (
-              fileSelected.toLowerCase().endsWith(".md") && !mdSource && !fileContent.binary ? (
+              vectorPreview ? (
+                <VectorPane
+                  src={
+                    isSvg
+                      ? rawSrc(project.id, pathId, fileSelected, "worktree")
+                      : svgDataUrl(vector!.svg)
+                  }
+                  note={
+                    vector?.unresolvedColors
+                      ? "Colours point at @color/… resources this file does not carry — drawn in the pane's text colour."
+                      : undefined
+                  }
+                />
+              ) : fileSelected.toLowerCase().endsWith(".md") && !mdSource && !fileContent.binary ? (
                 <MarkdownView source={fileContent.content} />
               ) : editable ? (
                 <div className="flex h-full min-h-0 flex-col">
                   {conflicted && (
                     <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-3 py-1.5">
-                      <span className="min-w-0 flex-1 text-[11px] text-warn">
+                      <span className="min-w-0 flex-1 m3-label-sm text-warn">
                         This file changed on disk while you were editing it.
                       </span>
                       <Button
@@ -1226,11 +1482,33 @@ export function DiffTab({ project }: { project: Project }) {
                   </div>
                 </div>
               ) : (
-                <FileView file={fileContent} />
+                <FileView
+                  file={fileContent}
+                  imageSrc={
+                    fileSelected && isImagePath(fileSelected)
+                      ? rawSrc(project.id, pathId, fileSelected, "worktree")
+                      : null
+                  }
+                />
               )
             ) : (
               <p className="p-4 text-xs text-ink-faint">Loading…</p>
             )
+          ) : changeSelected && isImagePath(changeSelected) ? (
+            // git's patch for an image says "Binary files differ" and nothing else.
+            // Two panes side by side is the review a person can actually do.
+            <div className="flex h-full min-h-0 divide-x divide-hairline">
+              <ImagePane
+                src={rawSrc(project.id, pathId, changeSelected, "head")}
+                label="HEAD"
+                missing={isUntracked(changeStatusOf(changeSelected))}
+              />
+              <ImagePane
+                src={rawSrc(project.id, pathId, changeSelected, "worktree")}
+                label="Working tree"
+                missing={changeStatusOf(changeSelected).includes("D")}
+              />
+            </div>
           ) : diff ? (
             changeSelected && sideBySide ? (
               <SideBySideDiff
@@ -1239,9 +1517,12 @@ export function DiffTab({ project }: { project: Project }) {
                   const hunks = splitHunks(diff.patch);
                   const patch = hunks[i];
                   if (!patch) return;
-                  if (confirm("Rollback this hunk? The change is discarded from your working tree.")) {
-                    revertHunk.mutate(patch);
-                  }
+                  void confirm({
+                    title: "Rollback this hunk?",
+                    body: "The change is discarded from your working tree.",
+                    confirmLabel: "Rollback",
+                    tone: "danger",
+                  }).then((ok) => ok && revertHunk.mutate(patch));
                 }}
               />
             ) : (

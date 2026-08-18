@@ -25,10 +25,12 @@ import {
   pull,
   push,
   readTreeFile,
+  readTreeFileRaw,
   rebase,
   releaseWorktree,
   revertFiles,
   revertHunk,
+  searchRepo,
   status,
   writeTreeFile,
 } from "../services/git";
@@ -40,6 +42,28 @@ const treeQuery = z.object({
   sessionId: z.string().optional(),
   file: z.string().optional(),
 });
+
+/**
+ * Enough of a mime table for what a repo browser previews. Anything unknown is
+ * sent as bytes rather than guessed at.
+ */
+const MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  svg: "image/svg+xml",
+  pdf: "application/pdf",
+};
+
+function contentTypeFor(file: string): string {
+  const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
+  return MIME[ext] ?? "application/octet-stream";
+}
 
 export function gitRoutes(app: FastifyInstance): void {
   app.get<{ Params: { id: string } }>("/api/projects/:id/git/status", async (req) => {
@@ -71,6 +95,50 @@ export function gitRoutes(app: FastifyInstance): void {
     const cwd = resolveTree(id, q);
     assertPathAllowed(`${cwd}/${q.file}`, id);
     return readTreeFile(cwd, q.file, q.rev);
+  });
+
+  /**
+   * The same file as bytes — this is what an image preview reads. An `<img>`
+   * cannot send the token header, so (like the knowledge downloads) this accepts
+   * it as `?t=`; see `fileUrl` on the web side.
+   */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/git/file/raw", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const q = z
+      .object({
+        pathId: z.string().optional(),
+        sessionId: z.string().optional(),
+        file: z.string().min(1),
+        rev: z.enum(["worktree", "head"]).default("worktree"),
+      })
+      .parse(req.query ?? {});
+    const cwd = resolveTree(id, q);
+    assertPathAllowed(`${cwd}/${q.file}`, id);
+    const buf = readTreeFileRaw(cwd, q.file, q.rev);
+    if (!buf) return reply.code(404).send({ error: `No ${q.rev} version of ${q.file}` });
+    return reply
+      .type(contentTypeFor(q.file))
+      .header("Content-Length", String(buf.byteLength))
+      // The worktree copy changes under us constantly; a cached image would show
+      // the version from before the last edit.
+      .header("Cache-Control", "no-store")
+      .send(buf);
+  });
+
+  /** Filenames and file contents in one call — see `searchRepo`. */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/git/search", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const q = z
+      .object({
+        pathId: z.string().optional(),
+        sessionId: z.string().optional(),
+        q: z.string().default(""),
+        limit: z.coerce.number().int().min(1).max(1000).default(200),
+      })
+      .parse(req.query ?? {});
+    const cwd = resolveTree(id, q);
+    assertPathAllowed(cwd, id);
+    return searchRepo(cwd, q.q, q.limit);
   });
 
   /**
