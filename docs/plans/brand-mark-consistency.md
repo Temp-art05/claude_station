@@ -49,6 +49,16 @@ Comment trong file (cả bản trên `main`) chứa `--color-primary` — XML **
 
 → Viết lại comment không còn `--` nào (gọi token là "primary / on-primary tokens from index.css", viết công thức bằng chữ "minus/plus"), và thêm một dòng cảnh báo ngay trong comment để lần sau không tái phạm.
 
+### 4. Vòng 2 — favicon chỉ còn `>_`, bỏ khung cửa sổ
+
+Sau khi đồng bộ, người dùng vẫn thấy icon ở tab **quá bé**: ở 16px thì khung cửa sổ chiếm hết chỗ, `>_` bên trong chỉ còn ~7px và nhoè thành một vệt. Chốt hướng: **favicon bỏ khung cửa sổ, giữ ô bo góc xanh, vẽ mỗi `>_` thật to**; **sidebar giữ nguyên** glyph terminal đầy đủ (ở 40px khung vẫn đọc tốt và đó là mark đầy đủ hơn).
+
+Đây là **chỗ lệch có chủ ý** so với mục tiêu "hai bên giống hệt" ở phần trên — đổi lấy tính đọc được ở 16px. Comment trong `favicon.svg` phải nói rõ điều này.
+
+Cách làm: path `terminal` gồm 4 subpath — khung ngoài, khung trong, chevron `>`, gạch dưới `_`. Bỏ 2 subpath khung, giữ chevron + gạch dưới. Subpath chevron bắt đầu bằng `m221-218` **tương đối** so với điểm cuối của subpath khung trong `(140, -220)`, nên khi bỏ khung phải đổi thành tuyệt đối `M361-438`; subpath gạch dưới vẫn tương đối so với điểm đầu của chevron nên giữ nguyên.
+
+Bbox ink còn lại: x `269.4..710`, y `-572..-288` → rộng 440.6, cao 284, tâm `(489.7, -430)`. Với `scale(0.048)`: ink rộng 21.2px trên ô 32px (**66%**), căn tâm bằng `translate(16 - 489.7s, 16 + 430s)`.
+
 ## Edge case đã cân nhắc
 
 - **`MIN_PX = 16` trong `web/src/components/ui/icon.tsx:20`**: sàn dưới, `size={24}` không bị chạm.
