@@ -61,7 +61,8 @@ Viết lại `glass` / `glass-raised` / `glass-flat` và thêm `liquid`, `liquid
   `1px solid hairline` phẳng.
 - Highlight mép trên (`inset 0 1px 0 rgb(255 255 255/18%)`) + pool sáng radial ở góc trên-trái.
 - `backdrop-filter: blur(24px) saturate(180%) brightness(1.04)`.
-- `liquid-interactive`: hover nâng elevation + quét sheen (`::after` translate) với
+- `liquid-interactive`: hover nâng elevation + quét sheen (`::after` translate — sau đổi sang
+  `background-position`, xem `fix-card-hover-sheen-overflow.md`) với
   `--ease-emphasized-decel`; active `scale(.985)` với `--ease-spring`; state layer dùng
   `--state-hover/--state-press` thay vì `bg-white/6` hard-code.
 - Ambient light `body::before` giữ nhưng đổi sang primary/tertiary container mới, giảm bán kính
