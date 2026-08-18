@@ -26,6 +26,8 @@ export const AGENTS_DIR = join(DATA_DIR, "agents");
 export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
 export const LOGS_DIR = join(DATA_DIR, "logs");
 export const WORKTREES_DIR = join(DATA_DIR, "worktrees");
+/** Workspace-context files a `claude` terminal reads via --append-system-prompt-file. */
+export const TERMINAL_CONTEXT_DIR = join(DATA_DIR, "terminal-context");
 
 /** Where skills get symlinked so Claude Code picks them up at user level. */
 export const CLAUDE_SKILLS_LINK_DIR = (() => {
@@ -48,6 +50,7 @@ export function ensureDataDirs(): void {
     ATTACHMENTS_DIR,
     LOGS_DIR,
     WORKTREES_DIR,
+    TERMINAL_CONTEXT_DIR,
   ]) {
     mkdirSync(dir, { recursive: true });
   }

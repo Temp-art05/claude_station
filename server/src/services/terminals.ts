@@ -1,15 +1,70 @@
 import { asc, eq } from "drizzle-orm";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { TerminalInput, TerminalKind } from "@claude-station/shared";
 import { db, schema } from "../db";
+import { buildClaudeCommand } from "../lib/claude-cli";
+import { TERMINAL_CONTEXT_DIR, projectKnowledgeDir } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import { envVarsFor } from "./env-sets";
 import { createWorktree } from "./git";
+import { attachedAssetDirs } from "./library";
 import * as pty from "./pty-manager";
+import { buildWorkspaceContext } from "./workspace-context";
 
-/** What a claude-kind terminal runs; restart tries to pick the conversation back up. */
-export function claudeCommand(restart: boolean): string {
-  return restart ? "claude --continue || claude" : "claude";
+function terminalContextPath(terminalId: string): string {
+  return join(TERMINAL_CONTEXT_DIR, `${terminalId}.md`);
+}
+
+/**
+ * The CLI has no `systemPrompt.append`, so the workspace context an Agent-SDK chat
+ * session gets inline goes to a file instead and is passed by path. A file also
+ * dodges escaping a multi-line markdown blob through `zsh -c`.
+ * Returns "" when there is nothing to say, so the caller drops the flag.
+ */
+function writeTerminalContext(projectId: string, terminalId: string): string {
+  const context = buildWorkspaceContext(projectId).trim();
+  if (!context) return "";
+  const file = terminalContextPath(terminalId);
+  mkdirSync(TERMINAL_CONTEXT_DIR, { recursive: true });
+  writeFileSync(file, `${context}\n`, "utf8");
+  return file;
+}
+
+export function removeTerminalContext(terminalId: string): void {
+  rmSync(terminalContextPath(terminalId), { force: true });
+}
+
+/**
+ * What a claude-kind terminal runs; restart tries to pick the conversation back up.
+ * With `opts` the CLI also learns what the workspace is — which repo is which, plus
+ * Read access to the paths it is not started in. Called without them it stays the
+ * bare CLI.
+ */
+export function claudeCommand(
+  restart: boolean,
+  opts?: { projectId: string; terminalId: string; cwd: string },
+): string {
+  if (!opts) return buildClaudeCommand(restart);
+
+  // Mirror the chat session's additionalDirectories (claude-session.ts): the other
+  // repos in this project, the knowledge store, and assets attached from the library.
+  const paths = db
+    .select()
+    .from(schema.projectPaths)
+    .where(eq(schema.projectPaths.projectId, opts.projectId))
+    .orderBy(asc(schema.projectPaths.sortOrder))
+    .all();
+
+  return buildClaudeCommand(restart, {
+    contextFile: writeTerminalContext(opts.projectId, opts.terminalId) || undefined,
+    extraDirs: [
+      ...paths.map((p) => p.path).filter((p) => p !== opts.cwd),
+      projectKnowledgeDir(opts.projectId),
+      ...attachedAssetDirs(opts.projectId),
+    ],
+  });
 }
 
 export function resolveCwd(projectId: string, input: { cwdPathId?: string; cwd?: string }): string {
@@ -49,7 +104,11 @@ export function createTerminal(
     cwd,
     env,
     // App agents pass their start command; a claude tab runs the CLI; else plain shell.
-    command: input.command ?? (kind === "claude" ? claudeCommand(false) : undefined),
+    command:
+      input.command ??
+      (kind === "claude"
+        ? claudeCommand(false, { projectId, terminalId: id, cwd })
+        : undefined),
   });
 
   const count = db
