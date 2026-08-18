@@ -77,7 +77,7 @@ export function AppShell() {
       <aside className="liquid flex w-60 shrink-0 flex-col rounded-2xl">
         <div className="flex items-center gap-3 px-4 py-4">
           <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-primary text-on-primary shadow-e2">
-            <TerminalSquare size={20} fill={1} />
+            <TerminalSquare size={24} fill={1} />
           </div>
           <div className="min-w-0">
             <p className="m3-title-lg truncate">Claude Station</p>
