@@ -5,7 +5,13 @@ import { terminalInputSchema, terminalKindSchema } from "@claude-station/shared"
 import { db, schema } from "../db";
 import { TOKEN } from "../lib/auth";
 import { shq } from "../lib/claude-cli";
-import { hasTranscript, removeTranscript } from "../lib/claude-transcript";
+import {
+  hasTranscript,
+  removeTranscript,
+  SESSION_ID,
+  transcriptPath,
+  transcriptsUnder,
+} from "../lib/claude-transcript";
 import { env as config, setting } from "../lib/config";
 import { newId, nowIso } from "../lib/id";
 import { openWith, writeLauncher } from "../lib/open-terminal";
@@ -235,6 +241,103 @@ export function terminalRoutes(app: FastifyInstance): void {
       // Whether continuing will really resume, or just reopen in the same directory.
       .map((t) => ({ ...t, transcript: hasTranscript(t.claudeSessionId) }));
   });
+
+  /**
+   * Conversations the `claude` CLI itself remembers for this project's directories —
+   * including every session run from a real terminal, which the app has no row for.
+   * Read straight off disk rather than from our DB; that is the whole point.
+   */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/cli-sessions", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const { limit } = z
+      .object({ limit: z.coerce.number().int().min(1).max(500).default(100) })
+      .parse(req.query ?? {});
+    const paths = db
+      .select()
+      .from(schema.projectPaths)
+      .where(eq(schema.projectPaths.projectId, id))
+      .all()
+      .map((p) => p.path);
+    const found = transcriptsUnder(paths).slice(0, limit);
+    // Which of them this app already owns, so the UI can say so instead of looking
+    // like a duplicate of the section above it.
+    const owned = new Set(
+      db
+        .select()
+        .from(schema.terminals)
+        .where(eq(schema.terminals.projectId, id))
+        .all()
+        .map((t) => t.claudeSessionId)
+        .filter((sid): sid is string => sid !== null),
+    );
+    return found.map((t) => ({ ...t, adopted: owned.has(t.sessionId) }));
+  });
+
+  /**
+   * Pick a CLI conversation up in the app: a new Claude tab takes that session id as
+   * its own (`--resume`), so from here on it is an ordinary session of this app —
+   * it shows in the list above and its transcript follows it when deleted.
+   */
+  app.post<{ Params: { id: string; sessionId: string } }>(
+    "/api/projects/:id/cli-sessions/:sessionId/continue",
+    async (req, reply) => {
+      const { id: projectId, sessionId } = z
+        .object({ id: z.string(), sessionId: z.string().regex(SESSION_ID) })
+        .parse(req.params);
+      const transcript = transcriptsUnder(
+        db
+          .select()
+          .from(schema.projectPaths)
+          .where(eq(schema.projectPaths.projectId, projectId))
+          .all()
+          .map((p) => p.path),
+      ).find((t) => t.sessionId === sessionId);
+      if (!transcript) {
+        return reply
+          .code(404)
+          .send({ error: "No transcript for that session in this project's directories" });
+      }
+      const row = createTerminal(projectId, {
+        kind: "claude",
+        cwd: transcript.cwd,
+        title: transcript.title.slice(0, 40),
+        resumeSessionId: sessionId,
+      });
+      reply.code(201);
+      return row;
+    },
+  );
+
+  /**
+   * Delete a CLI conversation from disk. No guard of any kind, by request: a session
+   * still running in some other terminal loses its history mid-flight, which is why
+   * the row shows when it was last written to.
+   */
+  app.delete<{ Params: { id: string; sessionId: string } }>(
+    "/api/projects/:id/cli-sessions/:sessionId",
+    async (req, reply) => {
+      // Project-scoped like the two routes above: a transcript belongs to no project
+      // on disk, but the work-history entry has to name the one you deleted it from.
+      const { id: projectId, sessionId } = z
+        .object({ id: z.string(), sessionId: z.string().regex(SESSION_ID) })
+        .parse(req.params);
+      if (!transcriptPath(sessionId)) {
+        return reply.code(404).send({ error: "Transcript not found" });
+      }
+      removeTranscript(sessionId);
+      db.insert(schema.workHistory)
+        .values({
+          id: newId(),
+          projectId,
+          kind: "cli_session_deleted",
+          refId: sessionId,
+          summary: `Deleted the CLI transcript ${sessionId}`,
+          createdAt: nowIso(),
+        })
+        .run();
+      reply.code(204);
+    },
+  );
 
   /**
    * Forget a closed session for good: the row, its workspace-context file, and the

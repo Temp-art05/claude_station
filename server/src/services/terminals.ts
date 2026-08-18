@@ -93,13 +93,19 @@ export function createTerminal(
     command?: string;
     /** Extra env for this PTY only (e.g. workflow progress-report credentials). */
     extraEnv?: Record<string, string>;
+    /**
+     * Adopt an existing `claude` conversation instead of starting one: the row
+     * takes this session id as its own and the CLI resumes it. How a conversation
+     * that ran outside the app becomes a session of the app.
+     */
+    resumeSessionId?: string;
   },
 ) {
   const kind: TerminalKind = input.kind ?? "shell";
   const id = newId();
   // Pinning the CLI to an id of our own is what makes "continue this one" exact
   // later on, and what makes its transcript findable when the row is deleted.
-  const claudeSessionId = kind === "claude" ? randomUUID() : null;
+  const claudeSessionId = kind === "claude" ? (input.resumeSessionId ?? randomUUID()) : null;
   const base = resolveCwd(projectId, input);
   // A worktree cwd lives in data/worktrees/<terminalId>, which path-safety allows.
   const cwd = input.useWorktree ? createWorktree(base, id) : base;
@@ -112,7 +118,12 @@ export function createTerminal(
     command:
       input.command ??
       (kind === "claude"
-        ? claudeCommand(false, { projectId, terminalId: id, cwd, sessionId: claudeSessionId })
+        ? claudeCommand(Boolean(input.resumeSessionId), {
+            projectId,
+            terminalId: id,
+            cwd,
+            sessionId: claudeSessionId,
+          })
         : undefined),
   });
 
