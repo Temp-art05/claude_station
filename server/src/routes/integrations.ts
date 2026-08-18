@@ -188,7 +188,17 @@ export function integrationRoutes(app: FastifyInstance): void {
 
   app.get("/api/github/:owner/:repo/pulls", async (req) => {
     const { owner, repo } = z.object({ owner: z.string(), repo: z.string() }).parse(req.params);
-    return listPulls(`${owner}/${repo}`);
+    // The enum is what keeps an arbitrary string out of `gh`'s argv. The page cap
+    // matters more than it looks: a page is fetched as `--limit page * 30 + 1`, so
+    // an uncapped ?page= would set `gh` crawling GitHub's API for minutes.
+    const { state, q, page } = z
+      .object({
+        state: z.enum(["open", "closed", "all"]).default("open"),
+        q: z.string().max(256).default(""),
+        page: z.coerce.number().int().min(1).max(20).default(1),
+      })
+      .parse(req.query);
+    return listPulls(`${owner}/${repo}`, { state, search: q, page });
   });
 
   app.get("/api/github/:owner/:repo/issues", async (req) => {

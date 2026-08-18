@@ -61,9 +61,55 @@ export interface PullRequest {
   reviewDecision: string;
   /** Logins/team slugs still owing a review — the other half of "needs review". */
   reviewRequests: string[];
+  /** Both empty on an open PR; a merged PR carries both. */
+  mergedAt: string;
+  closedAt: string;
 }
 
-export async function listPulls(repo: string, limit = 30): Promise<PullRequest[]> {
+/** github.com's own split: "closed" is merged *and* closed-unmerged together. */
+export type PullState = "open" | "closed" | "all";
+
+const PER_PAGE = 30;
+
+/**
+ * `gh pr list` has no offset — only `--limit` — so a page is fetched by asking
+ * for everything up to it and slicing. Verified safe: the order is stable across
+ * calls, and a `--limit 16` run's first 8 rows match a `--limit 8` run exactly,
+ * with or without `--search`. Deep pages therefore cost more, which is what
+ * MAX_PAGE in the route is about.
+ */
+export interface ListPullsOptions {
+  state?: PullState;
+  /** Passed verbatim to `--search`, so GitHub qualifiers work. Empty drops the flag. */
+  search?: string;
+  page?: number;
+}
+
+export async function listPulls(
+  repo: string,
+  { state = "open", search = "", page = 1 }: ListPullsOptions = {},
+): Promise<{ items: PullRequest[]; hasMore: boolean }> {
+  const want = page * PER_PAGE;
+  const args = [
+    "pr",
+    "list",
+    "--repo",
+    assertRepo(repo),
+    "--limit",
+    // One row past the page: whether it came back *is* "there's a next page".
+    String(want + 1),
+    "--state",
+    state,
+    "--json",
+    // `gh pr list` is GraphQL-backed, so reviewDecision/reviewRequests and the
+    // merged/closed timestamps all come back in the same call — no per-PR
+    // fan-out (each request forks a `gh` process).
+    "number,title,state,isDraft,author,headRefName,baseRefName,updatedAt,url," +
+      "reviewDecision,reviewRequests,mergedAt,closedAt",
+  ];
+  // Only when non-empty: an empty query would swap created-desc for relevance
+  // order, and `execFile` takes argv, so the text never reaches a shell.
+  if (search.trim()) args.push("--search", search.trim());
   const raw = await gh<
     {
       number: number;
@@ -77,22 +123,11 @@ export async function listPulls(repo: string, limit = 30): Promise<PullRequest[]
       url: string;
       reviewDecision?: string;
       reviewRequests?: { login?: string; slug?: string; name?: string }[];
+      mergedAt?: string | null;
+      closedAt?: string | null;
     }[]
-  >([
-    "pr",
-    "list",
-    "--repo",
-    assertRepo(repo),
-    "--limit",
-    String(limit),
-    "--state",
-    "open",
-    "--json",
-    // `gh pr list` is GraphQL-backed, so reviewDecision/reviewRequests come back
-    // in the same call — no per-PR fan-out (each request forks a `gh` process).
-    "number,title,state,isDraft,author,headRefName,baseRefName,updatedAt,url,reviewDecision,reviewRequests",
-  ]);
-  return raw.map((p) => ({
+  >(args);
+  const items = raw.slice((page - 1) * PER_PAGE, want).map((p) => ({
     ...p,
     author: p.author?.login ?? "unknown",
     reviewDecision: p.reviewDecision ?? "",
@@ -100,7 +135,10 @@ export async function listPulls(repo: string, limit = 30): Promise<PullRequest[]
     reviewRequests: (p.reviewRequests ?? [])
       .map((r) => r.login ?? r.slug ?? r.name ?? "")
       .filter(Boolean),
+    mergedAt: p.mergedAt ?? "",
+    closedAt: p.closedAt ?? "",
   }));
+  return { items, hasMore: raw.length > want };
 }
 
 export interface Issue {
