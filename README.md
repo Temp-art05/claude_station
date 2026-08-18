@@ -164,7 +164,10 @@ prompt in full; the rest are titles Claude fetches on demand.
 ![GitHub](docs/images/github.png)
 
 PRs, issues, branches, releases and a read-only file browser, all through your existing `gh` login —
-no token to paste. Open a PR to review it in place:
+no token to paste. The PR list filters Open / Closed / All the way github.com does, so a merged PR
+stays reachable instead of vanishing, and the search box goes straight to GitHub's own query syntax —
+`author:me`, `is:draft`, `review:required`, or a bare SHA — with Prev/Next past the first 30. Open a
+PR to review it in place:
 
 ![A pull request](docs/images/github-pr.png)
 

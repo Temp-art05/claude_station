@@ -1,25 +1,29 @@
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronLeft,
   ChevronRight,
   ExternalLink,
   File,
   Folder,
   GitPullRequest,
+  Search as SearchIcon,
   Trash2,
 } from "@/components/ui/icons";
 import { normalizeGithubRepo } from "@claude-station/shared";
 import { useConfirm } from "@/components/ui/confirm";
 import { Select } from "@/components/ui/select";
 import { Badge, Card } from "@/components/ui/card";
+import { FilterChip } from "@/components/ui/chip";
 import { EmptyState, PageHeader } from "@/components/ui/page-header";
 import { Button, IconButton } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { authorColor } from "@/lib/authorColor";
-import { globalKey } from "@/lib/uiStore";
+import { globalKey, useUiState } from "@/lib/uiStore";
 import { useUrlPatch, useStickyUrlState, useStickyUrlStateOptional } from "@/lib/useUrlState";
 import { WorkWithClaude } from "@/features/integrations/WorkWithClaude";
 import { PrDetail } from "@/features/integrations/PrDetail";
@@ -27,6 +31,8 @@ import { PrDetail } from "@/features/integrations/PrDetail";
 interface Pull {
   number: number;
   title: string;
+  /** "OPEN" | "CLOSED" | "MERGED". */
+  state: string;
   isDraft: boolean;
   author: string;
   headRefName: string;
@@ -35,6 +41,25 @@ interface Pull {
   url: string;
   reviewDecision: string;
   reviewRequests: string[];
+  mergedAt: string;
+  closedAt: string;
+}
+
+/** github.com's own split: Closed holds merged and closed-unmerged together. */
+const PR_STATES = [
+  { value: "open", label: "Open" },
+  { value: "closed", label: "Closed" },
+  { value: "all", label: "All" },
+] as const;
+
+/**
+ * Mirrors `stateBadge` in PrDetail so a PR doesn't read as merged in one view
+ * and something else in the other. Open PRs get no badge — that's the default.
+ */
+function prStateBadge(pr: Pull): { label: string; tone: "accent" | "err"; date: string } | null {
+  if (pr.state === "MERGED") return { label: "merged", tone: "accent", date: pr.mergedAt };
+  if (pr.state === "CLOSED") return { label: "closed", tone: "err", date: pr.closedAt };
+  return null;
 }
 
 /**
@@ -124,6 +149,25 @@ export function GitHubPage() {
   const [rawTab, setTab] = useStickyUrlState("tab", globalKey("github", "tab"), "pulls");
   const tab = TABS.find((t) => t.value === rawTab)?.value ?? "pulls";
   const [selectedRepo, , setRepoStore] = useStickyUrlState("repo", globalKey("github", "repo"), "");
+  // Replaces rather than pushes: flipping a filter shouldn't fill up Back.
+  const [rawPrState, setPrState] = useStickyUrlState(
+    "prstate",
+    globalKey("github", "prstate"),
+    "open",
+  );
+  const prState = PR_STATES.find((s) => s.value === rawPrState)?.value ?? "open";
+  // Goes straight into `gh pr list --search`, so qualifiers are the point, not a
+  // side effect. Debounced like JiraPage — one `gh` process per keystroke would
+  // be one process per keystroke.
+  const [prQuery, setPrQuery] = useUiState(globalKey("github", "prq"), "");
+  const [debouncedQuery, setDebouncedQuery] = useState(prQuery);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(prQuery), 400);
+    return () => clearTimeout(t);
+  }, [prQuery]);
+  // Deliberately not in the URL: a shared ?page=5 points at a list that has since
+  // moved, which is worse than not restoring it at all.
+  const [prPage, setPrPage] = useState(1);
   // Opening a PR pushes, so Back returns to the list instead of leaving GitHub.
   const [rawPr, setPr, setPrStore] = useStickyUrlStateOptional("pr", globalKey("github", "pr"), {
     replace: false,
@@ -164,11 +208,43 @@ export function GitHubPage() {
   const [owner, name] = repo.split("/");
   const enabled = !!owner && !!name;
 
+  // Any change to *what* is being listed invalidates the page number. Adjusted
+  // during render rather than in an effect so the query below never gets one
+  // pass with a page that no longer exists — and so repo/state/query are all
+  // handled in one place instead of in three separate handlers.
+  const listKey = `${repo}|${prState}|${debouncedQuery}`;
+  const [prevListKey, setPrevListKey] = useState(listKey);
+  if (prevListKey !== listKey) {
+    setPrevListKey(listKey);
+    setPrPage(1);
+  }
+
+  // AppShell scrolls <main>, not the window (AppShell.tsx:134), so rather than
+  // reach for that element we hand the browser a node and let it find whichever
+  // ancestor scrolls. Instant, not smooth: the rows underneath are being
+  // replaced anyway, so gliding past a second of stale content buys nothing.
+  const pageTopRef = useRef<HTMLDivElement>(null);
+  const goToPage = (next: number) => {
+    setPrPage(next);
+    pageTopRef.current?.scrollIntoView({ block: "start" });
+  };
+
   const pulls = useQuery({
-    queryKey: ["gh-pulls", repo],
-    queryFn: () => api.get<Pull[]>(`/api/github/${owner}/${name}/pulls`),
+    queryKey: ["gh-pulls", repo, prState, debouncedQuery, prPage],
+    queryFn: () =>
+      api.get<{ items: Pull[]; hasMore: boolean }>(
+        `/api/github/${owner}/${name}/pulls?state=${prState}` +
+          `&q=${encodeURIComponent(debouncedQuery)}&page=${prPage}`,
+      ),
     enabled: enabled && tab === "pulls",
+    // Keeps the layout from collapsing on a page change; the cost is that the
+    // rows on screen can belong to the previous page, which prShowingStale below
+    // is what makes visible.
+    placeholderData: keepPreviousData,
   });
+  // Rows on screen, but they're the previous page's while `gh` answers (~1s).
+  const prShowingStale = pulls.isPlaceholderData && pulls.isFetching;
+  const prListPending = pulls.isLoading || prShowingStale;
   const issues = useQuery({
     queryKey: ["gh-issues", repo],
     queryFn: () => api.get<Issue[]>(`/api/github/${owner}/${name}/issues`),
@@ -194,7 +270,7 @@ export function GitHubPage() {
   const error = tab === "pulls" ? pulls.error : tab === "issues" ? issues.error : null;
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-5">
+    <div ref={pageTopRef} className="mx-auto max-w-4xl px-6 py-5">
       <PageHeader
         title="GitHub"
         icon={GitPullRequest}
@@ -240,7 +316,28 @@ export function GitHubPage() {
       )}
 
       {tab === "pulls" && selectedPr === null && enabled && (
-        <div className="mb-2 flex justify-end">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
+            {PR_STATES.map((s) => (
+              <FilterChip
+                key={s.value}
+                selected={prState === s.value}
+                onClick={() => setPrState(s.value)}
+              >
+                {s.label}
+              </FilterChip>
+            ))}
+          </div>
+          <div className="relative min-w-[12rem] flex-1">
+            <SearchIcon size={16} className="absolute top-2 left-2.5 text-ink-faint" />
+            <Input
+              value={prQuery}
+              onChange={(e) => setPrQuery(e.target.value)}
+              placeholder="Search PRs — text, author:me, is:draft, review:required…"
+              className="h-8 pl-8 text-xs"
+              aria-label="Search pull requests"
+            />
+          </div>
           <Button size="sm" variant="primary" onClick={() => setNewPrOpen(true)}>
             <GitPullRequest size={16} /> New pull request
           </Button>
@@ -256,11 +353,27 @@ export function GitHubPage() {
         />
       )}
 
-      <div className="space-y-1.5">
+      {/* Two different silences to break. isLoading: nothing on screen at all,
+          so an empty area would read as "no PRs". isPlaceholderData: the rows
+          below belong to the *previous* page, so without this a Next click
+          looks like it did nothing for the second `gh` takes to answer. */}
+      {tab === "pulls" && selectedPr === null && enabled && prListPending && (
+        <p className="m3-body-sm mb-2 text-ink-muted">Loading…</p>
+      )}
+
+      <div
+        className={cn(
+          "space-y-1.5 transition-opacity duration-200",
+          prShowingStale && "opacity-45",
+        )}
+      >
         {tab === "pulls" &&
           selectedPr === null &&
-          pulls.data?.map((pr) => {
-            const review = reviewBadge(pr);
+          pulls.data?.items.map((pr) => {
+            // A merged PR keeps its reviewDecision, and "review required" on
+            // something already merged is noise.
+            const review = pr.state === "OPEN" ? reviewBadge(pr) : null;
+            const state = prStateBadge(pr);
             return (
               <Card key={pr.number} className="p-3.5">
                 <div className="flex items-center gap-2.5">
@@ -274,6 +387,11 @@ export function GitHubPage() {
                     {pr.title}
                   </button>
                   {pr.isDraft && <Badge>draft</Badge>}
+                  {state && (
+                    <Badge tone={state.tone} className="shrink-0">
+                      {state.label}
+                    </Badge>
+                  )}
                   {review && (
                     <Badge tone={review.tone} glow className="shrink-0">
                       {review.label}
@@ -299,6 +417,11 @@ export function GitHubPage() {
                   <span className="truncate font-mono">
                     {pr.headRefName} → {pr.baseRefName}
                   </span>
+                  {state && state.date && (
+                    <span className="shrink-0">
+                      {state.label} {fmtDate(state.date)}
+                    </span>
+                  )}
                   <div className="ml-auto">
                     <WorkWithClaude
                       endpoint={`/api/github/${owner}/${name}/pr/${pr.number}/work-with-claude`}
@@ -309,6 +432,50 @@ export function GitHubPage() {
               </Card>
             );
           })}
+        {tab === "pulls" && selectedPr === null && pulls.data?.items.length === 0 && (
+          <EmptyState
+            icon={GitPullRequest}
+            title={
+              debouncedQuery.trim()
+                ? "No pull requests match"
+                : prState === "all"
+                  ? "No pull requests"
+                  : `No ${prState} pull requests`
+            }
+          >
+            {debouncedQuery.trim() ? (
+              <>
+                Nothing matches <code className="font-mono">{debouncedQuery.trim()}</code> among the{" "}
+                {prState} pull requests.
+              </>
+            ) : prState === "open" ? (
+              "Nothing is open right now — try Closed or All."
+            ) : (
+              "Nothing matches this filter in this repo."
+            )}
+          </EmptyState>
+        )}
+        {tab === "pulls" && selectedPr === null && (prPage > 1 || pulls.data?.hasMore) && (
+          <div className="flex items-center justify-center gap-2 pt-2">
+            <IconButton
+              title="Previous page"
+              disabled={prPage === 1 || prShowingStale}
+              onClick={() => goToPage(Math.max(1, prPage - 1))}
+            >
+              <ChevronLeft size={20} />
+            </IconButton>
+            <span className="m3-label-md text-ink-muted">Page {prPage}</span>
+            <IconButton
+              title="Next page"
+              // hasMore belongs to the page on screen; while that's the stale one
+              // it can't be trusted to say whether a *next* page exists.
+              disabled={!pulls.data?.hasMore || prShowingStale}
+              onClick={() => goToPage(prPage + 1)}
+            >
+              <ChevronRight size={20} />
+            </IconButton>
+          </div>
+        )}
 
         {tab === "issues" &&
           issues.data?.map((issue) => (
