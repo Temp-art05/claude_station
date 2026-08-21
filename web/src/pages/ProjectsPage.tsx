@@ -185,10 +185,10 @@ export function ProjectsPage() {
             </div>
           ))}
           {insertLine(status, items.length)}
-          {/* The tail of the column: a drop here appends. It only draws itself
-              when there is something to say — an empty column explains what
-              belongs in it, and a column with cards shows a target while a
-              card is in the air. Idle, it is invisible space to drop into. */}
+          {/* The tail of the column: the blank space under the last card, so a
+              drop there appends instead of missing. It draws nothing — the
+              insert line above it is the feedback. An empty column is the one
+              case that needs a visible target, and says what belongs in it. */}
           <div
             onDragOver={onDragOver(status, items.length)}
             onDrop={onDrop(status, items.length)}
@@ -202,12 +202,10 @@ export function ProjectsPage() {
                       ? "border-primary/60 bg-primary/8"
                       : "border-hairline",
                   )
-                : dragId
-                  ? "min-h-16 border border-dashed border-hairline"
-                  : "min-h-2",
+                : "min-h-8",
             )}
           >
-            {items.length === 0 ? hint : dragId ? "Drop here" : ""}
+            {items.length === 0 ? hint : ""}
           </div>
         </div>
       </section>

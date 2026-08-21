@@ -53,7 +53,7 @@ Migration sinh bằng `npx drizzle-kit generate --name=projects-board` → `serv
 - Container rộng hơn: `max-w-6xl`.
 - Grid `sm:grid-cols-2`, mỗi cột là một vùng drop: header (tên cột + số project) + stack card dọc.
 - Card giữ nguyên nội dung hiện có (tên, badge số repo, description clamp 2 dòng, badge label repo, nút xoá hiện khi hover).
-- Vùng thả ở cuối cột: cột trống thì luôn hiện ô viền dashed kèm mô tả cột; cột có card thì ô này **chỉ hiện khi đang kéo** (idle là khoảng trống vô hình, không vẽ viền) — nếu không nó thành một ô rỗng vô nghĩa dưới cùng.
+- Vùng thả ở cuối cột: cột có card thì vùng này **vô hình hoàn toàn** (không viền, không chữ) — nó chỉ để hứng drop ở khoảng trống dưới card cuối, còn feedback đã do đường kẻ chèn phía trên nó lo. Chỉ cột **trống** mới vẽ ô dashed kèm mô tả cột, vì lúc đó không có card nào để làm mốc thả.
 - Mỗi card có thêm icon button chuyển cột (hiện khi hover, cạnh nút xoá): ở Working on thì "Move to Backlog", ở Backlog thì "Move to Working on" — đẩy card xuống cuối cột đích. Đây là đường dùng được trên touch, nơi native DnD không chạy.
 - Dưới `sm`: 2 cột xếp dọc, Active trên.
 
