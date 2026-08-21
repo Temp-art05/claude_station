@@ -92,6 +92,7 @@ export const FileDiff = glyph("difference");
 export const FilePlus = glyph("note_add");
 export const FileSpreadsheet = glyph("table");
 export const FileUp = glyph("upload_file");
+export const FileDown = glyph("file_save");
 export const Folder = glyph("folder");
 export const FolderOpen = glyph("folder_open");
 export const FolderPlus = glyph("create_new_folder");

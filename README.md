@@ -139,7 +139,8 @@ can ask for it there. (The webhook URL and token in the terminal are redacted in
 ![Env sets](docs/images/env.png)
 
 Global or per project, injected into terminals, build commands and Claude sessions. Values marked
-secret are masked in the UI.
+secret are masked in the UI. A set can be imported from a `.env` file and exported back out to one —
+the export is a real `.env`, so secrets are written in clear.
 
 ### Knowledge
 
