@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, min } from "drizzle-orm";
 import { z } from "zod";
 import {
+  projectBoardInputSchema,
   projectInputSchema,
   projectPathInputSchema,
   type PathCommandInput,
@@ -68,6 +69,9 @@ function remoteToWebUrl(remote: string): string | null {
   return null;
 }
 
+/** Manual order first; equal ranks (never dragged) keep the newest on top. */
+const boardOrder = [asc(schema.projects.sortOrder), desc(schema.projects.updatedAt)] as const;
+
 function loadProject(id: string) {
   const project = db.select().from(schema.projects).where(eq(schema.projects.id, id)).get();
   if (!project) return null;
@@ -97,15 +101,60 @@ export function projectRoutes(app: FastifyInstance): void {
     const projects = db
       .select()
       .from(schema.projects)
-      .orderBy(desc(schema.projects.updatedAt))
+      .orderBy(...boardOrder)
       .all();
     return projects.map((p) => loadProject(p.id));
+  });
+
+  /**
+   * The whole board in one write: the UI sends each column in the order it
+   * shows, and every listed project lands in that column at that index. Sent
+   * on every drop, so it has to be idempotent — and it never touches
+   * `updated_at`, because rearranging the board is not editing a project.
+   */
+  app.patch("/api/projects/board", async (req) => {
+    const input = projectBoardInputSchema.parse(req.body);
+    const known = new Set(
+      db
+        .select({ id: schema.projects.id })
+        .from(schema.projects)
+        .all()
+        .map((p) => p.id),
+    );
+    db.transaction(() => {
+      for (const [status, ids] of [
+        ["active", input.active],
+        ["backlog", input.backlog],
+      ] as const) {
+        ids.forEach((id, i) => {
+          // Ids the client no longer shares with the DB (a project deleted
+          // mid-drag) are skipped rather than failing the whole reorder.
+          if (!known.has(id)) return;
+          db.update(schema.projects)
+            .set({ status, sortOrder: i })
+            .where(eq(schema.projects.id, id))
+            .run();
+        });
+      }
+    });
+    return db
+      .select()
+      .from(schema.projects)
+      .orderBy(...boardOrder)
+      .all()
+      .map((p) => loadProject(p.id));
   });
 
   app.post("/api/projects", async (req, reply) => {
     const input = projectInputSchema.parse(req.body);
     const id = newId();
     const now = nowIso();
+    // Above whatever is already in the Working on column.
+    const topRank = db
+      .select({ min: min(schema.projects.sortOrder) })
+      .from(schema.projects)
+      .where(eq(schema.projects.status, "active"))
+      .get()?.min;
     // One transaction: a bad path must not leave a project with no repos behind.
     db.transaction(() => {
       db.insert(schema.projects)
@@ -115,6 +164,8 @@ export function projectRoutes(app: FastifyInstance): void {
           description: input.description,
           createdAt: now,
           updatedAt: now,
+          status: "active",
+          sortOrder: (topRank ?? 0) - 1,
         })
         .run();
       input.paths.forEach((p, i) => insertPath(id, p, i, p.isDefault || i === 0));

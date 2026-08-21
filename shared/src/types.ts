@@ -23,7 +23,12 @@ export const pathCommandInputSchema = z.object({
   kind: commandKindSchema.default("custom"),
   command: z.string().min(1),
   cwdOverride: z.string().nullable().default(null),
-  timeoutSec: z.number().int().positive().max(24 * 3600).default(900),
+  timeoutSec: z
+    .number()
+    .int()
+    .positive()
+    .max(24 * 3600)
+    .default(900),
 });
 export type PathCommandInput = z.infer<typeof pathCommandInputSchema>;
 
@@ -64,13 +69,37 @@ export const COMMAND_PRESETS: Record<string, PathCommandInput[]> = {
     },
   ],
   android: [
-    { name: "Assemble Debug", kind: "build", command: "./gradlew :app:assembleDebug", cwdOverride: null, timeoutSec: 1800 },
-    { name: "Unit Test", kind: "test", command: "./gradlew test", cwdOverride: null, timeoutSec: 1800 },
+    {
+      name: "Assemble Debug",
+      kind: "build",
+      command: "./gradlew :app:assembleDebug",
+      cwdOverride: null,
+      timeoutSec: 1800,
+    },
+    {
+      name: "Unit Test",
+      kind: "test",
+      command: "./gradlew test",
+      cwdOverride: null,
+      timeoutSec: 1800,
+    },
     { name: "Lint", kind: "lint", command: "./gradlew lint", cwdOverride: null, timeoutSec: 900 },
   ],
   kmp: [
-    { name: "Build Shared", kind: "build", command: "./gradlew :shared:build", cwdOverride: null, timeoutSec: 1800 },
-    { name: "All Tests", kind: "test", command: "./gradlew :shared:allTests", cwdOverride: null, timeoutSec: 1800 },
+    {
+      name: "Build Shared",
+      kind: "build",
+      command: "./gradlew :shared:build",
+      cwdOverride: null,
+      timeoutSec: 1800,
+    },
+    {
+      name: "All Tests",
+      kind: "test",
+      command: "./gradlew :shared:allTests",
+      cwdOverride: null,
+      timeoutSec: 1800,
+    },
   ],
   node: [
     { name: "Build", kind: "build", command: "npm run build", cwdOverride: null, timeoutSec: 900 },
@@ -97,12 +126,19 @@ export const projectPathSchema = z.object({
 });
 export type ProjectPath = z.infer<typeof projectPathSchema>;
 
+/** Which board column a project sits in on the Projects page. */
+export const projectStatusSchema = z.enum(["active", "backlog"]);
+export type ProjectStatus = z.infer<typeof projectStatusSchema>;
+
 export const projectSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().default(""),
   createdAt: z.string(),
   updatedAt: z.string(),
+  status: projectStatusSchema.default("active"),
+  /** Manual order inside the column. Ties fall back to `updatedAt` desc. */
+  sortOrder: z.number().default(0),
   paths: z.array(projectPathSchema).default([]),
 });
 export type Project = z.infer<typeof projectSchema>;
@@ -124,6 +160,13 @@ export const projectInputSchema = z.object({
   paths: z.array(projectPathInputSchema).default([]),
 });
 export type ProjectInput = z.infer<typeof projectInputSchema>;
+
+/** The board as the UI sees it: every project id, in column order. */
+export const projectBoardInputSchema = z.object({
+  active: z.array(z.string()).default([]),
+  backlog: z.array(z.string()).default([]),
+});
+export type ProjectBoardInput = z.infer<typeof projectBoardInputSchema>;
 
 // ── Chat sessions ─────────────────────────────────────────────────────────────
 
@@ -279,7 +322,10 @@ export const envSetSchema = z.object({
 export type EnvSet = z.infer<typeof envSetSchema>;
 
 export const envVarInputSchema = z.object({
-  key: z.string().min(1).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Invalid env var name"),
+  key: z
+    .string()
+    .min(1)
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Invalid env var name"),
   value: z.string(),
   isSecret: z.boolean().default(false),
 });
@@ -470,9 +516,9 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
       "Glob",
       "Grep",
       "mcp__station__memory_write",
-  "mcp__station__workflow_ask",
-  "mcp__station__workflow_emit_artifact",
-  "mcp__station__workflow_note",
+      "mcp__station__workflow_ask",
+      "mcp__station__workflow_emit_artifact",
+      "mcp__station__workflow_note",
       "mcp__station__memory_list",
       "mcp__station__knowledge_search",
       "mcp__station__workflow_emit_artifact",
@@ -570,13 +616,13 @@ export const AGENT_PRESETS: (AgentInput & { label: string })[] = [
       "mcp__station__excel_read",
       "mcp__station__excel_write",
       "mcp__station__knowledge_search",
-  "mcp__station__memory_list",
-  "mcp__station__memory_get",
-  "mcp__station__memory_search",
-  "mcp__station__memory_write",
-  "mcp__station__workflow_ask",
-  "mcp__station__workflow_emit_artifact",
-  "mcp__station__workflow_note",
+      "mcp__station__memory_list",
+      "mcp__station__memory_get",
+      "mcp__station__memory_search",
+      "mcp__station__memory_write",
+      "mcp__station__workflow_ask",
+      "mcp__station__workflow_emit_artifact",
+      "mcp__station__workflow_note",
     ],
     disallowedTools: null,
     skills: null,
@@ -1164,7 +1210,6 @@ export const githubConfigSchema = z.object({
   repos: z.array(z.string()).default([]), // "owner/repo"
 });
 export type GithubConfig = z.infer<typeof githubConfigSchema>;
-
 
 // ── Work history ──────────────────────────────────────────────────────────────
 
