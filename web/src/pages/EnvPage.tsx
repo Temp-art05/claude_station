@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Select } from "@/components/ui/select";
-import { FileUp, KeyRound, Plus, Trash2 } from "@/components/ui/icons";
+import { FileDown, FileUp, KeyRound, Plus, Trash2 } from "@/components/ui/icons";
 import type { EnvSet, EnvSetInput, Project } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
@@ -24,10 +24,15 @@ function parseDotEnv(text: string): VarDraft[] {
     const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!m) continue;
     let value = m[2] ?? "";
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
-    ) {
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      // Double quotes carry escapes, the way dotenv writes them — and the way
+      // `toDotEnv` below emits any value that needs quoting.
+      value = value
+        .slice(1, -1)
+        .replace(/\\([\\"nrt])/g, (_, c: string) =>
+          c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c,
+        );
+    } else if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
       value = value.slice(1, -1);
     } else {
       const hash = value.indexOf(" #");
@@ -36,6 +41,36 @@ function parseDotEnv(text: string): VarDraft[] {
     out.push({ key: m[1]!, value, isSecret: SECRET_KEY.test(m[1]!) });
   }
   return out;
+}
+
+/** Values that would not survive `parseDotEnv` unquoted get double-quoted. */
+function quoteIfNeeded(value: string): string {
+  if (!/[\s"'#\\]/.test(value)) return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
+}
+
+/** Serialise vars back to .env text. Secrets go out in clear — the DB holds
+ *  them that way too, and a masked export would be useless as a .env file. */
+function toDotEnv(set: Pick<EnvSet, "name" | "description">, vars: VarDraft[]): string {
+  const header = [`# ${set.name}`, set.description ? `# ${set.description}` : null].filter(Boolean);
+  const lines = vars
+    .filter((v) => v.key.trim())
+    .map((v) => `${v.key.trim()}=${quoteIfNeeded(v.value)}`);
+  return [...header, "", ...lines, ""].join("\n");
+}
+
+/** Hand the .env text to the browser as a download named after the set. */
+function downloadDotEnv(name: string, text: string) {
+  const slug = name
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${slug || "env-set"}.env`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function EnvPage() {
@@ -214,6 +249,17 @@ export function EnvPage() {
             <Button
               size="sm"
               variant="ghost"
+              onClick={() =>
+                downloadDotEnv(name || "env-set", toDotEnv({ name, description }, vars))
+              }
+              disabled={!vars.some((v) => v.key.trim())}
+              title="Download the variables below as a .env file"
+            >
+              <FileDown size={16} /> Export .env
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={() => setVars((v) => [...v, { key: "", value: "", isSecret: false }])}
             >
               <Plus size={16} /> Add
@@ -334,6 +380,15 @@ export function EnvPage() {
                   ))}
                 </div>
               </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => downloadDotEnv(set.name, toDotEnv(set, set.vars))}
+                disabled={set.vars.length === 0}
+                title="Download this set as a .env file"
+              >
+                <FileDown size={16} /> Export
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => startEdit(set)}>
                 Edit
               </Button>
