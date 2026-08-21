@@ -42,6 +42,12 @@ Group the repos that belong together. Each path gets a label and a description, 
 is what Claude reads to tell your backend from your iOS app. `~` and relative paths are accepted.
 Leaving a project keeps its terminals alive; the sidebar brings you back to the one you were in.
 
+The page is a two-column board — **Working on** and **Backlog** — so the projects you have parked
+stop competing for attention with the ones you are driving. Drag a card between the columns or
+inside one to re-order it (mouse only; the arrow button on each card moves it across, which also
+works on touch). Backlog is only how the board is arranged: those projects stay in the sidebar and
+in every project picker.
+
 ### Claude, in a real terminal
 
 ![Claude in a terminal](docs/images/claude.png)

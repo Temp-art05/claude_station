@@ -78,6 +78,7 @@ export const ShieldQuestionMark = glyph("shield_question");
 export const ArrowUp = glyph("arrow_upward");
 export const ArrowDown = glyph("arrow_downward");
 export const ArrowLeft = glyph("arrow_back");
+export const ArrowRight = glyph("arrow_forward");
 export const ArrowUpFromLine = glyph("vertical_align_top");
 export const ArrowDownToLine = glyph("vertical_align_bottom");
 export const ChevronUp = glyph("keyboard_arrow_up");

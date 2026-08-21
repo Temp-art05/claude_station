@@ -6,6 +6,10 @@ export const projects = sqliteTable("projects", {
   description: text("description").notNull().default(""),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+  /** Board column on the Projects page: "active" | "backlog". */
+  status: text("status").notNull().default("active"),
+  /** Manual order inside the column; ties fall back to `updated_at` desc. */
+  sortOrder: integer("sort_order").notNull().default(0),
 });
 
 export const projectPaths = sqliteTable(
