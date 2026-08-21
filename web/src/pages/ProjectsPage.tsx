@@ -185,17 +185,26 @@ export function ProjectsPage() {
             </div>
           ))}
           {insertLine(status, items.length)}
-          {/* The tail of the column: a drop here appends, and it is the whole
-              target while a column is empty. */}
+          {/* The tail of the column: a drop here appends. It only draws itself
+              when there is something to say — an empty column explains what
+              belongs in it, and a column with cards shows a target while a
+              card is in the air. Idle, it is invisible space to drop into. */}
           <div
             onDragOver={onDragOver(status, items.length)}
             onDrop={onDrop(status, items.length)}
             className={cn(
-              "flex min-h-24 flex-1 items-center justify-center rounded-xl border border-dashed",
+              "flex flex-1 items-center justify-center rounded-xl",
               "m3-body-sm text-ink-faint transition-colors",
-              items.length === 0 && dropSlot?.status === status
-                ? "border-primary/60 bg-primary/8"
-                : "border-hairline",
+              items.length === 0
+                ? cn(
+                    "min-h-24 border border-dashed",
+                    dropSlot?.status === status
+                      ? "border-primary/60 bg-primary/8"
+                      : "border-hairline",
+                  )
+                : dragId
+                  ? "min-h-16 border border-dashed border-hairline"
+                  : "min-h-2",
             )}
           >
             {items.length === 0 ? hint : dragId ? "Drop here" : ""}
