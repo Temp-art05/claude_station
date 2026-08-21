@@ -120,17 +120,20 @@ export function ProjectsPage() {
         {/* The anchor must not take the drag over, or the browser drags the
             URL instead of the card. Click-through still navigates. */}
         <Link to={`/projects/${p.id}`} draggable={false}>
-          <Card interactive className="h-full p-5">
+          {/* Every card is the same height whatever it holds, so a column reads
+              as a stack of slots rather than a ragged pile. The repo labels sit
+              on the bottom edge; the description takes the room in between. */}
+          <Card interactive className="flex h-36 flex-col overflow-hidden p-5">
             <div className="mb-1.5 flex items-start justify-between gap-3">
-              <h2 className="m3-title-md">{p.name}</h2>
+              <h2 className="m3-title-md line-clamp-1">{p.name}</h2>
               <Badge className="shrink-0 transition-opacity group-hover:opacity-0">
                 {p.paths.length} repo{p.paths.length === 1 ? "" : "s"}
               </Badge>
             </div>
             {p.description && (
-              <p className="m3-body-sm mb-3 line-clamp-2 text-ink-muted">{p.description}</p>
+              <p className="m3-body-sm line-clamp-2 text-ink-muted">{p.description}</p>
             )}
-            <div className="flex flex-wrap gap-1.5">
+            <div className="mt-auto flex max-h-7 flex-wrap gap-1.5 overflow-hidden pt-1">
               {p.paths.map((path) => (
                 <Badge key={path.id} tone="accent">
                   {path.label}
@@ -172,8 +175,11 @@ export function ProjectsPage() {
   const column = ({ status, title, hint }: (typeof COLUMNS)[number]) => {
     const items = byColumn(status);
     return (
-      <section key={status} className="flex min-h-64 flex-col">
-        <div className="mb-2 flex items-center gap-2 px-1">
+      <section
+        key={status}
+        className="flex min-h-80 flex-col rounded-2xl border border-hairline bg-surface-container-lowest/60 p-3"
+      >
+        <div className="mb-3 flex items-center gap-2 px-1.5 pt-0.5">
           <h2 className="m3-title-sm">{title}</h2>
           <Badge>{items.length}</Badge>
         </div>
@@ -240,9 +246,7 @@ export function ProjectsPage() {
           Create one and point it at your repos (FE, BE, iOS…).
         </EmptyState>
       ) : (
-        <div className="grid grid-cols-1 items-start gap-x-5 gap-y-6 sm:grid-cols-2">
-          {COLUMNS.map(column)}
-        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{COLUMNS.map(column)}</div>
       )}
 
       {pendingDelete && (
