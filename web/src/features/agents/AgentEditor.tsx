@@ -248,10 +248,12 @@ export function AgentEditor({ open, onClose, agent, preset }: Props) {
               className="font-mono text-xs"
               value={draft.viewUrl ?? ""}
               onChange={(e) => patch({ viewUrl: e.target.value || null })}
-              placeholder="http://127.0.0.1:4747/?token=…"
+              placeholder="http://127.0.0.1:${PORT:-4747}/"
             />
             <p className="mt-1 m3-label-sm text-ink-faint">
-              For app agents: the running app's own web UI, embedded in the workspace tab.
+              For app agents: the running app's own web UI, embedded in the workspace tab. Supports{" "}
+              <code>{"${VAR}"}</code> / <code>{"${VAR:-default}"}</code> from the env set the app is
+              started with — use <code>{"${PORT:-4747}"}</code> so each project's port works.
             </p>
           </div>
           <div>

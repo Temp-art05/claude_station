@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useConfirm } from "@/components/ui/confirm";
 import { Select } from "@/components/ui/select";
 import { ExternalLink, Play, RotateCw, Square, TerminalSquare } from "@/components/ui/icons";
-import type { Agent, ChatSession, EnvSet, Project, Terminal } from "@claude-station/shared";
+import type { Agent, ChatSession, EnvSet, EnvVar, Project, Terminal } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { projectKey, useUiState } from "@/lib/uiStore";
@@ -70,6 +70,31 @@ export function AgentWorkspace({ project, envSets, session }: Props) {
   return <ChatTab project={project} envSets={envSets} pinnedSessionId={session.id} />;
 }
 
+const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
+
+/**
+ * An app agent's `viewUrl` may reference the env set it is started with, e.g.
+ * `http://127.0.0.1:${PORT:-4747}/`. The port lives in the env set (one per Jira
+ * project), so a hardcoded URL only ever matches one of them — the others got a
+ * blank iframe pointing at a port nothing listens on.
+ *
+ * `${VAR}` → the set's value, `${VAR:-default}` → default when the set has no
+ * such key. A name with neither is left as-is and reported in `missing`, so the
+ * caller can say what's wrong instead of rendering that blank frame.
+ */
+export function resolveViewUrl(url: string, vars: EnvVar[]): { url: string; missing: string[] } {
+  const byKey = new Map(vars.map((v) => [v.key, v.value]));
+  const missing: string[] = [];
+  const resolved = url.replace(PLACEHOLDER, (whole, name: string, fallback?: string) => {
+    const value = byKey.get(name);
+    if (value !== undefined && value !== "") return value;
+    if (fallback !== undefined) return fallback;
+    missing.push(name);
+    return whole;
+  });
+  return { url: resolved, missing };
+}
+
 /** App agent: embedded app UI on top, the terminal running it below. */
 function AppAgentView({
   project,
@@ -123,6 +148,8 @@ function AppAgentView({
   });
 
   const canStart = Boolean(agent.startCommand && agent.bundleDir);
+  // The URL follows the SELECTED env set: same agent, different project/port.
+  const view = resolveViewUrl(agent.viewUrl!, envSets.find((e) => e.id === envSetId)?.vars ?? []);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -185,7 +212,12 @@ function AppAgentView({
           >
             <TerminalSquare size={16} /> Terminal
           </Button>
-          <a href={agent.viewUrl!} target="_blank" rel="noreferrer">
+          <a
+            href={view.url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(view.missing.length > 0 && "pointer-events-none opacity-40")}
+          >
             <Button size="sm" variant="ghost">
               <ExternalLink size={16} /> Open standalone
             </Button>
@@ -195,12 +227,27 @@ function AppAgentView({
 
       {error && <p className="border-b border-hairline px-4 py-1.5 text-xs text-err">{error}</p>}
 
-      <iframe
-        key={frameNonce}
-        src={agent.viewUrl!}
-        title={`${agent.name} app UI`}
-        className="min-h-0 flex-1 border-0 bg-base"
-      />
+      {view.missing.length > 0 ? (
+        // Say what's missing. Rendering the frame anyway just shows a broken
+        // page and reads as "the agent is dead" — which is what happened with
+        // ISI888 (agent healthy on :4750, URL pinned to :4747).
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
+          <p className="text-xs text-err">
+            viewUrl cần {view.missing.map((k) => `\${${k}}`).join(", ")} — env set đang chọn không
+            có biến này.
+          </p>
+          <p className="m3-label-sm text-ink-faint">
+            Chọn env set có biến đó, hoặc đặt mặc định trong viewUrl: {"${PORT:-4747}"}
+          </p>
+        </div>
+      ) : (
+        <iframe
+          key={frameNonce}
+          src={view.url}
+          title={`${agent.name} app UI`}
+          className="min-h-0 flex-1 border-0 bg-base"
+        />
+      )}
 
       {showTerminal && appTerminal && (
         <div className="h-64 shrink-0 border-t border-hairline">
