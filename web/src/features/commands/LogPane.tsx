@@ -36,7 +36,9 @@ export function LogPane({ runId }: { runId: string }) {
     if (!host) return;
 
     const term = new XTerm({
-      fontFamily: 'JetBrains Mono, "SF Mono", ui-monospace, Menlo, monospace',
+      // "… Variable" is the family @fontsource declares; the bare name matches no
+      // @font-face and quietly falls through to the system mono.
+      fontFamily: '"JetBrains Mono Variable", "SF Mono", ui-monospace, Menlo, monospace',
       fontSize: 12,
       lineHeight: 1.3,
       disableStdin: true,

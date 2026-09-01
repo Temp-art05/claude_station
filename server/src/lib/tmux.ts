@@ -216,6 +216,67 @@ export function ensureSession(input: NewSessionInput): boolean {
   return true;
 }
 
+/** An attached tmux client: the tty to refresh, and the size it is drawing at. */
+export interface TmuxClient {
+  name: string;
+  cols: number;
+  rows: number;
+}
+
+/**
+ * Forces tmux to repaint the current screen to the given clients. Our PTY is a
+ * long-lived tmux client that survives WS reconnects, so a reconnecting tab
+ * triggers no attach and therefore no repaint of its own — this is what gives it
+ * a correct screen instead of a replayed byte log.
+ *
+ * `refresh-client -t` takes a *client* (`/dev/ttys003`), not a session, hence the
+ * `sessionClients` lookup first: aiming it at a session name only ever yields
+ * "can't find client".
+ */
+export function refreshClients(clients: TmuxClient[]): void {
+  for (const c of clients) {
+    try {
+      run(refreshClientArgs(c.name));
+    } catch {
+      /* that client detached between the two calls */
+    }
+  }
+}
+
+/**
+ * The clients attached to this terminal's session, with their sizes — one fork
+ * serves both the repaint target and the "did anything actually change" check.
+ */
+export function sessionClients(terminalId: string): TmuxClient[] {
+  try {
+    return run(listClientsArgs(terminalId))
+      .split("\n")
+      .flatMap((line) => {
+        const m = /^(\S+) (\d+)x(\d+)$/.exec(line.trim());
+        return m ? [{ name: m[1]!, cols: Number(m[2]), rows: Number(m[3]) }] : [];
+      });
+  } catch {
+    return []; // session gone — nothing left to repaint
+  }
+}
+
+/**
+ * `=` so a session we merely prefix is not hit. The size is the *client's* own,
+ * never the window's: tmux takes a row off the window for the status line, so
+ * comparing a client geometry against a window geometry reads as a change when
+ * nothing moved.
+ */
+export function listClientsArgs(terminalId: string): string[] {
+  const target = `=${sessionName(terminalId)}`;
+  const format = "#{client_name} #{client_width}x#{client_height}";
+  return ["-L", TMUX_SOCKET, "list-clients", "-t", target, "-F", format];
+}
+
+/** `client` is a tty name out of `listClientsArgs`, never a session name. */
+export function refreshClientArgs(client: string): string[] {
+  return ["-L", TMUX_SOCKET, "refresh-client", "-t", client];
+}
+
 export function killSession(terminalId: string): void {
   try {
     run(["-L", TMUX_SOCKET, "kill-session", "-t", `=${sessionName(terminalId)}`]);

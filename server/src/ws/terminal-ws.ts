@@ -48,6 +48,10 @@ export function terminalWs(app: FastifyInstance): void {
         },
       });
 
+      // tmux repaints on demand instead of the tab replaying a byte log, but only
+      // once the client's geometry is known — hence on the first resize, not here.
+      let painted = false;
+
       socket.on("message", (raw: Buffer) => {
         const parsed = terminalClientMsgSchema.safeParse(
           JSON.parse(raw.toString("utf8") || "{}"),
@@ -58,8 +62,15 @@ export function terminalWs(app: FastifyInstance): void {
         }
         const msg = parsed.data;
         if (msg.t === "input") pty.write(id, msg.data);
-        else if (msg.t === "resize") pty.resize(id, msg.cols, msg.rows);
-        else if (msg.t === "kill") pty.kill(id);
+        else if (msg.t === "resize") {
+          // Only the first one has to guarantee a frame; after that the tab is in
+          // sync and a real size change redraws on its own.
+          if (painted) pty.resize(id, msg.cols, msg.rows);
+          else {
+            painted = true;
+            pty.resizeAndPaint(id, msg.cols, msg.rows);
+          }
+        } else if (msg.t === "kill") pty.kill(id);
       });
 
       socket.on("close", detach);

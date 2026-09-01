@@ -10,7 +10,11 @@ export interface PtyListener {
 
 interface Managed {
   pty: IPty;
-  /** Ring buffer of recent output so a reconnecting tab sees its scrollback. */
+  /**
+   * Ring buffer of recent output so a reconnecting tab sees its scrollback.
+   * Only filled for non-tmux PTYs — tmux keeps the real screen and repaints it,
+   * so buffering bytes for it would cost memory to replay garbage.
+   */
   scrollback: Buffer[];
   scrollbackBytes: number;
   listeners: Set<PtyListener>;
@@ -107,9 +111,11 @@ export function start(opts: StartOptions): { pid: number } {
 
   pty.onData((data) => {
     const chunk = Buffer.from(data, "utf8");
-    managed.scrollback.push(chunk);
-    managed.scrollbackBytes += chunk.byteLength;
-    trimScrollback(managed);
+    if (!managed.tmuxBacked) {
+      managed.scrollback.push(chunk);
+      managed.scrollbackBytes += chunk.byteLength;
+      trimScrollback(managed);
+    }
     for (const l of managed.listeners) l.onData(chunk);
   });
 
@@ -126,10 +132,42 @@ export function start(opts: StartOptions): { pid: number } {
 export function attach(id: string, listener: PtyListener): () => void {
   const m = sessions.get(id);
   if (!m) return () => {};
-  // Replay scrollback so the tab looks the same after a reload.
-  for (const chunk of m.scrollback) listener.onData(chunk);
+  // A tmux-backed terminal gets no replay at all: tmux holds the real screen and
+  // `resizeAndPaint` asks it for a correct frame. Replaying the byte log into a
+  // fresh emulator is what put text in the wrong columns — a full-screen program
+  // draws with absolute cursor positioning, and the log is both size-specific and
+  // cut mid-escape-sequence by `trimScrollback`.
+  if (!m.tmuxBacked && m.scrollback.length) {
+    // No tmux to repaint, so the byte log is all there is. RIS first, so the
+    // emulator starts from a state we know instead of inheriting the tail of a
+    // half-read sequence. It does not undo the mid-sequence cut itself — that
+    // needs a headless terminal kept server-side.
+    listener.onData(Buffer.from("\x1bc", "ascii"));
+    for (const chunk of m.scrollback) listener.onData(chunk);
+  }
   m.listeners.add(listener);
   return () => m.listeners.delete(listener);
+}
+
+/**
+ * The geometry a freshly attached tab sends, plus a guarantee that it ends up with
+ * one full frame — measured against tmux 3.7a:
+ *
+ * - a size tmux has to adopt already redraws every client, so asking for a repaint
+ *   on top of it paints a *third* frame, and the one we ask for goes out before the
+ *   client has even seen SIGWINCH — drawn at the old geometry, landing in the wrong
+ *   rows. That stale frame is what left fragments of a half-updated line on screen.
+ * - a size that matches draws nothing at all. That is the reconnect case, and the
+ *   only one that needs `refreshClients`.
+ */
+export function resizeAndPaint(id: string, cols: number, rows: number): void {
+  const m = sessions.get(id);
+  if (!m || m.exited) return;
+  const clients = m.tmuxBacked ? tmux.sessionClients(id) : [];
+  const unchanged =
+    clients.length > 0 && clients.every((c) => c.cols === cols && c.rows === rows);
+  resize(id, cols, rows);
+  if (unchanged) tmux.refreshClients(clients);
 }
 
 export function write(id: string, data: string): boolean {

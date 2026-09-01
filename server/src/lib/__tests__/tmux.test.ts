@@ -3,8 +3,10 @@ import {
   attachArgs,
   configFor,
   launcherLine,
+  listClientsArgs,
   newSessionArgs,
   parseVersion,
+  refreshClientArgs,
   sessionName,
   terminalIdOf,
   TMUX_SOCKET,
@@ -76,6 +78,42 @@ describe("attachArgs", () => {
 
   it("steals the client for a hand-off", () => {
     expect(attachArgs("t1", { steal: true })).toContain("-d");
+  });
+});
+
+describe("repaint targeting", () => {
+  it("looks a session's clients up by exact name", () => {
+    expect(listClientsArgs("t1")).toEqual([
+      "-L",
+      TMUX_SOCKET,
+      "list-clients",
+      "-t",
+      "=cs-t1",
+      "-F",
+      "#{client_name} #{client_width}x#{client_height}",
+    ]);
+  });
+
+  // The window is a row shorter than its client whenever the status line is on, so
+  // a client geometry compared against a window geometry reads as a change when
+  // nothing moved — and the repaint that reconnect depends on gets skipped.
+  it("asks for the client's own size, not the window's", () => {
+    const format = listClientsArgs("t1").at(-1);
+    expect(format).toContain("client_width");
+    expect(format).not.toContain("window_width");
+  });
+
+  // refresh-client's -t is a *client*; handing it a session only ever answers
+  // "can't find client", which a swallowed error turns into a silent no-op.
+  it("refreshes a tty, never a session name", () => {
+    expect(refreshClientArgs("/dev/ttys003")).toEqual([
+      "-L",
+      TMUX_SOCKET,
+      "refresh-client",
+      "-t",
+      "/dev/ttys003",
+    ]);
+    expect(refreshClientArgs("/dev/ttys003")).not.toContain(sessionName("t1"));
   });
 });
 

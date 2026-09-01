@@ -5,6 +5,15 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { wsUrl } from "@/lib/token";
 
+/**
+ * `"… Variable"` is the family @fontsource actually declares (`index.css:110`); the
+ * bare `JetBrains Mono` matches no `@font-face` and silently falls through to the
+ * system mono. It arrives asynchronously, which xterm has to be told about — see
+ * the `document.fonts` handling below.
+ */
+const FONT_STACK = '"JetBrains Mono Variable", "SF Mono", ui-monospace, Menlo, monospace';
+const FONT_SIZE = 12.5;
+
 /** Mirrors the M3 tokens in index.css — the terminal is a surface too. */
 const THEME = {
   background: "#1c1c1d",
@@ -32,7 +41,10 @@ interface Props {
 
 export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Status lives here, never in the terminal buffer: writing into xterm while a
+  // full-screen program owns the screen scrolls and overwrites *its* rows, and the
+  // leftovers survive until something repaints (see the tmux repaint on reconnect).
+  const [notice, setNotice] = useState<{ tone: "err" | "info"; text: string } | null>(null);
   // Refs so a changing seed never recreates the terminal (effect deps stay stable).
   const seedRef = useRef(seedText);
   const onSeedSentRef = useRef(onSeedSent);
@@ -46,8 +58,8 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     if (!host) return;
 
     const term = new XTerm({
-      fontFamily: 'JetBrains Mono, "SF Mono", ui-monospace, Menlo, monospace',
-      fontSize: 12.5,
+      fontFamily: FONT_STACK,
+      fontSize: FONT_SIZE,
       lineHeight: 1.25,
       cursorBlink: true,
       allowProposedApi: true,
@@ -59,14 +71,25 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     // Cmd+click still selects; a plain click on a URL opens it in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri, "_blank")));
     term.open(host);
+    let webgl: WebglAddon | undefined;
     try {
-      term.loadAddon(new WebglAddon()); // falls back to canvas/DOM if unsupported
+      webgl = new WebglAddon();
+      // A lost GL context (GPU sleep, tab throttling, driver reset) leaves the addon
+      // painting into nothing while the buffer keeps updating — the screen goes
+      // stale in patches. xterm requires the addon be disposed so it can fall back
+      // to the DOM renderer; without this the tab renders half a screen forever.
+      webgl.onContextLoss(() => {
+        webgl?.dispose();
+        webgl = undefined;
+        term.refresh(0, term.rows - 1);
+      });
+      term.loadAddon(webgl); // falls back to canvas/DOM if unsupported
     } catch {
-      /* no webgl — default renderer is fine */
+      webgl = undefined; /* no webgl — default renderer is fine */
     }
     fit.fit();
 
-    let socket: WebSocket;
+    let socket: WebSocket | undefined;
     let disposed = false;
     let closedByServer = false;
     // Server sends {t:"error"} only for a dead PTY / malformed input — states a
@@ -76,6 +99,9 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     let everConnected = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let seedSent = false;
+    // Set on every (re)connect: the next chunk carries the repaint, and the
+    // renderer has to be pushed over the whole screen when it arrives.
+    let awaitingRepaint = false;
     let seedTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Sending at socket-open is racy: the program hasn't drawn its input yet and
@@ -85,22 +111,72 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
       seedSent = true;
       seedTimer = setTimeout(() => {
         const seed = seedRef.current;
-        if (!seed || socket.readyState !== WebSocket.OPEN) return;
+        if (!seed || socket?.readyState !== WebSocket.OPEN) return;
         const paste = `\x1b[200~${seed.replace(/\r\n?/g, "\n")}\x1b[201~`;
         socket.send(JSON.stringify({ t: "input", data: paste }));
         onSeedSentRef.current?.();
       }, 300);
     };
 
+    // A pane kept alive behind another tab measures 0×0. Fitting to that would
+    // resize the PTY to a garbage geometry and reflow the program's output — the
+    // damage only shows up later, when the tab comes back. Re-showing changes the
+    // size again, so the observer fits then.
+    const sendResize = () => {
+      if (!host.clientWidth || !host.clientHeight) return;
+      try {
+        fit.fit();
+      } catch {
+        return; /* transient layout — the next observation will settle it */
+      }
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
+      }
+    };
+
+    /** Repaints every row from the buffer — the cure for a stale renderer. */
+    const redrawAll = () => {
+      try {
+        term.refresh(0, term.rows - 1);
+      } catch {
+        /* terminal already disposed */
+      }
+    };
+
+    // xterm measures one cell when it opens and the WebGL renderer bakes that
+    // metric into its glyph atlas. @fontsource loads our mono face asynchronously,
+    // so opening first means the atlas is built from the *fallback* face; when the
+    // real one lands, every glyph is drawn at the wrong advance and cells go
+    // unpainted. Re-measure once it is here — assigning a different family first is
+    // what makes xterm redo the measurement, setting the same value back is a no-op.
+    const font = `${FONT_SIZE}px "JetBrains Mono Variable"`;
+    if (!document.fonts.check(font)) {
+      void document.fonts
+        .load(font)
+        .then(() => {
+          if (disposed) return;
+          term.options.fontFamily = "monospace";
+          term.options.fontFamily = FONT_STACK;
+          webgl?.clearTextureAtlas();
+          sendResize();
+          redrawAll();
+        })
+        .catch(() => {
+          /* font never arrived — the fallback metrics are already in place */
+        });
+    }
+
     const connect = () => {
       socket = new WebSocket(wsUrl(`/ws/terminal/${terminalId}`));
       socket.binaryType = "arraybuffer";
 
       socket.onopen = () => {
-        setError(null);
+        setNotice(null);
         attempt = 0;
-        fit.fit();
-        socket.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
+        awaitingRepaint = true;
+        // The server repaints on this first resize, so it has to go out even when
+        // the geometry is unchanged — that is what fills a reconnecting tab.
+        sendResize();
         // Only steal focus on the first connect, not on background reconnects.
         if (!everConnected) term.focus();
         everConnected = true;
@@ -113,26 +189,34 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
               { t: "exit"; code: number | null } | { t: "error"; message: string };
             if (msg.t === "exit") {
               closedByServer = true;
-              term.writeln(`\r\n\x1b[90m[process exited with code ${msg.code ?? "?"}]\x1b[0m`);
+              setNotice({ tone: "info", text: `Process exited with code ${msg.code ?? "?"}` });
               onExit?.(msg.code);
             } else {
               fatal = true;
-              setError(msg.message);
+              setNotice({ tone: "err", text: msg.message });
             }
           } catch {
             term.write(event.data);
           }
           return;
         }
-        term.write(new Uint8Array(event.data as ArrayBuffer));
+        // The server's answer to the reconnect is one full frame. Force the
+        // renderer over every row once it is parsed: the buffer is right either
+        // way, but a renderer that only repaints what it thinks changed will keep
+        // showing fragments of the frame it drew before the tab went away.
+        if (awaitingRepaint) {
+          awaitingRepaint = false;
+          term.write(new Uint8Array(event.data as ArrayBuffer), redrawAll);
+        } else {
+          term.write(new Uint8Array(event.data as ArrayBuffer));
+        }
         maybeSendSeed();
       };
 
-      socket.onerror = () => setError("Connection failed");
+      socket.onerror = () => setNotice({ tone: "err", text: "Connection failed" });
       socket.onclose = () => {
         if (disposed || closedByServer || fatal) return;
-        if (attempt === 0) term.writeln("\r\n\x1b[90m[disconnected — reconnecting…]\x1b[0m");
-        setError("Connection lost — reconnecting…");
+        setNotice({ tone: "err", text: "Connection lost — reconnecting…" });
         const delay = Math.min(1000 * 2 ** attempt, 10000);
         attempt++;
         reconnectTimer = setTimeout(connect, delay);
@@ -141,27 +225,13 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     connect();
 
     const dataSub = term.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ t: "input", data }));
       }
     });
 
     // Keep the PTY's viewport in sync with the pane, not the window.
-    const observer = new ResizeObserver(() => {
-      // A pane kept alive behind another tab measures 0×0. Fitting to that
-      // would resize the PTY to a garbage geometry and reflow the program's
-      // output — the damage is only visible later, when the tab comes back.
-      // Re-showing changes the size again, so the observer fits then.
-      if (!host.clientWidth || !host.clientHeight) return;
-      try {
-        fit.fit();
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
-        }
-      } catch {
-        /* transient layout — the next observation will settle it */
-      }
-    });
+    const observer = new ResizeObserver(sendResize);
     observer.observe(host);
 
     return () => {
@@ -170,16 +240,22 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
       if (reconnectTimer) clearTimeout(reconnectTimer);
       observer.disconnect();
       dataSub.dispose();
-      socket.close();
+      socket?.close();
       term.dispose();
     };
   }, [terminalId, onExit]);
 
   return (
     <div className="relative h-full min-h-0">
-      {error && (
-        <div className="absolute inset-x-0 top-0 z-10 bg-err/15 px-3 py-1.5 text-xs text-err">
-          {error}
+      {notice && (
+        <div
+          className={`absolute inset-x-0 top-0 z-10 px-3 py-1.5 text-xs ${
+            notice.tone === "err"
+              ? "bg-err/15 text-err"
+              : "bg-surface-container-highest text-ink-muted"
+          }`}
+        >
+          {notice.text}
         </div>
       )}
       <div ref={hostRef} className="terminal-host h-full w-full" />
