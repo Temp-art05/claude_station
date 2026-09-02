@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { wsUrl } from "@/lib/token";
 
 /**
@@ -70,6 +71,27 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     // Cmd+click still selects; a plain click on a URL opens it in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri, "_blank")));
     term.open(host);
+    // The DOM renderer builds an element per cell; at 215x32 that is ~7000 of
+    // them re-touched on every frame, and it is what made a fast-scrolling pane
+    // feel nothing like a real terminal. This was pulled out earlier as a suspect
+    // for the screen going stale — measurement cleared it: the painted rows always
+    // matched the buffer exactly, so the renderer never lost anything. On the GPU.
+    let webgl: WebglAddon | undefined;
+    try {
+      webgl = new WebglAddon();
+      // A lost GL context (GPU sleep, tab throttling, driver reset) leaves the
+      // addon painting into nothing while the buffer keeps updating — the screen
+      // goes stale in patches. xterm requires the addon be disposed so it can fall
+      // back to the DOM renderer; without this the tab renders half a screen.
+      webgl.onContextLoss(() => {
+        webgl?.dispose();
+        webgl = undefined;
+        term.refresh(0, term.rows - 1);
+      });
+      term.loadAddon(webgl); // falls back to canvas/DOM if unsupported
+    } catch {
+      webgl = undefined; /* no webgl — the default renderer is still correct */
+    }
     fit.fit();
 
     let socket: WebSocket | undefined;
@@ -157,23 +179,6 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     };
 
     /**
-     * The renderer falling out of step with the buffer is not detectable from
-     * here: a canvas dropped while the panel was `display:none`, a frame that
-     * landed with nothing on screen, a row the renderer decided had not changed.
-     * So the whole screen is re-drawn from the buffer at most twice a second
-     * while output flows — cheap for a grid this size, and it makes every one of
-     * those failures heal itself instead of surviving until the next resize.
-     */
-    const HEAL_MS = 500;
-    let lastHeal = 0;
-    const healSoon = () => {
-      const now = performance.now();
-      if (now - lastHeal < HEAL_MS) return;
-      lastHeal = now;
-      redrawAll();
-    };
-
-    /**
      * Everything that can put a screen back. The buffer is usually still right and
      * only the canvas is gone, so the local repaint comes first and covers the
      * common case on its own; the server frame covers the rest — rows this
@@ -202,6 +207,7 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
           if (disposed) return;
           term.options.fontFamily = "monospace";
           term.options.fontFamily = FONT_STACK;
+          webgl?.clearTextureAtlas();
           sendResize();
           redrawAll();
         })
@@ -252,7 +258,7 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
           awaitingRepaint = false;
           term.write(new Uint8Array(event.data as ArrayBuffer), redrawAll);
         } else {
-          term.write(new Uint8Array(event.data as ArrayBuffer), healSoon);
+          term.write(new Uint8Array(event.data as ArrayBuffer));
         }
         maybeSendSeed();
       };
