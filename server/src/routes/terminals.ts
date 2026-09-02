@@ -173,11 +173,16 @@ export function terminalRoutes(app: FastifyInstance): void {
 
     const cwd = assertPathAllowed(existing.cwd, existing.projectId);
     const app_ = setting("terminal.app");
+    // Size the window to the session *before* attaching — see windowSizeLine.
+    const size = tmux.windowSize(id);
     const file = writeLauncher(`${existing.title}-${id.slice(0, 8)}`, [
       `cd ${shq(cwd)}`,
+      ...(size ? [tmux.windowSizeLine(size)] : []),
       tmux.launcherLine(id),
     ]);
     await openWith(app_, file);
+    // The new window's own attach paint is not reliable — see repaintOnAttach.
+    tmux.repaintOnAttach(id);
     // `attach -d` already steals the client; killing ours makes the moment the tab
     // goes orphaned deterministic instead of racing the new window.
     pty.kill(id);

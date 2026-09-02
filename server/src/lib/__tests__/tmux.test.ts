@@ -10,6 +10,8 @@ import {
   sessionName,
   terminalIdOf,
   TMUX_SOCKET,
+  windowSizeArgs,
+  windowSizeLine,
 } from "../tmux";
 
 const base = { id: "t1", cwd: "/Users/me/repo", shell: "/bin/zsh", cols: 200, rows: 50 };
@@ -117,6 +119,36 @@ describe("repaint targeting", () => {
   });
 });
 
+describe("windowSizeArgs", () => {
+  // The attach size has to be the window's, not a client's: a client is a row
+  // shorter when the status line is on, and attaching a row short resizes the
+  // window — the very reflow the lookup exists to avoid.
+  it("asks for the window's geometry of an exactly named session", () => {
+    expect(windowSizeArgs("t1")).toEqual([
+      "-L",
+      TMUX_SOCKET,
+      "display-message",
+      "-p",
+      "-t",
+      "=cs-t1:",
+      "#{window_width}x#{window_height}",
+    ]);
+  });
+
+  // Bare session name: tmux resolves no window context and prints "x".
+  it("targets the session's current window, not the session", () => {
+    expect(windowSizeArgs("t1").at(-2)).toBe("=cs-t1:");
+  });
+});
+
+describe("windowSizeLine", () => {
+  // Sizing the window first is what stops `window-size latest` from dragging the
+  // session down to the new window's 80x24 and reflowing everything in it.
+  it("emits a real CSI 8 resize, rows before cols", () => {
+    expect(windowSizeLine({ cols: 215, rows: 32 })).toBe("printf '\\033[8;32;215t'");
+  });
+});
+
 describe("configFor", () => {
   it("never leaves C-b as the prefix — readline needs it", () => {
     const conf = configFor(3.4);
@@ -128,6 +160,19 @@ describe("configFor", () => {
     const conf = configFor(3.4);
     expect(conf).toContain("set -g destroy-unattached off");
     expect(conf).toContain("set -g window-size latest");
+  });
+
+  // A client that dropped the frame tmux sent it has no way to ask again, and
+  // tmux only ever sends differences after that — so focus is the cheapest
+  // moment to hand it a whole screen.
+  it("repaints a client whenever it is focused", () => {
+    expect(configFor(3.4)).toContain("set-hook -g client-focus-in refresh-client");
+  });
+
+  // The hook is 3.2; older tmux has to do without rather than fail to load the
+  // config, which would take every setting above it down with it.
+  it("leaves the focus hook out of a tmux too old for it", () => {
+    expect(configFor(3.1)).not.toContain("client-focus-in");
   });
 
   it("uses terminal-features on 3.2+ and terminal-overrides below it", () => {

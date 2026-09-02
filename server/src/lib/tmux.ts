@@ -105,6 +105,12 @@ export function configFor(version: number): string {
   if (version >= 3.2) lines.push('set -as terminal-features ",*:RGB"');
   else lines.push('set -ga terminal-overrides ",*:Tc"');
   if (version >= 3.3) lines.push("set -g allow-passthrough on");
+  // The safety net under repaintOnAttach: a client that lost the screen it was
+  // sent gets a fresh one the moment someone looks at it. tmux sends only the
+  // difference against the screen it believes a client has, so a dropped frame
+  // otherwise survives until the next resize — and clicking the window is the
+  // first thing anyone does with a blank one.
+  if (version >= 3.2) lines.push("set-hook -g client-focus-in refresh-client");
   return `${lines.join("\n")}\n`;
 }
 
@@ -170,6 +176,18 @@ export function attachArgs(terminalId: string, opts: { steal?: boolean } = {}): 
 }
 
 /**
+ * `CSI 8 ; rows ; cols t` — asks the terminal app to size its own window to the
+ * session before attaching to it. Without this the new window attaches at its
+ * profile default (80x24 for Terminal.app) and `window-size latest` drags the
+ * whole session down to that: the program inside reflows its entire screen and
+ * everything already written is re-wrapped at 80 columns. Matching first means
+ * the attach changes nothing, so there is no reflow to watch happen.
+ */
+export function windowSizeLine(size: { cols: number; rows: number }): string {
+  return `printf '\\033[8;${size.rows};${size.cols}t'`;
+}
+
+/**
  * The one line a `.command` launcher needs to take the session over. `-d` steals
  * the client, so the app's own PTY lets go the moment this window opens.
  */
@@ -204,7 +222,37 @@ export function hasSession(terminalId: string): boolean {
  * that is the reattach path, and the caller's `command` is deliberately ignored:
  * the work is already running inside.
  */
+/**
+ * `-f` is read once, when the tmux *server* starts. A server that is already up
+ * — which it is for every terminal after the first — never sees a rewritten
+ * config, so anything the station needs from it has to be set again at runtime.
+ * Idempotent, and cheap enough to just always do.
+ */
+export function applyServerOptions(): void {
+  if (probe().version < 3.2) return;
+  try {
+    // One fork, both settings: the hook is useless without focus-events, since
+    // that is what turns a client's `CSI I` into the event it hangs off.
+    run([
+      "-L",
+      TMUX_SOCKET,
+      "set-option",
+      "-g",
+      "focus-events",
+      "on",
+      ";",
+      "set-hook",
+      "-g",
+      "client-focus-in",
+      "refresh-client",
+    ]);
+  } catch {
+    /* no server yet — the config file carries the same settings for a fresh one */
+  }
+}
+
 export function ensureSession(input: NewSessionInput): boolean {
+  applyServerOptions();
   if (hasSession(input.id)) return false;
   const envFlag = supportsEnvFlag();
   run(newSessionArgs({ ...input, envFlag }));
@@ -275,6 +323,62 @@ export function listClientsArgs(terminalId: string): string[] {
 /** `client` is a tty name out of `listClientsArgs`, never a session name. */
 export function refreshClientArgs(client: string): string[] {
   return ["-L", TMUX_SOCKET, "refresh-client", "-t", client];
+}
+
+export function windowSizeArgs(terminalId: string): string[] {
+  return [
+    "-L",
+    TMUX_SOCKET,
+    "display-message",
+    "-p",
+    // The trailing ":" makes this the session's *current window*, not the session:
+    // targeted at a bare session name the window fields resolve to nothing at all
+    // (`display -p -t =sess "#{window_width}"` prints an empty string).
+    "-t",
+    `=${sessionName(terminalId)}:`,
+    "#{window_width}x#{window_height}",
+  ];
+}
+
+/**
+ * The size the session is drawing at, so a new client can attach *at* it. Every
+ * other size squeezes the window (`window-size latest`) and makes the program
+ * inside redraw for nothing — and a squeeze to 80 columns truncates the history
+ * it already wrote. Null when the session is gone.
+ */
+export function windowSize(terminalId: string): { cols: number; rows: number } | null {
+  try {
+    const m = /^(\d+)x(\d+)$/.exec(run(windowSizeArgs(terminalId)).trim());
+    return m ? { cols: Number(m[1]), rows: Number(m[2]) } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Two early repaints, for the window that opens without ever taking focus. The
+ * `client-focus-in` hook is what actually makes this reliable, so this stays
+ * short on purpose: every entry is a whole screen redrawn, and a long list of
+ * them is visible as flicker while the window settles.
+ */
+export const ATTACH_REPAINTS_MS = [500, 2000];
+
+/**
+ * A handed-off session is painted once, as the new window attaches — and that
+ * paint is lost when the terminal app is still setting the window up as it
+ * lands: the window stays blank and only the cells that change afterwards ever
+ * appear (reproduced with Terminal.app; `refresh-client` fixes it instantly).
+ *
+ * Deliberately repaints *whatever is attached* rather than trying to single out
+ * the new window. Telling clients apart by name does not work: macOS hands the
+ * freed `/dev/ttysNNN` of the PTY we just killed straight back to the terminal
+ * app, so the window that appears can carry the exact name of the client it
+ * replaced — and a "new clients only" filter then matches nothing, forever.
+ */
+export function repaintOnAttach(terminalId: string): void {
+  for (const ms of ATTACH_REPAINTS_MS) {
+    setTimeout(() => refreshClients(sessionClients(terminalId)), ms).unref?.();
+  }
 }
 
 export function killSession(terminalId: string): void {

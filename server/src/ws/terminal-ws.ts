@@ -24,9 +24,20 @@ export function terminalWs(app: FastifyInstance): void {
         return;
       }
 
+      // A tmux session is created and starts drawing before any tab exists, at a
+      // size no tab will ever have. Those bytes are worse than no bytes: a
+      // full-screen program positions the cursor absolutely, so a frame drawn for
+      // 200x50 lands on rows a 215x32 emulator does not have and scrolls the
+      // screen away — the garbled flash every new terminal used to open with.
+      // tmux holds the real screen and repaints on the first resize, so throwing
+      // them away costs nothing. Not for a plain PTY: nothing can repaint that,
+      // and its byte log is all there is.
+      let sized = !pty.isTmuxBacked(id);
+
       const detach = pty.attach(id, {
         // Raw PTY bytes go out as binary frames; JSON is reserved for control.
         onData: (chunk) => {
+          if (!sized) return;
           if (socket.readyState === socket.OPEN) socket.send(chunk);
         },
         onExit: (code) => {
@@ -48,10 +59,6 @@ export function terminalWs(app: FastifyInstance): void {
         },
       });
 
-      // tmux repaints on demand instead of the tab replaying a byte log, but only
-      // once the client's geometry is known — hence on the first resize, not here.
-      let painted = false;
-
       socket.on("message", (raw: Buffer) => {
         const parsed = terminalClientMsgSchema.safeParse(
           JSON.parse(raw.toString("utf8") || "{}"),
@@ -63,14 +70,16 @@ export function terminalWs(app: FastifyInstance): void {
         const msg = parsed.data;
         if (msg.t === "input") pty.write(id, msg.data);
         else if (msg.t === "resize") {
-          // Only the first one has to guarantee a frame; after that the tab is in
-          // sync and a real size change redraws on its own.
-          if (painted) pty.resize(id, msg.cols, msg.rows);
-          else {
-            painted = true;
-            pty.resizeAndPaint(id, msg.cols, msg.rows);
-          }
-        } else if (msg.t === "kill") pty.kill(id);
+          // *Every* size ends in a guaranteed frame, not just the first. "a real
+          // size change redraws on its own" was the assumption here and it does
+          // not hold: a tab that reports 90x29 while its panel is still animating,
+          // then 215x32 a moment later, got nothing for the second one — tmux held
+          // a full screen and sent only differences against it, leaving the tab
+          // blank for good.
+          sized = true;
+          pty.resizeAndPaint(id, msg.cols, msg.rows);
+        } else if (msg.t === "repaint") pty.repaint(id);
+        else if (msg.t === "kill") pty.kill(id);
       });
 
       socket.on("close", detach);

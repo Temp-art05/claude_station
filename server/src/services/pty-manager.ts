@@ -66,22 +66,29 @@ export function start(opts: StartOptions): { pid: number } {
     // the same session can be attached from a real terminal window later. An
     // existing session is reattached as-is and `command` is ignored — whatever is
     // running in there survived, which is the point.
+    // A size the session already draws at costs nothing; anything else squeezes
+    // the window (`window-size latest`), makes the program inside redraw, and —
+    // on the way down to 80 columns — truncates the lines it already wrote. So
+    // reattaching adopts the session's size and only a *new* session picks one.
+    const existing = tmux.windowSize(opts.id);
+    const startCols = existing?.cols ?? Math.max(cols, 200);
+    const startRows = existing?.rows ?? Math.max(rows, 50);
     tmux.ensureSession({
       id: opts.id,
       cwd: opts.cwd,
       env: opts.env,
       command: opts.command,
       shell,
-      // The client resizes the window the moment it attaches (window-size latest);
-      // this is just so the first frame isn't drawn at 80x24.
-      cols: Math.max(cols, 200),
-      rows: Math.max(rows, 50),
+      // Wide enough that the first frame isn't drawn at 80x24; the tab's first
+      // resize sets the real geometry once, and once only.
+      cols: startCols,
+      rows: startRows,
     });
     pty = spawn("tmux", tmux.attachArgs(opts.id), {
       name: "xterm-256color",
       cwd: opts.cwd,
-      cols,
-      rows,
+      cols: startCols,
+      rows: startRows,
       // No env set here: the session carries it, and the attach client's env
       // would otherwise leak into panes tmux opens later.
       env: { ...baseEnv, TERM: "xterm-256color" },
@@ -168,6 +175,37 @@ export function resizeAndPaint(id: string, cols: number, rows: number): void {
     clients.length > 0 && clients.every((c) => c.cols === cols && c.rows === rows);
   resize(id, cols, rows);
   if (unchanged) tmux.refreshClients(clients);
+  // A changed size normally repaints on its own, but "normally" is not a
+  // guarantee — the frame can be dropped, and a tab that lost it has no way to
+  // ask again. Waiting for tmux to *report* the new geometry is what keeps this
+  // from being the stale frame described above: by then the client has seen
+  // SIGWINCH and its own redraw is already out.
+  else repaintWhenResized(id, cols, rows);
+}
+
+/**
+ * Repaints every client of a session. The cure for a client whose display was
+ * thrown away while tmux still believed it painted — a pane re-shown after
+ * `display:none` dropped its canvas, a terminal window that cleared itself as it
+ * finished opening. tmux only ever sends the *difference* against the screen it
+ * thinks the client has, so without this such a client shows nothing but the
+ * cells that happen to change afterwards.
+ */
+export function repaint(id: string): void {
+  const m = sessions.get(id);
+  if (!m || m.exited || !m.tmuxBacked) return;
+  tmux.refreshClients(tmux.sessionClients(id));
+}
+
+/** Polls until tmux reports the size it was asked for, then forces one frame. */
+function repaintWhenResized(id: string, cols: number, rows: number, tries = 10): void {
+  setTimeout(() => {
+    const m = sessions.get(id);
+    if (!m || m.exited || !m.tmuxBacked) return;
+    const clients = tmux.sessionClients(id);
+    if (clients.some((c) => c.cols === cols && c.rows === rows)) tmux.refreshClients(clients);
+    else if (tries > 1) repaintWhenResized(id, cols, rows, tries - 1);
+  }, 60).unref?.();
 }
 
 export function write(id: string, data: string): boolean {

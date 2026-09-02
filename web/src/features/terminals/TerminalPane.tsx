@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { wsUrl } from "@/lib/token";
 
 /**
@@ -71,22 +70,6 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     // Cmd+click still selects; a plain click on a URL opens it in the browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => window.open(uri, "_blank")));
     term.open(host);
-    let webgl: WebglAddon | undefined;
-    try {
-      webgl = new WebglAddon();
-      // A lost GL context (GPU sleep, tab throttling, driver reset) leaves the addon
-      // painting into nothing while the buffer keeps updating — the screen goes
-      // stale in patches. xterm requires the addon be disposed so it can fall back
-      // to the DOM renderer; without this the tab renders half a screen forever.
-      webgl.onContextLoss(() => {
-        webgl?.dispose();
-        webgl = undefined;
-        term.refresh(0, term.rows - 1);
-      });
-      term.loadAddon(webgl); // falls back to canvas/DOM if unsupported
-    } catch {
-      webgl = undefined; /* no webgl — default renderer is fine */
-    }
     fit.fit();
 
     let socket: WebSocket | undefined;
@@ -118,20 +101,50 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
       }, 300);
     };
 
-    // A pane kept alive behind another tab measures 0×0. Fitting to that would
-    // resize the PTY to a garbage geometry and reflow the program's output — the
-    // damage only shows up later, when the tab comes back. Re-showing changes the
-    // size again, so the observer fits then.
-    const sendResize = () => {
-      if (!host.clientWidth || !host.clientHeight) return;
-      try {
-        fit.fit();
-      } catch {
-        return; /* transient layout — the next observation will settle it */
+    // A pane kept alive behind another tab measures 0×0. Fitting to *that* would
+    // resize the PTY to a garbage geometry and reflow the program's output, so a
+    // hidden pane is never fitted — but it still has to report the grid it has.
+    // Staying silent was the bug: the PTY kept drawing at a geometry this
+    // emulator never had (absolute cursor moves past its last row scroll the
+    // screen away, past its last column pile up at the edge), and the server
+    // repaints on the first size it hears — so no size meant no frame, ever.
+    const sendResizeNow = () => {
+      if (host.clientWidth && host.clientHeight) {
+        try {
+          fit.fit();
+        } catch {
+          /* transient layout — the next observation will settle it */
+        }
       }
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
       }
+    };
+
+    /**
+     * Only the geometry the pane *settles* on is worth telling the server about.
+     * Every observation used to be sent, and every one resized the real tmux
+     * window: a panel animating out to full width reported 88×29, then 90×29,
+     * then 215×32, and Claude Code reflowed its whole screen for each. tmux keeps
+     * the last size's screen and sends only differences against it, so the two
+     * emulators end up describing different screens — tmux full, this one blank —
+     * with no way back. Waiting out the animation is what keeps them one screen.
+     */
+    const RESIZE_QUIET_MS = 250;
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let reportedOnce = false;
+    const sendResize = () => {
+      // The *first* geometry is the opposite case and must not wait: the server
+      // holds this tab's output until it knows the size, so every millisecond of
+      // debounce here is a millisecond of blank pane. There is nothing to settle
+      // yet either — the flapping this guards against comes from later layout.
+      if (!reportedOnce) {
+        reportedOnce = true;
+        sendResizeNow();
+        return;
+      }
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(sendResizeNow, RESIZE_QUIET_MS);
     };
 
     /** Repaints every row from the buffer — the cure for a stale renderer. */
@@ -143,12 +156,44 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
       }
     };
 
-    // xterm measures one cell when it opens and the WebGL renderer bakes that
-    // metric into its glyph atlas. @fontsource loads our mono face asynchronously,
-    // so opening first means the atlas is built from the *fallback* face; when the
-    // real one lands, every glyph is drawn at the wrong advance and cells go
-    // unpainted. Re-measure once it is here — assigning a different family first is
-    // what makes xterm redo the measurement, setting the same value back is a no-op.
+    /**
+     * The renderer falling out of step with the buffer is not detectable from
+     * here: a canvas dropped while the panel was `display:none`, a frame that
+     * landed with nothing on screen, a row the renderer decided had not changed.
+     * So the whole screen is re-drawn from the buffer at most twice a second
+     * while output flows — cheap for a grid this size, and it makes every one of
+     * those failures heal itself instead of surviving until the next resize.
+     */
+    const HEAL_MS = 500;
+    let lastHeal = 0;
+    const healSoon = () => {
+      const now = performance.now();
+      if (now - lastHeal < HEAL_MS) return;
+      lastHeal = now;
+      redrawAll();
+    };
+
+    /**
+     * Everything that can put a screen back. The buffer is usually still right and
+     * only the canvas is gone, so the local repaint comes first and covers the
+     * common case on its own; the server frame covers the rest — rows this
+     * emulator never received, because tmux only ever sends the difference against
+     * the screen it believes the client already has.
+     */
+    const requestRepaint = () => {
+      redrawAll();
+      if (socket?.readyState === WebSocket.OPEN) {
+        awaitingRepaint = true;
+        socket.send(JSON.stringify({ t: "repaint" }));
+      }
+    };
+
+    // xterm measures one cell when it opens and lays every row out on that metric.
+    // @fontsource loads our mono face asynchronously, so opening first measures the
+    // *fallback* face; when the real one lands, glyphs are drawn at the wrong
+    // advance and cells go unpainted. Re-measure once it is here — assigning a
+    // different family first is what makes xterm redo the measurement, setting the
+    // same value back is a no-op.
     const font = `${FONT_SIZE}px "JetBrains Mono Variable"`;
     if (!document.fonts.check(font)) {
       void document.fonts
@@ -157,7 +202,6 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
           if (disposed) return;
           term.options.fontFamily = "monospace";
           term.options.fontFamily = FONT_STACK;
-          webgl?.clearTextureAtlas();
           sendResize();
           redrawAll();
         })
@@ -208,7 +252,7 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
           awaitingRepaint = false;
           term.write(new Uint8Array(event.data as ArrayBuffer), redrawAll);
         } else {
-          term.write(new Uint8Array(event.data as ArrayBuffer));
+          term.write(new Uint8Array(event.data as ArrayBuffer), healSoon);
         }
         maybeSendSeed();
       };
@@ -230,15 +274,39 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
       }
     });
 
-    // Keep the PTY's viewport in sync with the pane, not the window.
-    const observer = new ResizeObserver(sendResize);
+    // Keep the PTY's viewport in sync with the pane, not the window. The 0×0
+    // observation is also how we learn the panel was hidden: KeepAlive switches
+    // tabs with `display:none`, which drops the renderer's canvas while the
+    // buffer survives. Re-showing paints only what changed since — a blank
+    // screen with fragments of a live line on it — until something repaints.
+    let wasHidden = false;
+    const observer = new ResizeObserver(() => {
+      if (!host.clientWidth || !host.clientHeight) {
+        wasHidden = true;
+        return;
+      }
+      sendResize();
+      if (wasHidden) {
+        wasHidden = false;
+        requestRepaint();
+      }
+    });
     observer.observe(host);
+
+    // Same problem, different cause: a backgrounded tab can have its canvas
+    // dropped without the pane ever changing size.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") requestRepaint();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       disposed = true;
       if (seedTimer) clearTimeout(seedTimer);
+      if (resizeTimer) clearTimeout(resizeTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       observer.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
       dataSub.dispose();
       socket?.close();
       term.dispose();
