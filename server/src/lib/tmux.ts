@@ -7,7 +7,7 @@
  * Argument building is pure and exported so it stays testable (same split as
  * lib/claude-cli.ts); the few side-effecting wrappers below shell out to tmux.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { childBaseEnv } from "./child-env";
 import { shq } from "./claude-cli";
@@ -271,41 +271,13 @@ export interface TmuxClient {
   rows: number;
 }
 
-/**
- * Forces tmux to repaint the current screen to the given clients. Our PTY is a
- * long-lived tmux client that survives WS reconnects, so a reconnecting tab
- * triggers no attach and therefore no repaint of its own — this is what gives it
- * a correct screen instead of a replayed byte log.
- *
- * `refresh-client -t` takes a *client* (`/dev/ttys003`), not a session, hence the
- * `sessionClients` lookup first: aiming it at a session name only ever yields
- * "can't find client".
- */
-export function refreshClients(clients: TmuxClient[]): void {
-  for (const c of clients) {
-    try {
-      run(refreshClientArgs(c.name));
-    } catch {
-      /* that client detached between the two calls */
-    }
-  }
-}
 
-/**
- * The clients attached to this terminal's session, with their sizes — one fork
- * serves both the repaint target and the "did anything actually change" check.
- */
-export function sessionClients(terminalId: string): TmuxClient[] {
-  try {
-    return run(listClientsArgs(terminalId))
-      .split("\n")
-      .flatMap((line) => {
-        const m = /^(\S+) (\d+)x(\d+)$/.exec(line.trim());
-        return m ? [{ name: m[1]!, cols: Number(m[2]), rows: Number(m[3]) }] : [];
-      });
-  } catch {
-    return []; // session gone — nothing left to repaint
-  }
+
+function parseClients(out: string): TmuxClient[] {
+  return out.split("\n").flatMap((line) => {
+    const m = /^(\S+) (\d+)x(\d+)$/.exec(line.trim());
+    return m ? [{ name: m[1]!, cols: Number(m[2]), rows: Number(m[3]) }] : [];
+  });
 }
 
 /**
@@ -377,9 +349,50 @@ export const ATTACH_REPAINTS_MS = [500, 2000];
  */
 export function repaintOnAttach(terminalId: string): void {
   for (const ms of ATTACH_REPAINTS_MS) {
-    setTimeout(() => refreshClients(sessionClients(terminalId)), ms).unref?.();
+    const t = setTimeout(() => void repaintSession(terminalId), ms);
+    t.unref?.();
   }
 }
+
+/**
+ * Same as `run`, off the event loop. Anything on the output path has to use this:
+ * a synchronous fork stops this process reading the PTY, the PTY fills, and tmux
+ * starts discarding output for a client it decides cannot keep up — which is the
+ * exact failure the callers here exist to repair.
+ */
+function runAsync(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "tmux",
+      args,
+      { encoding: "utf8", timeout: 10000, env: childBaseEnv() },
+      (err, stdout) => (err ? reject(err) : resolve(stdout)),
+    );
+  });
+}
+
+/** `sessionClients`, without blocking. */
+export async function sessionClientsAsync(terminalId: string): Promise<TmuxClient[]> {
+  try {
+    return parseClients(await runAsync(listClientsArgs(terminalId)));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Forces tmux to repaint this session's clients, without blocking. tmux stops
+ * volunteering redraws after a burst of output big enough to back up a client's
+ * tty — it discards what it could not write and never returns to it — so the
+ * screen sits a page behind until something asks. This is the asking.
+ */
+export async function repaintSession(terminalId: string): Promise<void> {
+  const clients = await sessionClientsAsync(terminalId);
+  await Promise.all(
+    clients.map((c) => runAsync(refreshClientArgs(c.name)).catch(() => undefined)),
+  );
+}
+
 
 export function killSession(terminalId: string): void {
   try {

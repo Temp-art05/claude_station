@@ -24,20 +24,51 @@ export function terminalWs(app: FastifyInstance): void {
         return;
       }
 
-      // A tmux session is created and starts drawing before any tab exists, at a
-      // size no tab will ever have. Those bytes are worse than no bytes: a
-      // full-screen program positions the cursor absolutely, so a frame drawn for
-      // 200x50 lands on rows a 215x32 emulator does not have and scrolls the
-      // screen away — the garbled flash every new terminal used to open with.
-      // tmux holds the real screen and repaints on the first resize, so throwing
-      // them away costs nothing. Not for a plain PTY: nothing can repaint that,
-      // and its byte log is all there is.
+      // tmux sends its client setup once, when `tmux attach` starts — which is
+      // when the *terminal* is created, with no tab connected yet. Nothing
+      // replays it (a tmux-backed PTY deliberately keeps no byte log), so a tab
+      // would spend its life on the normal buffer while tmux draws for the
+      // alternate screen it believes the client entered. Absolute cursor moves
+      // and erases then land against different semantics: cells that never
+      // clear, rows a screenful behind, and no way back, because tmux only ever
+      // sends the difference against the screen it thinks it painted.
+      //
+      // The alternate screen is the one piece of that setup a client cannot
+      // recover on its own. The rest — scroll region, mouse and paste modes —
+      // tmux re-sends with every redraw.
+      if (pty.isTmuxBacked(id) && socket.readyState === socket.OPEN) {
+        socket.send(Buffer.from("\x1b[?1049h", "ascii"));
+      }
+
+      // A tmux session starts drawing before any tab exists, at a size no tab
+      // will ever have, and a frame drawn for 200x50 lands on rows a 215x32
+      // emulator does not have. So those bytes are held back — but *held*, never
+      // dropped: they can carry setup the program inside sent once. They go out
+      // the moment the geometry is known, just ahead of the repaint that
+      // corrects whatever they drew.
       let sized = !pty.isTmuxBacked(id);
+      let held: Buffer[] = [];
+      let heldBytes = 0;
+      /** A tab that never reports a size must not grow this without bound. */
+      const HELD_CAP = 1_000_000;
+      const flushHeld = () => {
+        const queued = held;
+        held = [];
+        heldBytes = 0;
+        if (socket.readyState !== socket.OPEN) return;
+        for (const chunk of queued) socket.send(chunk);
+      };
 
       const detach = pty.attach(id, {
         // Raw PTY bytes go out as binary frames; JSON is reserved for control.
         onData: (chunk) => {
-          if (!sized) return;
+          if (!sized) {
+            if (heldBytes + chunk.byteLength <= HELD_CAP) {
+              held.push(chunk);
+              heldBytes += chunk.byteLength;
+            }
+            return;
+          }
           if (socket.readyState === socket.OPEN) socket.send(chunk);
         },
         onExit: (code) => {
@@ -70,13 +101,14 @@ export function terminalWs(app: FastifyInstance): void {
         const msg = parsed.data;
         if (msg.t === "input") pty.write(id, msg.data);
         else if (msg.t === "resize") {
-          // *Every* size ends in a guaranteed frame, not just the first. "a real
-          // size change redraws on its own" was the assumption here and it does
-          // not hold: a tab that reports 90x29 while its panel is still animating,
-          // then 215x32 a moment later, got nothing for the second one — tmux held
-          // a full screen and sent only differences against it, leaving the tab
-          // blank for good.
-          sized = true;
+          // *Every* size ends in a guaranteed frame, not just the first. "A real
+          // size change redraws on its own" does not hold: a tab that reports
+          // 90x29 while its panel is still animating, then 215x32 a moment
+          // later, got nothing for the second one and stayed blank for good.
+          if (!sized) {
+            sized = true;
+            flushHeld();
+          }
           pty.resizeAndPaint(id, msg.cols, msg.rows);
         } else if (msg.t === "repaint") pty.repaint(id);
         else if (msg.t === "kill") pty.kill(id);

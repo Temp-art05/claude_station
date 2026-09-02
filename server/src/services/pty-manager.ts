@@ -118,6 +118,7 @@ export function start(opts: StartOptions): { pid: number } {
 
   pty.onData((data) => {
     const chunk = Buffer.from(data, "utf8");
+    if (managed.tmuxBacked) settlePaint(opts.id);
     if (!managed.tmuxBacked) {
       managed.scrollback.push(chunk);
       managed.scrollbackBytes += chunk.byteLength;
@@ -128,6 +129,10 @@ export function start(opts: StartOptions): { pid: number } {
 
   pty.onExit(({ exitCode }) => {
     managed.exited = true;
+    clearPainter(opts.id);
+    paintedUntil.delete(opts.id);
+    clearTimeout(settling.get(opts.id));
+    settling.delete(opts.id);
     managed.exitCode = exitCode;
     for (const l of managed.listeners) l.onExit(exitCode);
     sessions.delete(opts.id);
@@ -157,30 +162,16 @@ export function attach(id: string, listener: PtyListener): () => void {
 }
 
 /**
- * The geometry a freshly attached tab sends, plus a guarantee that it ends up with
- * one full frame — measured against tmux 3.7a:
- *
- * - a size tmux has to adopt already redraws every client, so asking for a repaint
- *   on top of it paints a *third* frame, and the one we ask for goes out before the
- *   client has even seen SIGWINCH — drawn at the old geometry, landing in the wrong
- *   rows. That stale frame is what left fragments of a half-updated line on screen.
- * - a size that matches draws nothing at all. That is the reconnect case, and the
- *   only one that needs `refreshClients`.
+ * The geometry a tab reports, plus a guarantee that it ends up with one full
+ * frame. Both halves are needed: a size tmux has to adopt redraws on its own but
+ * not reliably, and a size that already matches draws nothing at all — which is
+ * exactly the reconnect case. See repaintWhenResized for why it waits first.
  */
 export function resizeAndPaint(id: string, cols: number, rows: number): void {
   const m = sessions.get(id);
   if (!m || m.exited) return;
-  const clients = m.tmuxBacked ? tmux.sessionClients(id) : [];
-  const unchanged =
-    clients.length > 0 && clients.every((c) => c.cols === cols && c.rows === rows);
   resize(id, cols, rows);
-  if (unchanged) tmux.refreshClients(clients);
-  // A changed size normally repaints on its own, but "normally" is not a
-  // guarantee — the frame can be dropped, and a tab that lost it has no way to
-  // ask again. Waiting for tmux to *report* the new geometry is what keeps this
-  // from being the stale frame described above: by then the client has seen
-  // SIGWINCH and its own redraw is already out.
-  else repaintWhenResized(id, cols, rows);
+  if (m.tmuxBacked) repaintWhenResized(id, cols, rows);
 }
 
 /**
@@ -194,18 +185,98 @@ export function resizeAndPaint(id: string, cols: number, rows: number): void {
 export function repaint(id: string): void {
   const m = sessions.get(id);
   if (!m || m.exited || !m.tmuxBacked) return;
-  tmux.refreshClients(tmux.sessionClients(id));
+  void tmux.repaintSession(id);
 }
 
-/** Polls until tmux reports the size it was asked for, then forces one frame. */
-function repaintWhenResized(id: string, cols: number, rows: number, tries = 10): void {
-  setTimeout(() => {
+/**
+ * tmux stops volunteering redraws after a burst of output large enough to back
+ * up a client's tty: it discards what it could not write and does not come back
+ * to it, so the client sits a screenful behind and cannot tell — tmux sends only
+ * the difference against the screen it believes it painted, and it believes it
+ * painted the newer one. Reproduced by asking a `claude` session for 150 lines
+ * at once: the pane froze ~30 lines short and stayed there for as long as it was
+ * watched, and a single `refresh-client` brought it level.
+ *
+ * So every burst ends in a repaint. Not a poll — it rides on the output itself:
+ * one once the bytes stop for a moment, and, while they keep coming, one per
+ * second so a long burst cannot stay stale either.
+ */
+const PAINT_QUIET_MS = 150;
+const PAINT_MAX_STALE_MS = 1000;
+/**
+ * A repaint is itself output, so without this the frame it produces schedules
+ * the next one and the session repaints forever. Long enough for that frame to
+ * have arrived, short enough that real output behind it still gets its own.
+ */
+const PAINT_ECHO_MS = 300;
+const painters = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+/** Output before this instant is assumed to be our own repaint coming back. */
+const paintedUntil = new Map<string, number>();
+
+function paintNow(id: string): void {
+  clearPainter(id);
+  const m = sessions.get(id);
+  if (!m || m.exited || !m.tmuxBacked) return;
+  paintedUntil.set(id, Date.now() + PAINT_ECHO_MS);
+  void tmux.repaintSession(id);
+}
+
+function clearPainter(id: string): void {
+  const open = painters.get(id);
+  if (open) clearTimeout(open.timer);
+  painters.delete(id);
+}
+
+function settlePaint(id: string): void {
+  const now = Date.now();
+  if (now < (paintedUntil.get(id) ?? 0)) return;
+  const open = painters.get(id);
+  if (open && now - open.firstAt >= PAINT_MAX_STALE_MS) {
+    paintNow(id);
+    return;
+  }
+  if (open) clearTimeout(open.timer);
+  const timer = setTimeout(() => paintNow(id), PAINT_QUIET_MS);
+  timer.unref?.();
+  painters.set(id, { timer, firstAt: open?.firstAt ?? now });
+}
+
+/** How often to ask tmux whether it has taken the new size yet. */
+const RESIZE_POLL_MS = 60;
+/** In flight per terminal, so a drag's worth of sizes ends in one repaint. */
+const settling = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Waits for tmux to report the size it was asked for, then forces one frame.
+ * Waiting is what stops the frame from being the *old* screen: by the time tmux
+ * agrees on the geometry, the client has seen SIGWINCH and its own redraw is out.
+ *
+ * The deadline is the point, though — it repaints whether or not tmux ever
+ * agreed. Giving up silently left screens wrong forever: a machine busy enough
+ * to take longer than the poll window got no repaint at all, and tmux sends only
+ * differences afterwards, so nothing else was ever coming.
+ */
+function repaintWhenResized(id: string, cols: number, rows: number): void {
+  clearTimeout(settling.get(id));
+  const deadline = Date.now() + 4000;
+  const tick = (): void => {
+    settling.delete(id);
     const m = sessions.get(id);
     if (!m || m.exited || !m.tmuxBacked) return;
-    const clients = tmux.sessionClients(id);
-    if (clients.some((c) => c.cols === cols && c.rows === rows)) tmux.refreshClients(clients);
-    else if (tries > 1) repaintWhenResized(id, cols, rows, tries - 1);
-  }, 60).unref?.();
+    void tmux.sessionClientsAsync(id).then((clients) => {
+      const agreed = clients.some((c) => c.cols === cols && c.rows === rows);
+      if (agreed || Date.now() >= deadline) {
+        paintNow(id);
+        return;
+      }
+      const t = setTimeout(tick, RESIZE_POLL_MS);
+      t.unref?.();
+      settling.set(id, t);
+    });
+  };
+  const t = setTimeout(tick, RESIZE_POLL_MS);
+  t.unref?.();
+  settling.set(id, t);
 }
 
 export function write(id: string, data: string): boolean {
