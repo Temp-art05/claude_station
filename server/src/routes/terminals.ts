@@ -42,7 +42,10 @@ export function terminalRoutes(app: FastifyInstance): void {
     // Reconcile with reality: a row marked running whose PTY is gone is orphaned.
     // `tmuxAlive` splits the two flavours of orphaned: the work is still running
     // in tmux (Reattach gets it back) versus the output is genuinely gone.
-    const alive = pty.tmuxEnabled() ? pty.sessionAliveIds() : new Set<string>();
+    // Keyed on tmux being *installed*, not on the setting: turning tmux off is
+    // for new terminals, and reading the setting here would tell every session
+    // created while it was on that its work is gone.
+    const alive = pty.tmuxInstalled() ? pty.sessionAliveIds() : new Set<string>();
     return rows.map((t) => {
       const status = t.status === "running" && !pty.isRunning(t.id) ? ("orphaned" as const) : t.status;
       return { ...t, status, tmuxAlive: alive.has(t.id) };

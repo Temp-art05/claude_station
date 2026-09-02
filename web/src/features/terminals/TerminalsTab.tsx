@@ -1,7 +1,16 @@
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { Select } from "@/components/ui/select";
-import { ExternalLink, History, Plus, RotateCw, Trash2, X } from "@/components/ui/icons";
+import {
+  ExternalLink,
+  History,
+  Plus,
+  RotateCw,
+  ToggleOff,
+  ToggleOn,
+  Trash2,
+  X,
+} from "@/components/ui/icons";
 import type {
   CliSession,
   EnvSet,
@@ -12,6 +21,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { usePanelActive } from "@/components/KeepAlive";
+import { useSettings, useUpdateSettings } from "@/features/settings/hooks";
 import { projectKey, useUiState } from "@/lib/uiStore";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "./TerminalPane";
@@ -44,6 +54,9 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   const forget = useDeleteTerminalRecord(project.id);
 
   const onScreen = usePanelActive();
+  const { data: settings } = useSettings();
+  const updateSettings = useUpdateSettings();
+  const tmuxMode = settings?.["terminal.tmux"] ?? true;
   // "Work with Claude" deep-links land here as ?terminal=<id>&seed=<text>.
   //
   // Read from the URL on every render rather than once at mount: this panel is
@@ -174,13 +187,28 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
         />
         <Button
           size="sm"
+          variant="ghost"
+          onClick={() => updateSettings.mutate({ "terminal.tmux": !tmuxMode })}
+          disabled={updateSettings.isPending || !settings}
+          title={
+            tmuxMode
+              ? "tmux mode: a session survives a reload and can be handed to a real terminal window. The cost is a full-screen repaint after every burst of output, which is what makes a fast scroll feel less smooth than a terminal. Click to turn off — affects terminals you open from now on."
+              : "Direct mode: the PTY is wired straight to the tab, so output is as smooth as the browser can draw it. No handing a session to a real terminal, and a reload asks the program to redraw rather than restoring a held screen. Click to turn on tmux — affects terminals you open from now on."
+          }
+        >
+          {tmuxMode ? <ToggleOn size={16} /> : <ToggleOff size={16} />} tmux
+        </Button>
+        <Button
+          size="sm"
           variant={historyOpen ? "secondary" : "ghost"}
           onClick={() => setHistoryOpen(!historyOpen)}
           title="Sessions you closed — continue one, or delete it for good"
         >
           <History size={16} /> History
         </Button>
-        {active?.status === "running" && (
+        {/* Only a session that really is inside tmux can be handed over — which is
+            not the same as the setting: rows created while it was on keep working. */}
+        {active?.status === "running" && active.tmuxAlive && (
           <Button
             size="sm"
             variant="ghost"

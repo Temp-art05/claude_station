@@ -45,9 +45,18 @@ export interface StartOptions {
   rows?: number;
 }
 
-/** tmux backs the PTYs only when it is both wanted and installed. */
+/** tmux backs *new* PTYs only when it is both wanted and installed. */
 export function tmuxEnabled(): boolean {
   return setting("terminal.tmux") && tmux.available();
+}
+
+/**
+ * Whether tmux is there at all. Sessions created while the setting was on stay
+ * tmux-backed after it is turned off, so anything asking about a session that
+ * already exists has to ask this, not `tmuxEnabled`.
+ */
+export function tmuxInstalled(): boolean {
+  return tmux.available();
 }
 
 export function start(opts: StartOptions): { pid: number } {
@@ -170,8 +179,36 @@ export function attach(id: string, listener: PtyListener): () => void {
 export function resizeAndPaint(id: string, cols: number, rows: number): void {
   const m = sessions.get(id);
   if (!m || m.exited) return;
+  const unchanged = m.pty.cols === cols && m.pty.rows === rows;
   resize(id, cols, rows);
   if (m.tmuxBacked) repaintWhenResized(id, cols, rows);
+  else if (unchanged) nudgeSize(m, cols, rows);
+}
+
+/**
+ * Asks the program itself to redraw. Nothing can repaint a plain PTY — there is
+ * no tmux holding the screen — and the byte log a reconnecting tab replays is
+ * both size-specific and cut mid-sequence, so a full-screen TUI comes back
+ * scrambled. A size change is the one signal such a program does listen to, and
+ * when the geometry already matches, setting it again is a no-op it never hears:
+ * hence one row off and straight back.
+ */
+function nudgeSize(m: Managed, cols: number, rows: number): void {
+  if (rows < 3) return;
+  try {
+    m.pty.resize(cols, rows - 1);
+  } catch {
+    return; // died between the check and here
+  }
+  const t = setTimeout(() => {
+    if (m.exited) return;
+    try {
+      m.pty.resize(cols, rows);
+    } catch {
+      /* died in between — nothing to redraw for */
+    }
+  }, 30);
+  t.unref?.();
 }
 
 /**
