@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSettings, useUpdateSettings } from "@/features/settings/hooks";
 import {
   Bell,
   CircleAlert,
@@ -9,7 +10,7 @@ import {
   Settings as SettingsIcon,
   Upload,
 } from "@/components/ui/icons";
-import { normalizeGithubRepo, type AppSettings } from "@claude-station/shared";
+import { normalizeGithubRepo } from "@claude-station/shared";
 import { useConfirm } from "@/components/ui/confirm";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -57,19 +58,12 @@ function Check({ ok, label, detail }: { ok: boolean; label: string; detail?: str
 }
 
 export function SettingsPage() {
-  const qc = useQueryClient();
   const { data: doctor } = useQuery({
     queryKey: ["doctor"],
     queryFn: () => api.get<Doctor>("/api/doctor"),
   });
-  const { data: settings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => api.get<AppSettings>("/api/settings"),
-  });
-  const update = useMutation({
-    mutationFn: (patch: Partial<AppSettings>) => api.patch<AppSettings>("/api/settings", patch),
-    onSuccess: (data) => qc.setQueryData(["settings"], data),
-  });
+  const { data: settings } = useSettings();
+  const update = useUpdateSettings();
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
@@ -181,7 +175,7 @@ export function SettingsPage() {
                 ["git.useWorktreeDefault", "New sessions get their own git worktree by default"],
                 [
                   "terminal.tmux",
-                  "Run terminals inside tmux (lets you hand one to a real terminal; needs tmux installed)",
+                  "Run new terminals inside tmux — a session then survives a reload and can be handed to a real terminal window, at the cost of a full repaint after each burst of output. Off is smoother. Also switchable from the terminal toolbar.",
                 ],
               ] as const
             ).map(([key, label]) => (

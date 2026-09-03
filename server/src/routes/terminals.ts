@@ -42,7 +42,10 @@ export function terminalRoutes(app: FastifyInstance): void {
     // Reconcile with reality: a row marked running whose PTY is gone is orphaned.
     // `tmuxAlive` splits the two flavours of orphaned: the work is still running
     // in tmux (Reattach gets it back) versus the output is genuinely gone.
-    const alive = pty.tmuxEnabled() ? pty.sessionAliveIds() : new Set<string>();
+    // Keyed on tmux being *installed*, not on the setting: turning tmux off is
+    // for new terminals, and reading the setting here would tell every session
+    // created while it was on that its work is gone.
+    const alive = pty.tmuxInstalled() ? pty.sessionAliveIds() : new Set<string>();
     return rows.map((t) => {
       const status = t.status === "running" && !pty.isRunning(t.id) ? ("orphaned" as const) : t.status;
       return { ...t, status, tmuxAlive: alive.has(t.id) };
@@ -173,11 +176,16 @@ export function terminalRoutes(app: FastifyInstance): void {
 
     const cwd = assertPathAllowed(existing.cwd, existing.projectId);
     const app_ = setting("terminal.app");
+    // Size the window to the session *before* attaching — see windowSizeLine.
+    const size = tmux.windowSize(id);
     const file = writeLauncher(`${existing.title}-${id.slice(0, 8)}`, [
       `cd ${shq(cwd)}`,
+      ...(size ? [tmux.windowSizeLine(size)] : []),
       tmux.launcherLine(id),
     ]);
     await openWith(app_, file);
+    // The new window's own attach paint is not reliable — see repaintOnAttach.
+    tmux.repaintOnAttach(id);
     // `attach -d` already steals the client; killing ours makes the moment the tab
     // goes orphaned deterministic instead of racing the new window.
     pty.kill(id);

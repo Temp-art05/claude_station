@@ -9,6 +9,10 @@ export const terminalClientMsgSchema = z.discriminatedUnion("t", [
   z.object({ t: z.literal("input"), data: z.string() }),
   z.object({ t: z.literal("resize"), cols: z.number().int().min(2), rows: z.number().int().min(2) }),
   z.object({ t: z.literal("kill") }),
+  // "my screen is empty, send me the current one": a client whose display was
+  // thrown away while tmux still believed it painted (a re-shown pane, a window
+  // that cleared itself as it opened) has no other way back to a full frame.
+  z.object({ t: z.literal("repaint") }),
 ]);
 export type TerminalClientMsg = z.infer<typeof terminalClientMsgSchema>;
 
