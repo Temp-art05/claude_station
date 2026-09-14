@@ -53,6 +53,7 @@ function blankStep(index: number): WorkflowStepInput {
     maxLoops: 0,
     cwdLabel: null,
     isolate: false,
+    readOnly: false,
   };
 }
 
@@ -78,6 +79,7 @@ function toInput(workflow: Workflow): WorkflowInput {
       maxLoops: s.maxLoops,
       cwdLabel: s.cwdLabel,
       isolate: s.isolate,
+      readOnly: s.readOnly,
     })),
   };
 }

@@ -43,6 +43,36 @@ Input kiểu `jira-sprint` liệt kê sprint đang mở của project đã chọ
 sprint mới rồi đẩy ticket vào. Sprint đã đóng không được liệt kê — đó không phải chỗ để thêm việc.
 Project không có scrum board thì ticket nằm ở backlog, và step nói rõ điều đó thay vì im lặng.
 
+## Hình dạng của một workflow impl
+
+`impl-ios-workflow` là bản mẫu, ba nhóm impl kia sao theo:
+
+```
+plan
+ ├─ jira-tasks   (readOnly)       ┐
+ └─ confirm-plan                  ┘ → impl → test → review (readOnly) → fix-review
+                                                                          ├─ pr
+                                                                          └─ jira-report (readOnly)
+```
+
+Hai chỗ rẽ nhánh, và cả hai đều là việc thật sự không chờ nhau: chia task trên Jira không cần biết
+plan đã được duyệt chưa, và tổng kết lên ticket cha không cần link PR.
+
+**`readOnly: true` là thứ khiến nhánh song song thành thật.** Hai step không bao giờ dùng chung một
+working tree; thiếu cờ này thì step Jira vẫn phải đợi cả một lượt để lấy một thư mục nó không hề
+chạm vào — song song trên giấy, nối tiếp trên thực tế.
+
+**Trạng thái Jira đi theo công việc, không dồn về cuối:**
+
+| Lúc nào | Ai làm | Trạng thái |
+|---|---|---|
+| Trước dòng code đầu tiên của một task | step impl | **In Progress** |
+| Task đó xong và đã kiểm | step impl | **Resolved** |
+| PR đã mở | step pr (nó biết link) | **Reviewing** + comment link |
+| Merge | **người** | Done |
+
+Bảng chỉ đúng ở phút cuối là bảng không ai tin được lúc đang chạy.
+
 ## Step tự bỏ qua khi không có việc
 
 Điều kiện của step đọc được cả input, nên step nào không có gì để làm thì **bị skip, không chạy**:

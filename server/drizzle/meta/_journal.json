@@ -148,6 +148,13 @@
       "when": 1789370354058,
       "tag": "0020_step-terminal",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1789382531472,
+      "tag": "0021_step-read-only",
+      "breakpoints": true
     }
   ]
 }

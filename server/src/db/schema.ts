@@ -389,6 +389,8 @@ export const workflowSteps = sqliteTable(
     cwdLabel: text("cwd_label"),
     /** Own worktree, so a sibling branch may touch the same repo. */
     isolate: integer("isolate", { mode: "boolean" }).notNull().default(false),
+    /** Writes nothing to the tree, so it needn't wait for one. */
+    readOnly: integer("read_only", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("idx_workflow_steps_workflow").on(t.workflowId, t.sortOrder)],

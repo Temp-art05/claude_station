@@ -72,6 +72,9 @@ steps:
       Kết thúc: báo bằng số (tạo mới mấy, dùng lại mấy) và lưu bảng khoá task → tiêu đề → phụ thuộc
       → mới hay đã có, bằng workflow_emit_artifact.
     condition: inputs.jiraProject || inputs.jiraTicket
+    dependsOn:
+      - plan
+    readOnly: true
   - key: update-docs
     type: agent
     title: Chốt confirm & update Document Source (PR)
@@ -93,6 +96,8 @@ steps:
       KHÔNG impl code FE ở step này.
     requiresConfirm: true
     permissionMode: bypassPermissions
+    dependsOn:
+      - plan
   - key: impl
     type: agent
     title: Impl vào FE source
@@ -112,8 +117,25 @@ steps:
 
       4. KHÔNG commit/push ở step này (step "pr" sẽ làm). workflow_note tóm tắt diff (file nào, thay
       đổi gì).
+
+
+      CẬP NHẬT JIRA LIÊN TỤC (run có gắn Jira mới làm; không có thì bỏ qua phần này):
+
+      - Bắt đầu làm task nào → jira_transition task đó sang **In Progress** TRƯỚC khi viết dòng code
+      đầu tiên.
+
+      - Task xong và đã kiểm → **Resolved** ngay, đừng dồn tới cuối. Board phải đọc được trạng thái
+      thật tại mọi thời điểm, không phải một lần duy nhất lúc kết thúc.
+
+      - Luôn jira_list_transitions trước khi chuyển: tên trạng thái khác nhau giữa các project, đoán
+      là hỏng.
+
+      - Xong toàn bộ phần của step này thì để nguyên ở Resolved — bước PR sẽ chuyển sang Reviewing.
     requiresConfirm: true
     permissionMode: bypassPermissions
+    dependsOn:
+      - jira-tasks
+      - update-docs
   - key: test
     type: agent
     title: Auto test & fix loop
@@ -134,6 +156,8 @@ steps:
     requiresConfirm: true
     permissionMode: bypassPermissions
     maxRetries: 1
+    dependsOn:
+      - impl
   - key: review
     type: agent
     title: Review diff (agent khác đọc lại)
@@ -148,6 +172,9 @@ steps:
       Đối chiếu lại tiêu chí nghiệm thu trong plan: cái nào chưa đạt thì nói thẳng.
 
       Ghi danh sách phải sửa ra artifact. KHÔNG sửa code — bạn là người chấm, không phải người sửa.
+    dependsOn:
+      - test
+    readOnly: true
   - key: fix-review
     type: agent
     title: Sửa theo review
@@ -158,6 +185,8 @@ steps:
 
       Có thì sửa đúng những chỗ đó — đừng nhân tiện refactor. Chỗ nào bạn cho là nhận xét sai thì
       ghi một dòng lý do thay vì im lặng bỏ qua.
+    dependsOn:
+      - review
   - key: pr
     type: agent
     title: Review cuối & tạo PR
@@ -186,17 +215,31 @@ steps:
       docs ở step update-docs đã ghi (hoặc phát sinh quyết định mới chưa có trong docs) → update lại
       PR docs đó (push thêm commit vào branch docs, giữ nguyên PR) trước khi kết thúc step. Không có
       gì lệch → note rõ "spec-sync: không có thay đổi".
+
+
+      Sau khi PR đã mở (run có gắn Jira): jira_comment link PR lên ticket, rồi jira_transition các
+      task của đợt này sang trạng thái **review** của project (Reviewing / In Review — list
+      transitions trước). Bạn là người biết link PR nên bạn làm việc này, không đẩy sang step khác.
     permissionMode: bypassPermissions
+    dependsOn:
+      - fix-review
   - key: jira-report
     type: agent
     title: Báo kết quả ngược lại Jira
     agentName: jira-pm
     permissionMode: bypassPermissions
     instruction: >-
-      kéo các task đã xong sang trạng thái review của project (list transitions trước). Comment lên
-      ticket cha: đã làm gì · link PR · phần chưa làm và vì sao · giả định đã dùng. KHÔNG tự chuyển
-      sang Done — Done đi theo PR được merge, mà merge là việc của người.
+      Chạy song song với bước PR, nên KHÔNG chờ link PR và cũng đừng đi tìm nó.
+
+      Việc của bạn là tổng kết trên ticket cha: đã làm những task nào, task nào chưa làm và vì sao,
+      giả định nào đã dùng. Trạng thái từng task do bước impl và bước PR cập nhật rồi — chỉ sửa cái
+      nào còn sai so với thực tế.
+
+      KHÔNG tự chuyển sang Done: Done đi theo PR được merge, mà merge là việc của người.
     condition: inputs.jiraProject || inputs.jiraTicket
+    dependsOn:
+      - fix-review
+    readOnly: true
 inputs:
   - key: jiraProject
     label: Jira project (tuỳ chọn)

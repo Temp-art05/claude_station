@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_steps` ADD `read_only` integer DEFAULT false NOT NULL;

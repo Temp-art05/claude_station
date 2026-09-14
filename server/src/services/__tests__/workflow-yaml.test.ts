@@ -75,6 +75,7 @@ describe("exportWorkflowYaml", () => {
             maxLoops: 0,
             cwdLabel: null,
             isolate: false,
+            readOnly: false,
           },
         ],
       }),

@@ -62,6 +62,7 @@ steps:
       Sprint để trống thì ticket nằm backlog — nói rõ ra. Kết thúc: báo bằng số (tạo mới mấy, dùng
       lại mấy, vào sprint nào) và lưu bảng khoá ticket → tiêu đề → phụ thuộc bằng
       workflow_emit_artifact.
+    readOnly: true
   - key: review-board
     type: manual
     title: Xem lại board

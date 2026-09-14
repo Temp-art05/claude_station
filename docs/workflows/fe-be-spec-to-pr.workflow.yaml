@@ -60,6 +60,7 @@ steps:
       lại: tra ticket đang mở TRƯỚC, dùng lại cái đã có; tạo phần còn thiếu, ghi rõ task nào thuộc
       FE task nào thuộc BE. Đẩy vào sprint "{{sprint}}" nếu có nêu.
     condition: inputs.jiraProject || inputs.jiraTicket
+    readOnly: true
   - key: impl-fe
     type: agent
     title: FE
@@ -71,6 +72,20 @@ steps:
     instruction: >-
       Làm phần FE trong plan. CHỈ chạm repo FE — repo BE đang được sửa song song. Theo đúng contract
       đã chốt; contract có vẻ sai thì workflow_ask, đừng tự đổi phía mình cho khớp.
+
+
+      CẬP NHẬT JIRA LIÊN TỤC (run có gắn Jira mới làm; không có thì bỏ qua phần này):
+
+      - Bắt đầu làm task nào → jira_transition task đó sang **In Progress** TRƯỚC khi viết dòng code
+      đầu tiên.
+
+      - Task xong và đã kiểm → **Resolved** ngay, đừng dồn tới cuối. Board phải đọc được trạng thái
+      thật tại mọi thời điểm, không phải một lần duy nhất lúc kết thúc.
+
+      - Luôn jira_list_transitions trước khi chuyển: tên trạng thái khác nhau giữa các project, đoán
+      là hỏng.
+
+      - Xong toàn bộ phần của step này thì để nguyên ở Resolved — bước PR sẽ chuyển sang Reviewing.
   - key: impl-be
     type: agent
     title: BE
@@ -82,6 +97,20 @@ steps:
     instruction: >-
       Làm phần BE trong plan. CHỈ chạm repo BE. **Không đổi API contract để FE dễ hơn** — bản app cũ
       đang nằm trên máy người dùng vẫn phải chạy được. Cần đổi thật thì workflow_ask.
+
+
+      CẬP NHẬT JIRA LIÊN TỤC (run có gắn Jira mới làm; không có thì bỏ qua phần này):
+
+      - Bắt đầu làm task nào → jira_transition task đó sang **In Progress** TRƯỚC khi viết dòng code
+      đầu tiên.
+
+      - Task xong và đã kiểm → **Resolved** ngay, đừng dồn tới cuối. Board phải đọc được trạng thái
+      thật tại mọi thời điểm, không phải một lần duy nhất lúc kết thúc.
+
+      - Luôn jira_list_transitions trước khi chuyển: tên trạng thái khác nhau giữa các project, đoán
+      là hỏng.
+
+      - Xong toàn bộ phần của step này thì để nguyên ở Resolved — bước PR sẽ chuyển sang Reviewing.
   - key: verify-fe
     type: gate
     title: FE test
@@ -113,6 +142,7 @@ steps:
       kỹ **chỗ giao**: tên field, kiểu dữ liệu, nullable, mã lỗi, thứ tự gọi — hai bên có khớp
       contract đã chốt không. Đây là thứ mà mỗi bên nhìn riêng đều thấy đúng. Ghi danh sách phải sửa
       ra artifact, nói rõ mỗi mục thuộc repo nào. Không sửa code.
+    readOnly: true
   - key: fix-review
     type: agent
     title: Sửa theo review
@@ -131,14 +161,25 @@ steps:
     instruction: >-
       Commit và mở PR **riêng cho từng repo có thay đổi**, mô tả mỗi PR nói rõ nó đi kèm PR nào bên
       repo kia và thứ tự merge nào an toàn (thường là BE trước). KHÔNG merge.
+
+
+      Sau khi PR đã mở (run có gắn Jira): jira_comment link PR lên ticket, rồi jira_transition các
+      task của đợt này sang trạng thái **review** của project (Reviewing / In Review — list
+      transitions trước). Bạn là người biết link PR nên bạn làm việc này, không đẩy sang step khác.
   - key: jira-report
     type: agent
     title: Báo lại Jira
     agentName: jira-pm
     dependsOn:
-      - pr
+      - fix-review
     permissionMode: bypassPermissions
     instruction: >-
-      kéo task đã xong sang trạng thái review, comment lên ticket kèm cả hai link PR và thứ tự
-      merge. KHÔNG tự Done.
+      Chạy song song với bước PR, nên KHÔNG chờ link PR và cũng đừng đi tìm nó.
+
+      Việc của bạn là tổng kết trên ticket cha: đã làm những task nào, task nào chưa làm và vì sao,
+      giả định nào đã dùng. Trạng thái từng task do bước impl và bước PR cập nhật rồi — chỉ sửa cái
+      nào còn sai so với thực tế.
+
+      KHÔNG tự chuyển sang Done: Done đi theo PR được merge, mà merge là việc của người.
     condition: inputs.jiraProject || inputs.jiraTicket
+    readOnly: true

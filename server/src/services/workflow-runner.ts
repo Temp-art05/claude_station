@@ -867,6 +867,9 @@ function dependentsOf(run: WorkflowRun, key: string): string[] {
  * refusal surfaces as a failed step instead of as a scheduling decision.
  */
 function claimOf(run: WorkflowRun, step: WorkflowStep): string {
+  // A step that writes nothing contends with nothing: a Jira update has no
+  // business waiting a whole turn for a directory it never touches.
+  if (step.readOnly) return `readonly:${step.key}`;
   return step.isolate ? `worktree:${step.key}` : resolveStepPath(run, step).path;
 }
 

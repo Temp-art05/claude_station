@@ -690,6 +690,13 @@ export const workflowStepSchema = z.object({
   cwdLabel: z.string().nullable().default(null),
   /** Give this step its own git worktree, so a sibling branch can touch the same repo. */
   isolate: z.boolean().default(false),
+  /**
+   * This step doesn't write to the working tree — a Jira update, a review that
+   * only reads. Two steps never share a tree they might both write to, so
+   * declaring this is what lets one run beside the step next to it instead of
+   * waiting a whole turn for a directory it was never going to touch.
+   */
+  readOnly: z.boolean().default(false),
 });
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 
@@ -766,6 +773,8 @@ export const workflowStepInputSchema = z.object({
   cwdLabel: z.string().max(60).nullable().default(null),
   /** Own git worktree — needed when two parallel steps touch the same repo. */
   isolate: z.boolean().default(false),
+  /** Declares the step writes nothing, so it needn't wait for the working tree. */
+  readOnly: z.boolean().default(false),
 });
 export type WorkflowStepInput = z.infer<typeof workflowStepInputSchema>;
 
