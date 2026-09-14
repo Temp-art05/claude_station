@@ -187,8 +187,16 @@ export function WorkflowsTab({ project, envSets }: Props) {
                 </span>
                 {["done", "failed", "cancelled"].includes(r.status) && (
                   <button
-                    title="Delete run"
-                    disabled={deleteRun.isPending}
+                    title={
+                      deleteRun.isError && deleteRun.variables === r.id
+                        ? `Xoá hỏng: ${deleteRun.error instanceof Error ? deleteRun.error.message : "không rõ"}`
+                        : "Delete run"
+                    }
+                    // Only the row being deleted is disabled. Sharing one pending
+                    // flag across every row meant a single request that never came
+                    // back — a server reload mid-click is enough — left every trash
+                    // icon dead, with nothing on screen to say why.
+                    disabled={deleteRun.isPending && deleteRun.variables === r.id}
                     onClick={(e) => {
                       e.stopPropagation();
                       void confirm({
@@ -198,7 +206,10 @@ export function WorkflowsTab({ project, envSets }: Props) {
                         tone: "danger",
                       }).then((ok) => ok && deleteRun.mutate(r.id));
                     }}
-                    className="shrink-0 text-ink-faint hover:text-err disabled:opacity-50"
+                    className={cn(
+                      "shrink-0 text-ink-faint hover:text-err disabled:opacity-50",
+                      deleteRun.isError && deleteRun.variables === r.id && "text-err",
+                    )}
                   >
                     <Trash2 size={16} />
                   </button>

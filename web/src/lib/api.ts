@@ -14,10 +14,14 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   const headers: Record<string, string> = { "x-cs-token": getToken() };
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
+  // A JSON call that never comes back is worse than one that fails: the mutation
+  // stays pending for ever and whatever it disabled stays disabled, with nothing
+  // on screen to explain it. A dev-server reload mid-request is enough to do it.
   const res = await fetch(url, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
     if (res.status === 401) reportTokenRejected();
