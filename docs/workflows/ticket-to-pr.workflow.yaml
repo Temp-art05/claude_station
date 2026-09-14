@@ -1,0 +1,74 @@
+# Một ticket có sẵn → PR. Không cần docs.
+#
+# Mô hình tuần tự ngắn nhất còn giữ được máy kiểm. Nội dung ticket (mô tả, repro,
+# attachment dạng text) được server đọc sẵn qua @ticket:, nên step đầu bắt tay
+# vào việc luôn thay vì đi lấy ticket.
+#
+# Dùng khi: việc đã được mô tả đủ trong ticket — bug đã biết, task đã chia sẵn.
+# Không dùng khi: ticket chỉ có một dòng tiêu đề. Lúc đó nó sẽ hỏi, và bạn mất
+# thời gian hơn là tự viết rõ ticket ngay từ đầu.
+name: ticket-to-pr
+description: >-
+  Một ticket Jira → impl → gate test → PR → kéo trạng thái. Dùng cho ticket đã mô tả đủ rõ.
+folder: auto
+inputs:
+  - key: jiraTicket
+    label: Ticket
+    type: jira-ticket
+    required: true
+    help: Nội dung ticket được đọc sẵn và đưa vào ngữ cảnh step đầu.
+  - key: repoLabel
+    label: Repo sẽ sửa
+    type: path
+
+steps:
+  - key: understand
+    type: agent
+    title: Đọc ticket, xác định nguyên nhân và phạm vi
+    agentName: fe-dev
+    cwdLabel: "{{repoLabel}}"
+    permissionMode: default
+    instruction: >-
+      Ticket {{jiraTicket}} đã nằm trong "Tagged sources". Tự thuật lại triệu chứng được báo, rồi
+      trace nguyên nhân trong code hiện tại, tham chiếu file:line. Đừng vá triệu chứng chưa hiểu.
+      Ticket mơ hồ tới mức có hai cách hiểu đổi hẳn cách sửa → workflow_ask, đừng đoán.
+      Ghi kết luận (nguyên nhân · phạm vi sẽ sửa · phần không sửa) bằng workflow_emit_artifact.
+
+  - key: impl
+    type: agent
+    title: Sửa tối thiểu
+    agentName: fe-dev
+    dependsOn: [understand]
+    cwdLabel: "{{repoLabel}}"
+    permissionMode: acceptEdits
+    instruction: >-
+      Sửa đúng phạm vi đã chốt, không bó kèm refactor. Viết một test chống tái phát — nó phải đỏ
+      trên code trước khi sửa, nếu không thì nó không chứng minh được gì.
+
+  - key: verify
+    type: gate
+    title: Test phải xanh
+    commandName: Test
+    dependsOn: [impl]
+    onFail: impl
+    maxLoops: 3
+
+  - key: pr
+    type: agent
+    title: Mở PR
+    agentName: fe-dev
+    dependsOn: [verify]
+    permissionMode: acceptEdits
+    instruction: >-
+      Commit và mở PR, mô tả gồm {{jiraTicket}}, nguyên nhân, đã sửa gì, test chống tái phát nào.
+      KHÔNG merge.
+
+  - key: report
+    type: agent
+    title: Cập nhật ticket
+    agentName: jira-pm
+    dependsOn: [pr]
+    permissionMode: acceptEdits
+    instruction: >-
+      Comment lên {{jiraTicket}}: nguyên nhân, cách sửa, link PR. Kéo sang trạng thái review
+      (list transitions trước). Không tự sang Done.

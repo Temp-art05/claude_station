@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type {
   PermissionMode,
+  Workflow,
   WorkflowArtifact,
   WorkflowQuestion,
   WorkflowRun,
@@ -18,6 +19,7 @@ import { badRequest } from "../lib/path-safety";
 import { dependentsOf as dependentsOfKey, readySteps as readyStepsOf } from "../lib/workflow-graph";
 import { interrupt, isRunning, sendUserMessage } from "./claude-session";
 import { startRun as startCommandRun } from "./commands";
+import { normalizeMentions, resolveMentions } from "./mentions";
 import { evaluateCondition, ConditionError } from "./workflow-condition";
 import { getWorkflow } from "./workflows";
 import { createChatSession } from "./sessions";
@@ -133,6 +135,7 @@ export function getRun(runId: string): WorkflowRun | null {
     useWorktree: row.useWorktree,
     autoMode: row.autoMode,
     askPolicy: row.askPolicy === "assume" ? "assume" : "stop",
+    inputs: parseInputs(row.inputs),
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     steps,
@@ -166,6 +169,72 @@ export function getRun(runId: string): WorkflowRun | null {
       })),
     definitionStale,
   };
+}
+
+function parseInputs(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Check what was filled in, and turn the typed values into tags the run's goal
+ * carries.
+ *
+ * Making the inputs part of the goal rather than a private side-channel does
+ * three things at once: every step sees them, the run view shows what this run
+ * was actually pointed at, and a `docs` link goes down exactly the same path as
+ * a link somebody tagged by hand — so there is one way documents get read, not two.
+ */
+function prepareInputs(
+  workflow: Workflow,
+  given: Record<string, string>,
+  userGoal?: string,
+): { values: Record<string, string>; goal: string | null } {
+  const values: Record<string, string> = {};
+  const lines: string[] = [];
+
+  for (const def of workflow.inputs) {
+    const value = (given[def.key] ?? def.defaultValue ?? "").trim();
+    if (!value) {
+      if (def.required) throw badRequest(`"${def.label}" is required to start this workflow`);
+      continue;
+    }
+    if (def.type === "choice" && def.options.length > 0 && !def.options.includes(value)) {
+      throw badRequest(`"${def.label}" must be one of: ${def.options.join(", ")}`);
+    }
+    values[def.key] = value;
+
+    switch (def.type) {
+      case "docs":
+        lines.push(`- ${def.label}: ${normalizeMentions(value)}`);
+        break;
+      case "jira-ticket":
+        lines.push(`- ${def.label}: @ticket:${value.toUpperCase()}`);
+        break;
+      case "jira-project":
+        lines.push(`- ${def.label}: @jira:${value.toUpperCase()}`);
+        break;
+      case "repo":
+        lines.push(`- ${def.label}: @repo:${value}`);
+        break;
+      default:
+        lines.push(`- ${def.label}: ${value}`);
+    }
+  }
+
+  const goalText = (userGoal ?? "").trim();
+  const parts = [goalText, lines.length > 0 ? ["## Inputs for this run", ...lines].join("\n") : ""]
+    .filter(Boolean)
+    .join("\n\n");
+  return { values, goal: parts || null };
 }
 
 /** Comparing snapshots ignores row ids, which differ after any step rewrite. */
@@ -287,6 +356,7 @@ export function createRun(
     autoMode?: boolean;
     askPolicy?: "stop" | "assume";
     triggerId?: string | null;
+    inputs?: Record<string, string>;
   },
 ): WorkflowRun {
   const workflow = getWorkflow(input.workflowId);
@@ -305,6 +375,8 @@ export function createRun(
     : (paths.find((p) => p.isDefault) ?? paths[0]);
   if (!chosen) throw badRequest("cwdPathId not found in this project");
 
+  const { values, goal } = prepareInputs(workflow, input.inputs ?? {}, input.goal);
+
   const id = newId();
   const now = nowIso();
   db.insert(schema.workflowRuns)
@@ -313,7 +385,7 @@ export function createRun(
       projectId,
       workflowId: workflow.id,
       title: input.title ?? `${workflow.name} · ${new Date().toLocaleString()}`,
-      goal: input.goal?.trim() || null,
+      goal,
       mode: input.mode ?? "engine",
       terminalId: input.terminalId ?? null,
       // Snapshot: later edits to the workflow must not rewrite this run.
@@ -332,6 +404,7 @@ export function createRun(
         ? new Date(Date.now() + setting("workflows.runBudgetMinutes") * 60_000).toISOString()
         : null,
       assumptions: null,
+      inputs: Object.keys(values).length > 0 ? JSON.stringify(values) : null,
       triggerId: input.triggerId ?? null,
       startedAt: now,
       finishedAt: null,
@@ -401,14 +474,31 @@ function conditionContext(run: WorkflowRun) {
  * artifacts are, and what the user answered. Paths, not contents — pasting every
  * previous step's output would exhaust the context window by step four.
  */
-function stepContext(run: WorkflowRun, step: WorkflowStep, index: number): string {
+/**
+ * Fill `{{key}}` from what was entered at Start.
+ *
+ * An unknown key is left standing rather than blanked: a step told to read
+ * "{{docs}}" and handed an empty string would go looking for something else,
+ * while the literal braces say plainly that nothing was supplied.
+ */
+export function interpolate(text: string, values: Record<string, string>): string {
+  return text.replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g, (whole, key: string) => {
+    const value = values[key];
+    return value === undefined || value === "" ? whole : value;
+  });
+}
+
+async function stepContext(run: WorkflowRun, step: WorkflowStep, index: number): Promise<string> {
   const lines: string[] = [
     `## Workflow: ${run.title}`,
     `Step ${index + 1}/${run.steps.length} — ${step.title} (key: ${step.key})`,
   ];
 
+  const goal = run.goal ? interpolate(run.goal, run.inputs) : "";
+  const instruction = step.instruction ? interpolate(step.instruction, run.inputs) : "";
+
   // The user's own words for what this run is about — every step sees them.
-  if (run.goal) lines.push("", "## Goal of this run (from the user)", run.goal);
+  if (goal) lines.push("", "## Goal of this run (from the user)", goal);
 
   const finished = run.runSteps.filter((s) => s.status === "done" || s.status === "skipped");
   if (finished.length > 0) {
@@ -448,7 +538,22 @@ function stepContext(run: WorkflowRun, step: WorkflowStep, index: number): strin
     );
   }
 
-  if (step.instruction) lines.push("", "## Your task for this step", step.instruction);
+  if (instruction) lines.push("", "## Your task for this step", instruction);
+
+  // Anything tagged with @ is read here, not by the agent: a step that has to go
+  // and fetch its own spec spends a turn doing it, and a run's turns are the one
+  // thing it has a budget of.
+  const { blocks, problems } = await resolveMentions(`${goal}\n${instruction}`);
+  if (blocks.length > 0) {
+    lines.push("", "## Tagged sources — already fetched for you", ...blocks);
+  }
+  if (problems.length > 0) {
+    lines.push(
+      "",
+      "## Tagged sources that could NOT be read — do not guess at what they said",
+      ...problems.map((p) => `- ${p}`),
+    );
+  }
   return lines.join("\n");
 }
 
@@ -592,13 +697,17 @@ function resolveStepPath(
   run: WorkflowRun,
   step: WorkflowStep,
 ): { id: string | null; path: string } {
-  if (!step.cwdLabel) return { id: null, path: run.cwd };
+  // Interpolated: a workflow can take "which repo" as an input instead of
+  // hardcoding one label and being useless in the next project. A placeholder
+  // nobody filled in falls back to the run's own directory.
+  const label = step.cwdLabel ? interpolate(step.cwdLabel, run.inputs).trim() : "";
+  if (!label || label.includes("{{")) return { id: null, path: run.cwd };
   const match = db
     .select()
     .from(schema.projectPaths)
     .where(eq(schema.projectPaths.projectId, run.projectId))
     .all()
-    .find((p) => p.label.toLowerCase() === step.cwdLabel!.toLowerCase());
+    .find((p) => p.label.toLowerCase() === label.toLowerCase());
   return match ? { id: match.id, path: match.path } : { id: null, path: run.cwd };
 }
 
@@ -639,8 +748,8 @@ async function runAgentStep(
 
   const prompt =
     attempt > 1
-      ? `${stepContext(run, step, index)}\n\n[Retry ${attempt}: the previous attempt failed. Fix the cause and finish the step.]`
-      : stepContext(run, step, index);
+      ? `${await stepContext(run, step, index)}\n\n[Retry ${attempt}: the previous attempt failed. Fix the cause and finish the step.]`
+      : await stepContext(run, step, index);
 
   try {
     await sendUserMessage(sessionId, prompt);

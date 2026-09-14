@@ -134,6 +134,13 @@
       "when": 1789355352812,
       "tag": "0018_workflows-v2",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1789358724856,
+      "tag": "0019_workflow-inputs",
+      "breakpoints": true
     }
   ]
 }

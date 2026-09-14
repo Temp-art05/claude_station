@@ -1,0 +1,182 @@
+# Bản đang dùng thật của workflow `impl-fe-workflow`, có thêm hai step Jira.
+#
+# Hai step jira-* tự bỏ qua khi run không điền Jira project/ticket, nên workflow này vẫn chạy y
+# như cũ cho những lần không cần đụng tới board.
+#
+# Bước test vẫn là agent chứ không đổi thành `gate`: gate cần một project command có thật, và đổi
+# khi project chưa khai command đó thì run hỏng ngay ở giữa. Muốn dùng gate thì xem
+# `gate-loop-impl-test.workflow.yaml`.
+name: impl-fe-workflow
+description: >-
+  Impl FE feature: plan từ Document Source (/using-superpowers, hỏi để chốt) → verify & update docs
+  qua PR → impl → auto test + fix loop → review cuối & PR. Mỗi step dừng chờ duyệt. Gắn Jira: chia
+  task, kéo trạng thái, báo ngược lại.
+folder: fe
+steps:
+  - key: plan
+    type: agent
+    title: Plan từ Document Source
+    agentName: fe-dev
+    instruction: >-
+      0. TRƯỚC KHI LÀM GÌ KHÁC — update các source: git fetch + pull base branch mới nhất của FE
+      repo VÀ docs repo (Document Source) để plan/impl luôn dựa trên bản mới nhất. Nếu working tree
+      có thay đổi dở dang → hỏi tôi trước khi pull.
+
+
+      Lên plan impl cho MỘT feature FE.
+
+
+      1. Feature cần impl = mục "## Goal of this run" ở đầu context (tôi nhập khi bấm Run). Nếu goal
+      TRỐNG hoặc chưa đủ rõ (không biết feature nào / spec nào) → hỏi tôi qua workflow_ask trước khi
+      làm gì khác. Project nhiều repo FE mà goal không nói rõ → cũng hỏi.
+
+      2. Dùng skill /using-superpowers để dẫn quy trình (brainstorming → writing-plans). Đọc kỹ
+      Document Source của project (docs repo / tab Knowledge) phần liên quan feature này, đối chiếu
+      với FE source hiện tại.
+
+      3. Trong lúc phân tích, MỌI điểm spec thiếu / mơ hồ / mâu thuẫn docs⨯code → gom thành câu hỏi
+      cụ thể, hỏi tôi qua workflow_ask ngay trong step này để chốt.
+
+      4. Ghi plan vào CHÍNH FE source code: `docs/plans/<ten-feature>.md` (tạo thư mục nếu chưa có).
+      Plan gồm: mục tiêu, phạm vi, các bước impl theo thứ tự, file dự kiến chạm, edge case, và mục
+      "## Câu hỏi cần confirm" — những gì vẫn chưa chốt được kèm đề xuất của bạn.
+
+      5. workflow_emit_artifact file plan; workflow_note tóm tắt plan + số câu hỏi còn treo.
+
+      6. Cuối cùng hỏi tôi 1 câu bool key `docs_update`: "Document Source có chỗ sai/thiếu cần
+      update lại sau khi chốt plan không?"
+
+
+      KHÔNG impl code ở step này.
+    requiresConfirm: true
+    permissionMode: acceptEdits
+  - key: jira-tasks
+    type: agent
+    title: Chia plan thành task trên Jira
+    agentName: jira-pm
+    permissionMode: acceptEdits
+    instruction: >-
+      Đọc plan ở artifact của step trước.
+
+      NẾU cả {{jiraProject}} lẫn {{jiraTicket}} đều trống (placeholder còn nguyên dấu ngoặc) → nói
+      rõ 'run này không gắn Jira' rồi kết thúc step, đừng tạo gì cả.
+
+      Ngược lại: chia plan thành task xong-là-kiểm-được, nói rõ task nào chờ task nào, rồi tạo trên
+      project {{jiraProject}} (subtask dưới {{jiraTicket}} nếu có ticket cha). Kéo ticket cha sang
+      In Progress — list transitions trước, đừng đoán tên trạng thái. Lưu bảng task → phụ thuộc bằng
+      workflow_emit_artifact để step impl dùng.
+  - key: update-docs
+    type: agent
+    title: Chốt confirm & update Document Source (PR)
+    agentName: fe-dev
+    instruction: >-
+      Tôi vừa duyệt plan ở step trước (đọc câu trả lời workflow_ask + ghi chú khi tôi confirm).
+
+
+      1. Cập nhật file plan trong FE source: chuyển mục "Câu hỏi cần confirm" thành các quyết định
+      ĐÃ CHỐT theo câu trả lời của tôi; câu nào tôi chưa trả lời rõ → hỏi lại qua workflow_ask.
+
+      2. Nếu Document Source cần update (answers.docs_update = true hoặc ghi chú của tôi nói vậy):
+      tạo branch mới trong docs repo, sửa đúng những chỗ sai/thiếu đã chốt, hỏi tôi qua workflow_ask
+      trước khi push, rồi tạo PR bằng `gh`. Trả link PR qua workflow_note + emit artifact.
+
+      3. Nếu không cần update docs → ghi rõ "Không cần update Document Source" và kết thúc step.
+
+
+      KHÔNG impl code FE ở step này.
+    requiresConfirm: true
+    permissionMode: acceptEdits
+  - key: impl
+    type: agent
+    title: Impl vào FE source
+    agentName: fe-dev
+    instruction: >-
+      Impl feature theo plan ĐÃ CHỐT (`docs/plans/<ten-feature>.md` trong FE source).
+
+
+      1. Tạo branch mới `feature/<ten-feature>` từ base branch của repo trước khi sửa code.
+
+      2. Impl lần lượt theo từng bước trong plan, đúng phạm vi. Theo convention của repo (CLAUDE.md,
+      lint, cấu trúc).
+
+      3. DOUBLE-CHECK bắt buộc sau khi xong: chạy `git diff`, đối chiếu TỪNG hạng mục trong plan —
+      mục nào thiếu/lệch thì quay lại sửa cho đủ. Nếu thực tế buộc phải lệch plan → sửa PLAN trước
+      (plan là source of truth) rồi mới sửa code, và note rõ.
+
+      4. KHÔNG commit/push ở step này (step "pr" sẽ làm). workflow_note tóm tắt diff (file nào, thay
+      đổi gì).
+    requiresConfirm: true
+    permissionMode: acceptEdits
+  - key: test
+    type: agent
+    title: Auto test & fix loop
+    agentName: fe-dev
+    instruction: >-
+      Verify phần impl của step trước.
+
+
+      1. Chạy test/build/typecheck/lint của repo FE: ưu tiên command đã khai của project
+      (list_project_commands → run_project_command); nếu project chưa khai thì tự phát hiện từ
+      package.json (npm test / npm run build / tsc / lint).
+
+      2. Vòng lặp fix: fail → đọc lỗi → sửa → chạy lại. Tối đa 3 vòng; nếu vẫn đỏ → workflow_ask hỏi
+      tôi hướng xử lý (kèm log lỗi chính).
+
+      3. Xanh hết → workflow_emit_artifact "test-report" (lệnh đã chạy + kết quả từng lệnh) +
+      workflow_note kết luận.
+    requiresConfirm: true
+    permissionMode: acceptEdits
+    maxRetries: 1
+  - key: pr
+    type: agent
+    title: Review cuối & tạo PR
+    agentName: fe-dev
+    instruction: >-
+      Chốt và mở PR cho feature.
+
+
+      1. DOUBLE-CHECK cuối: `git diff` toàn bộ so với base branch, tự review như một reviewer khó
+      tính — đối chiếu plan lần cuối, soát bug/edge case/convention. Phát hiện vấn đề → sửa và chạy
+      lại test liên quan trước khi đi tiếp.
+
+      2. Commit theo chuẩn message của repo (xem git log).
+
+      3. Hỏi tôi qua workflow_ask xác nhận lần cuối trước khi push + tạo PR (nêu rõ: branch, base,
+      tóm tắt diff).
+
+      4. Push branch, tạo PR bằng `gh` về base branch mặc định của repo. Body PR: tóm tắt feature,
+      link file plan, những gì đã impl, kết quả test, rủi ro/side effect nếu có.
+
+      5. Trả link PR qua workflow_note + workflow_emit_artifact.
+
+
+      6. AUDIT SPEC-SYNC (bắt buộc): sau 4 step đầu thường có những thay đổi nhỏ do tôi đề xuất giữa
+      chừng. Đối chiếu diff cuối cùng với spec/Document Source: nếu có điểm lệch so với những gì PR
+      docs ở step update-docs đã ghi (hoặc phát sinh quyết định mới chưa có trong docs) → update lại
+      PR docs đó (push thêm commit vào branch docs, giữ nguyên PR) trước khi kết thúc step. Không có
+      gì lệch → note rõ "spec-sync: không có thay đổi".
+    permissionMode: acceptEdits
+  - key: jira-report
+    type: agent
+    title: Báo kết quả ngược lại Jira
+    agentName: jira-pm
+    permissionMode: acceptEdits
+    instruction: >-
+      NẾU run này không gắn Jira (xem step jira-tasks) → nói rõ và kết thúc, đừng làm gì.
+
+      Ngược lại: kéo các task đã xong sang trạng thái review của project (list transitions trước).
+      Comment lên ticket cha: đã làm gì · link PR · phần chưa làm và vì sao · giả định đã dùng.
+      KHÔNG tự chuyển sang Done — Done đi theo PR được merge, mà merge là việc của người.
+inputs:
+  - key: jiraProject
+    label: Jira project (tuỳ chọn)
+    type: jira-project
+    help: Có project thì plan được chia thành task trên Jira. Bỏ trống thì bỏ qua phần Jira.
+  - key: jiraTicket
+    label: Ticket cha (tuỳ chọn)
+    type: jira-ticket
+    help: Có ticket cha thì task tạo ra là subtask dưới nó.
+  - key: docs
+    label: 'Tài liệu spec (link GitHub, tuỳ chọn)'
+    type: docs
+    help: 'Dán link thì nội dung được đọc sẵn cho step plan, khỏi phải đi tìm.'

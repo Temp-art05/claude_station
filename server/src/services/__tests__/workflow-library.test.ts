@@ -18,11 +18,19 @@ describe("shipped workflow library", () => {
   it("ships the set of shapes it claims to", () => {
     expect(files.sort()).toEqual([
       "branch-by-answer.workflow.yaml",
+      "draft-critique-revise.workflow.yaml",
       "gate-loop-impl-test.workflow.yaml",
       "github-req-to-jira.workflow.yaml",
+      "impl-fe-workflow.workflow.yaml",
+      "impl-ios-workflow.workflow.yaml",
+      "orchestrator-tasks.workflow.yaml",
       "parallel-multi-repo.workflow.yaml",
       "review-swarm.workflow.yaml",
       "seq-feature-auto.workflow.yaml",
+      "spec-doc-to-delivery.workflow.yaml",
+      "spec-doc-to-tasks.workflow.yaml",
+      "ticket-to-pr.workflow.yaml",
+      "voting-review.workflow.yaml",
     ]);
   });
 

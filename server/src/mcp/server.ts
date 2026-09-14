@@ -15,6 +15,7 @@ import {
   createIssue,
   getIssue,
   getTransitions,
+  listProjects,
   searchIssues,
   transitionIssue,
   updateIssue,
@@ -145,6 +146,13 @@ export function stationMcpServer(
           );
           return text(`Logged ${args.timeSpent} on ${args.key}.`);
         },
+      ),
+      tool(
+        "jira_list_projects",
+        "List the Jira projects this account can see, pinned ones first. Call it when you need a " +
+          "project key and nobody gave you one — do not guess a key from a ticket you saw earlier.",
+        {},
+        async () => json(await listProjects()),
       ),
       tool(
         "jira_create_issue",

@@ -1,0 +1,105 @@
+# Đầu-cuối từ MỘT tài liệu: docs → task Jira → impl → test → PR → báo ngược lại.
+#
+# Đây là cái workflow trả lời đúng câu "chỉ định 1 docs trong spec repo, agent tự
+# chạy". Bạn không phải sửa gì trong workflow này giữa các lần chạy: dán link
+# docs và chọn Jira project ở màn Start, phần còn lại nội suy qua {{docs}},
+# {{jiraProject}}, {{jiraTicket}}.
+#
+# Nội dung file docs được SERVER đọc sẵn và đặt vào ngữ cảnh step 1 (mục "Tagged
+# sources"), nên step đầu không tốn một lượt chỉ để đi lấy tài liệu.
+#
+# Dùng khi: có một tài liệu spec đủ rõ, muốn ra task + PR mà không ngồi canh.
+# Không dùng khi: spec còn mơ hồ — step 1 sẽ chặn lại và trả về cho bạn, đúng ý
+# đồ, nhưng lúc đó `spec-doc-to-tasks` sẽ nhanh hơn.
+name: spec-doc-to-delivery
+description: >-
+  Một link docs + một Jira project → soát spec → chia task lên Jira → impl → gate test → PR →
+  kéo trạng thái và comment ngược lại. Bật Run unattended là chạy hết không cần ngồi canh.
+folder: auto
+inputs:
+  - key: docs
+    label: Tài liệu spec (link GitHub)
+    type: docs
+    required: true
+    help: Dán link file trong repo spec. Nội dung được đọc sẵn cho step đầu, không cần clone repo.
+  - key: jiraProject
+    label: Jira project
+    type: jira-project
+    required: true
+    help: Task mới được tạo trong project này. Ghim project ở Settings → Integrations để có dropdown.
+  - key: jiraTicket
+    label: Ticket cha (tuỳ chọn)
+    type: jira-ticket
+    help: Có ticket cha thì task được tạo thành subtask dưới nó, thay vì task rời.
+  - key: repoLabel
+    label: Repo sẽ sửa
+    type: path
+    help: Bỏ trống thì dùng thư mục mặc định của run.
+
+steps:
+  - key: read-spec
+    type: agent
+    title: Soát spec, ra plan
+    agentName: spec-reader
+    permissionMode: default
+    instruction: >-
+      Tài liệu ở {{docs}} đã được nạp sẵn trong phần "Tagged sources" — đọc ngay ở đó.
+      Đối chiếu với code hiện tại và docs BE, rồi soát đủ bốn mục: tiêu chí nghiệm thu có kiểm được
+      không, đủ bốn trạng thái (loading/rỗng/lỗi/mất mạng) chưa, dùng API nào, lần này không làm gì.
+      Thiếu tiêu chí nghiệm thu hoặc thiếu từ ba trong bốn trạng thái → dừng, đề nghị trả spec về PO.
+      Chỗ đoán được thì ghi giả định vào plan chứ đừng hỏi. Lưu plan bằng workflow_emit_artifact.
+
+  - key: jira-tasks
+    type: agent
+    title: Chia task và tạo trên Jira
+    agentName: jira-pm
+    dependsOn: [read-spec]
+    permissionMode: acceptEdits
+    instruction: >-
+      Đọc plan ở artifact step trước. Chia thành task xong-là-kiểm-được, nói rõ task nào chờ task nào.
+      Tạo trên Jira: project {{jiraProject}}; nếu {{jiraTicket}} có giá trị thì tạo subtask dưới ticket
+      đó. Kéo ticket cha (nếu có) sang In Progress. Lưu bảng task → phụ thuộc bằng workflow_emit_artifact.
+
+  - key: impl
+    type: agent
+    title: Impl lần lượt các task
+    agentName: fe-dev
+    dependsOn: [jira-tasks]
+    cwdLabel: "{{repoLabel}}"
+    permissionMode: acceptEdits
+    maxRetries: 1
+    instruction: >-
+      Làm theo đúng thứ tự trong bảng task. Theo chuẩn repo (CLAUDE.md, lint, kiến trúc). Đúng phạm vi
+      plan — không mở rộng; lệch plan thì sửa plan trước.
+      Không tự quyết: tiền, đăng nhập, dữ liệu người dùng, quyền, xoá dữ liệu, đổi schema, đổi API
+      contract, thêm/đổi thư viện, đổi kiến trúc, sửa script phát hành → dừng hỏi bằng workflow_ask.
+
+  - key: verify
+    type: gate
+    title: Test phải xanh
+    commandName: Test
+    dependsOn: [impl]
+    onFail: impl
+    maxLoops: 3
+
+  - key: pr
+    type: agent
+    title: Commit và mở PR
+    agentName: fe-dev
+    dependsOn: [verify]
+    permissionMode: acceptEdits
+    instruction: >-
+      Tự soát lại diff theo chuẩn repo rồi commit và mở PR. Mô tả PR gồm: link tài liệu {{docs}},
+      danh sách task đã làm, tiêu chí nghiệm thu đã kiểm, và mọi giả định đã ghi trong run này.
+      KHÔNG merge — merge là việc của người.
+
+  - key: report
+    type: agent
+    title: Báo ngược lại Jira
+    agentName: jira-pm
+    dependsOn: [pr]
+    permissionMode: acceptEdits
+    instruction: >-
+      Kéo các task đã xong sang trạng thái review của project (list transitions trước, đừng đoán tên).
+      Comment lên ticket cha: đã làm gì, link PR, phần chưa làm và vì sao, giả định đã dùng.
+      Ticket KHÔNG tự sang Done — Done đi theo PR được merge.

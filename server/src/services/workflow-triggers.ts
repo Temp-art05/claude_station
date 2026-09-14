@@ -27,6 +27,19 @@ import { getWorkflow } from "./workflows";
 
 type TriggerRow = typeof schema.workflowTriggers.$inferSelect;
 
+function parseInputs(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
+    );
+  } catch {
+    return {};
+  }
+}
+
 function toTrigger(row: TriggerRow): WorkflowTrigger {
   return {
     id: row.id,
@@ -41,6 +54,7 @@ function toTrigger(row: TriggerRow): WorkflowTrigger {
     pollSeconds: row.pollSeconds,
     cwdPathId: row.cwdPathId,
     envSetId: row.envSetId,
+    inputs: parseInputs(row.inputs),
     lastPolledAt: row.lastPolledAt,
     lastSeenKey: row.lastSeenKey,
     status: row.status,
@@ -85,6 +99,7 @@ export function createTrigger(projectId: string, input: WorkflowTriggerInput): W
       pollSeconds: input.pollSeconds,
       cwdPathId: input.cwdPathId,
       envSetId: input.envSetId,
+      inputs: Object.keys(input.inputs).length > 0 ? JSON.stringify(input.inputs) : null,
       lastPolledAt: null,
       lastSeenKey: null,
       status: input.enabled ? "idle" : "disabled",
@@ -110,6 +125,7 @@ export function updateTrigger(id: string, input: WorkflowTriggerInput): Workflow
       pollSeconds: input.pollSeconds,
       cwdPathId: input.cwdPathId,
       envSetId: input.envSetId,
+      inputs: Object.keys(input.inputs).length > 0 ? JSON.stringify(input.inputs) : null,
       status: input.enabled ? "idle" : "disabled",
     })
     .where(eq(schema.workflowTriggers.id, id))
@@ -276,6 +292,7 @@ export async function pollTrigger(id: string): Promise<{ found: number; started:
       envSetId: row.envSetId,
       autoMode: row.autoMode,
       askPolicy: row.askPolicy === "assume" ? "assume" : "stop",
+      inputs: parseInputs(row.inputs),
       triggerId: row.id,
     });
     runId = run.id;

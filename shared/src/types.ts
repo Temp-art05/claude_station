@@ -693,6 +693,46 @@ export const workflowStepSchema = z.object({
 });
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 
+/**
+ * What a workflow asks for before it starts.
+ *
+ * Without these a workflow is a draft you rewrite per run: pointing it at a
+ * different spec meant editing the step's own instruction. The types are not
+ * decoration — `jira-project` renders the pinned list, `docs` takes a GitHub link
+ * whose contents the server reads and hands to the first step, so the agent
+ * doesn't spend a turn going to look for it.
+ */
+export const workflowInputTypeSchema = z.enum([
+  "text",
+  "choice",
+  "docs",
+  "jira-project",
+  "jira-ticket",
+  "repo",
+  "path",
+]);
+export type WorkflowInputType = z.infer<typeof workflowInputTypeSchema>;
+
+export const workflowInputDefSchema = z.object({
+  /**
+   * Referenced as {{key}} in any step's instruction, and in the run's goal.
+   * camelCase is allowed because that is what people type in a template.
+   */
+  key: z
+    .string()
+    .min(1)
+    .max(40)
+    .regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, "Start with a letter; letters, numbers, - and _"),
+  label: z.string().min(1).max(120),
+  type: workflowInputTypeSchema.default("text"),
+  required: z.boolean().default(false),
+  defaultValue: z.string().default(""),
+  help: z.string().max(300).default(""),
+  /** choice only. */
+  options: z.array(z.string()).default([]),
+});
+export type WorkflowInputDef = z.infer<typeof workflowInputDefSchema>;
+
 export const workflowStepInputSchema = z.object({
   /** Stable handle used by conditions (`steps.test.failed`) and run bookkeeping. */
   key: z
@@ -737,6 +777,8 @@ export const workflowSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   steps: z.array(workflowStepSchema).default([]),
+  /** What it asks for before it starts — the same workflow, a different spec. */
+  inputs: z.array(workflowInputDefSchema).default([]),
   /** Set on the per-project listing. */
   imported: z.boolean().optional(),
 });
@@ -751,6 +793,7 @@ export const workflowInputSchema = z.object({
   description: z.string().default(""),
   folder: knowledgeFolderSchema.default(""),
   steps: z.array(workflowStepInputSchema).min(1, "A workflow needs at least one step"),
+  inputs: z.array(workflowInputDefSchema).max(10).default([]),
 });
 export type WorkflowInput = z.infer<typeof workflowInputSchema>;
 
@@ -840,6 +883,8 @@ export const workflowRunSchema = z.object({
   autoMode: z.boolean().default(false),
   /** What an unattended run does when the agent genuinely asks something. */
   askPolicy: z.enum(["stop", "assume"]).default("stop"),
+  /** What was filled in at Start — snapshotted like the steps are. */
+  inputs: z.record(z.string(), z.string()).default({}),
   startedAt: z.string(),
   finishedAt: z.string().nullable(),
   /** Snapshot taken at start — the run never follows later edits. */
@@ -863,6 +908,8 @@ export const workflowRunInputSchema = z.object({
   /** Run it unattended — see `autoMode` on the run. */
   autoMode: z.boolean().optional(),
   askPolicy: z.enum(["stop", "assume"]).optional(),
+  /** Values for the workflow's declared inputs, keyed by their `key`. */
+  inputs: z.record(z.string(), z.string()).optional(),
 });
 export type WorkflowRunInput = z.infer<typeof workflowRunInputSchema>;
 
@@ -892,6 +939,8 @@ export const workflowTriggerSchema = z.object({
   pollSeconds: z.number().int().min(30).max(3600).default(120),
   cwdPathId: z.string().nullable().default(null),
   envSetId: z.string().nullable().default(null),
+  /** Values for the workflow's inputs, so a picked-up run starts complete. */
+  inputs: z.record(z.string(), z.string()).default({}),
   lastPolledAt: z.string().nullable().default(null),
   lastSeenKey: z.string().nullable().default(null),
   status: z.string().default("idle"),
@@ -911,6 +960,7 @@ export const workflowTriggerInputSchema = z.object({
   pollSeconds: z.number().int().min(30).max(3600).default(120),
   cwdPathId: z.string().nullable().default(null),
   envSetId: z.string().nullable().default(null),
+  inputs: z.record(z.string(), z.string()).default({}),
 });
 export type WorkflowTriggerInput = z.infer<typeof workflowTriggerInputSchema>;
 
@@ -1314,6 +1364,12 @@ export const jiraConfigSchema = z
     deployment: z.enum(["cloud", "server"]).default("cloud"),
     email: z.string().email().optional().or(z.literal("")),
     apiToken: z.string().min(1),
+    /**
+     * Project keys pinned for the pickers. A Jira instance can hold hundreds of
+     * projects and two of them are yours, so the list you choose from is the
+     * short one — the full list stays a click away for when it isn't.
+     */
+    projects: z.array(z.string()).default([]),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.deployment === "cloud" && !cfg.email) {

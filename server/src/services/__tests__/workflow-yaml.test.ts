@@ -18,6 +18,7 @@ function asWorkflow(preset: (typeof WORKFLOW_PRESETS)[number]): Workflow {
     createdAt: "now",
     updatedAt: "now",
     steps: preset.steps.map((s, i) => ({ ...s, id: `s${i}`, workflowId: "w1", sortOrder: i })),
+    inputs: preset.inputs,
   };
 }
 
@@ -56,6 +57,7 @@ describe("exportWorkflowYaml", () => {
         name: "minimal",
         description: "",
         folder: "",
+        inputs: [],
         steps: [
           {
             key: "only",

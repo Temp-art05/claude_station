@@ -150,9 +150,25 @@ the run's goal. Work already taken is never taken again (an agent commenting on 
 otherwise look like a fresh update, for ever), and one trigger runs one thing at a time. They are
 created disarmed, and `workflows.triggersEnabled` is the master switch, off until you turn it on.
 
-Six workflows in `docs/workflows/` show the shapes: sequential-unattended, fan-out across repos,
-branching on an answer, the gate loop, a review swarm in parallel worktrees, and GitHub requirement →
-Jira subtasks → PR. Import them with **Import folder** on the Workflows page.
+**Inputs, so a workflow is an asset rather than a draft.** A workflow can declare what it needs —
+a spec document, a Jira project, a ticket, a repo — and the Start screen asks for exactly that; any
+step reaches a value with `{{key}}`. Two of the types are read *for* you before the first step runs:
+a `docs` input takes a GitHub file link and the file's text arrives in the step's context (private
+repos included, through your `gh` login — no clone of the spec repo), and a `jira-ticket` input brings
+the issue itself. Pointing the same workflow at a different spec is then filling in a different box,
+not editing the workflow.
+
+The same thing happens to anything tagged with **`@`** in the goal or in a step's instruction:
+`@doc:owner/repo:path`, `@ticket:ABC-123`, `@jira:ABC`, `@repo:owner/name` — typing `@` offers what
+this workspace already knows, and a pasted GitHub link is accepted as-is. Pin the Jira projects you
+work in under **Settings → Integrations** to turn the project box into a picker.
+
+Fourteen workflows in `docs/workflows/` show the shapes — sequential-unattended, fan-out across repos,
+branching on an answer, the gate loop, a review swarm, three independent votes on the same question,
+an orchestrator that splits work it can't count in advance, a critique-and-revise loop for prose, and
+spec document → Jira subtasks → PR. Its [README](docs/workflows/README.md) is a table of *which shape
+for which kind of work*, which is the part that actually costs you when it's wrong. Import the folder
+with **Import folder** on the Workflows page; the two agents they use live in `docs/agents/`.
 
 ### Agents
 

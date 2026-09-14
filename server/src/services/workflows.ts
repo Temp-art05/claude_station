@@ -4,6 +4,7 @@ import {
   workflowInputSchema,
   type Workflow,
   type WorkflowInput,
+  type WorkflowInputDef,
   type WorkflowStep,
 } from "@claude-station/shared";
 import { db, schema } from "../db";
@@ -58,6 +59,34 @@ function stepsOf(workflowId: string): WorkflowStep[] {
     .map(toStep);
 }
 
+function inputsOf(workflowId: string): WorkflowInputDef[] {
+  return db
+    .select()
+    .from(schema.workflowInputs)
+    .where(eq(schema.workflowInputs.workflowId, workflowId))
+    .orderBy(asc(schema.workflowInputs.sortOrder))
+    .all()
+    .map((row) => ({
+      key: row.key,
+      label: row.label,
+      type: row.type as WorkflowInputDef["type"],
+      required: row.required,
+      defaultValue: row.defaultValue,
+      help: row.help,
+      options: parseList(row.options),
+    }));
+}
+
+function parseList(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 function toWorkflow(row: WorkflowRow): Workflow {
   return {
     id: row.id,
@@ -68,6 +97,7 @@ function toWorkflow(row: WorkflowRow): Workflow {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     steps: stepsOf(row.id),
+    inputs: inputsOf(row.id),
   };
 }
 
@@ -146,6 +176,25 @@ function writeSteps(workflowId: string, input: WorkflowInput): void {
   });
 }
 
+function writeInputs(workflowId: string, input: WorkflowInput): void {
+  input.inputs.forEach((def, i) => {
+    db.insert(schema.workflowInputs)
+      .values({
+        id: newId(),
+        workflowId,
+        sortOrder: i,
+        key: def.key,
+        label: def.label,
+        type: def.type,
+        required: def.required,
+        defaultValue: def.defaultValue,
+        help: def.help,
+        options: def.options.length > 0 ? JSON.stringify(def.options) : null,
+      })
+      .run();
+  });
+}
+
 export function createWorkflow(
   input: WorkflowInput,
   source: "manual" | "imported" = "manual",
@@ -173,6 +222,7 @@ export function createWorkflow(
       })
       .run();
     writeSteps(id, input);
+    writeInputs(id, input);
   });
   return getWorkflow(id)!;
 }
@@ -203,7 +253,9 @@ export function updateWorkflow(id: string, input: WorkflowInput): Workflow {
       .where(eq(schema.workflows.id, id))
       .run();
     db.delete(schema.workflowSteps).where(eq(schema.workflowSteps.workflowId, id)).run();
+    db.delete(schema.workflowInputs).where(eq(schema.workflowInputs.workflowId, id)).run();
     writeSteps(id, input);
+    writeInputs(id, input);
   });
   return getWorkflow(id)!;
 }
@@ -314,6 +366,19 @@ export function exportWorkflowYaml(workflow: Workflow): string {
       name: workflow.name,
       description: workflow.description,
       folder: workflow.folder,
+      ...(workflow.inputs.length > 0
+        ? {
+            inputs: workflow.inputs.map((i) => ({
+              key: i.key,
+              label: i.label,
+              type: i.type,
+              ...(i.required ? { required: true } : {}),
+              ...(i.defaultValue ? { defaultValue: i.defaultValue } : {}),
+              ...(i.help ? { help: i.help } : {}),
+              ...(i.options.length > 0 ? { options: i.options } : {}),
+            })),
+          }
+        : {}),
       steps: workflow.steps.map((s) => ({
         key: s.key,
         type: s.type,

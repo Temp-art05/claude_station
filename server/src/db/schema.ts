@@ -394,6 +394,35 @@ export const workflowSteps = sqliteTable(
   (t) => [index("idx_workflow_steps_workflow").on(t.workflowId, t.sortOrder)],
 );
 
+/**
+ * What a workflow asks for before it runs.
+ *
+ * The difference between an asset and a draft: without these, pointing the same
+ * workflow at a different spec meant editing a step's instruction, so nobody
+ * reused one — they copied it.
+ */
+export const workflowInputs = sqliteTable(
+  "workflow_inputs",
+  {
+    id: text("id").primaryKey(),
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflows.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    /** Referenced as {{key}} in step instructions and in the run's goal. */
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    /** text|choice|docs|jira-project|jira-ticket|repo|path — decides the widget
+     * and, for `docs`/`jira-ticket`, what the server fetches before step one. */
+    type: text("type").notNull().default("text"),
+    required: integer("required", { mode: "boolean" }).notNull().default(false),
+    defaultValue: text("default_value").notNull().default(""),
+    help: text("help").notNull().default(""),
+    options: text("options"), // JSON string[] for choice
+  },
+  (t) => [uniqueIndex("idx_workflow_inputs_unique").on(t.workflowId, t.key)],
+);
+
 /** Workflows imported into a project — shared, not copied. */
 export const projectWorkflows = sqliteTable(
   "project_workflows",
@@ -445,6 +474,8 @@ export const workflowRuns = sqliteTable(
     deadlineAt: text("deadline_at"),
     /** Assumptions an `assume` run made, so the PR can carry them. */
     assumptions: text("assumptions"),
+    /** JSON: what the declared inputs were filled with, snapshotted at start. */
+    inputs: text("inputs"),
     /** What started it: manual, or the trigger row that picked the work up. */
     triggerId: text("trigger_id"),
     startedAt: text("started_at").notNull(),
@@ -542,6 +573,8 @@ export const workflowTriggers = sqliteTable(
     pollSeconds: integer("poll_seconds").notNull().default(120),
     cwdPathId: text("cwd_path_id"),
     envSetId: text("env_set_id"),
+    /** JSON: input values a picked-up run starts with. */
+    inputs: text("inputs"),
     lastPolledAt: text("last_polled_at"),
     lastSeenKey: text("last_seen_key"),
     status: text("status").notNull().default("idle"), // idle|ok|error|disabled

@@ -107,7 +107,9 @@ export function WorkflowsPage() {
             </Button>
             <Button
               variant="primary"
-              onClick={() => setCreating({ name: "", description: "", folder, steps: [] })}
+              onClick={() =>
+                setCreating({ name: "", description: "", folder, steps: [], inputs: [] })
+              }
             >
               <Plus size={18} /> New workflow
             </Button>

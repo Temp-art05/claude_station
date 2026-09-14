@@ -9,13 +9,15 @@ import {
   Trash2,
   Workflow as WorkflowIcon,
 } from "@/components/ui/icons";
-import type { EnvSet, Project } from "@claude-station/shared";
+import type { EnvSet, Project, Workflow, WorkflowInputDef } from "@claude-station/shared";
+import { useQuery } from "@tanstack/react-query";
 import { useConfirm } from "@/components/ui/confirm";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/input";
+import { Input, Label } from "@/components/ui/input";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { api } from "@/lib/api";
 import { projectKey, useUiState } from "@/lib/uiStore";
 import { FilterChip } from "@/components/ui/chip";
@@ -214,7 +216,7 @@ export function WorkflowsTab({ project, envSets }: Props) {
         <StartDialog
           project={project}
           envSets={envSets}
-          workflowId={startFor}
+          workflow={imported.find((w) => w.id === startFor)!}
           onClose={() => setStartFor(null)}
           onStarted={(runId, seed) => {
             setStartFor(null);
@@ -324,18 +326,22 @@ function ImportDialog({ projectId, onClose }: { projectId: string; onClose: () =
 function StartDialog({
   project,
   envSets,
-  workflowId,
+  workflow,
   onClose,
   onStarted,
 }: {
   project: Project;
   envSets: EnvSet[];
-  workflowId: string;
+  workflow: Workflow;
   onClose: () => void;
   onStarted: (runId: string, seed?: string) => void;
 }) {
+  const workflowId = workflow.id;
   const start = useStartRun(project.id);
   const [goal, setGoal] = useState("");
+  const [inputs, setInputs] = useState<Record<string, string>>(() =>
+    Object.fromEntries(workflow.inputs.map((i) => [i.key, i.defaultValue])),
+  );
   const [pathId, setPathId] = useState(project.paths[0]?.id ?? "");
   const [envSetId, setEnvSetId] = useState("");
   const [useWorktree, setUseWorktree] = useState(false);
@@ -353,6 +359,7 @@ function StartDialog({
           cwdPathId: pathId || undefined,
           envSetId: envSetId || null,
           useWorktree,
+          inputs,
         },
       ),
     onSuccess: ({ run, seed }) => onStarted(run.id, seed),
@@ -361,17 +368,32 @@ function StartDialog({
   return (
     <Dialog open onClose={onClose} title="Start workflow run">
       <div className="space-y-3">
+        {workflow && workflow.inputs.length > 0 && (
+          <div className="space-y-2 rounded-md border border-hairline bg-white/4 p-3">
+            <p className="text-xs font-bold tracking-wide text-ink-faint uppercase">
+              What this workflow needs
+            </p>
+            {workflow.inputs.map((def) => (
+              <WorkflowInputField
+                key={def.key}
+                def={def}
+                project={project}
+                value={inputs[def.key] ?? def.defaultValue}
+                onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
+              />
+            ))}
+          </div>
+        )}
         <div>
           <Label>Goal — what should this run do?</Label>
-          <textarea
+          <MentionTextarea
             value={goal}
-            onChange={(e) => setGoal(e.target.value)}
+            onChange={setGoal}
             rows={3}
             autoFocus
             placeholder={
-              'VD: "Lên plan + impl feature v1.5.0 trong spec" — mọi step đều thấy goal này'
+              'VD: "Impl theo @doc:owner/repo:docs/spec.md cho @jira:IIP707" — mọi step đều thấy goal này'
             }
-            className="w-full rounded-md px-3.5 py-2 text-sm placeholder:text-ink-faint border border-outline/45 bg-white/3 text-ink transition-[border-color,background-color] duration-200 ease-emphasized hover:border-outline/80 focus:border-primary focus:outline-none"
           />
         </div>
         <div>
@@ -478,6 +500,7 @@ function StartDialog({
                   useWorktree,
                   autoMode,
                   askPolicy: autoMode ? askPolicy : undefined,
+                  inputs,
                 },
                 { onSuccess: (run) => onStarted(run.id) },
               )
@@ -488,5 +511,110 @@ function StartDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * One field for one declared input.
+ *
+ * The type isn't decoration: a `jira-project` that is a dropdown of the keys you
+ * pinned removes the most common way this goes wrong — a typo'd project key that
+ * only surfaces three steps later, when the run tries to create a task.
+ */
+function WorkflowInputField({
+  def,
+  project,
+  value,
+  onChange,
+}: {
+  def: WorkflowInputDef;
+  project: Project;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { data: projects = [] } = useQuery({
+    queryKey: ["jira-projects-pinned"],
+    queryFn: () => api.get<string[]>("/api/jira/projects/pinned"),
+    enabled: def.type === "jira-project",
+    staleTime: 5 * 60_000,
+  });
+
+  const field = (() => {
+    switch (def.type) {
+      case "jira-project":
+        return projects.length > 0 ? (
+          <Select
+            className="w-full"
+            value={value}
+            onChange={onChange}
+            options={[
+              { value: "", label: "choose a project…" },
+              ...projects.map((p) => ({ value: p, label: p })),
+            ]}
+          />
+        ) : (
+          <Input
+            className="font-mono text-xs"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="IIP707 — pin projects in Settings → Integrations for a picker"
+          />
+        );
+      case "path":
+        return (
+          <Select
+            className="w-full"
+            value={value}
+            onChange={onChange}
+            options={[
+              { value: "", label: "the run's own directory" },
+              ...project.paths.map((p) => ({ value: p.label, label: p.label })),
+            ]}
+          />
+        );
+      case "choice":
+        return (
+          <Select
+            className="w-full"
+            value={value}
+            onChange={onChange}
+            options={[
+              { value: "", label: "choose…" },
+              ...def.options.map((o) => ({ value: o, label: o })),
+            ]}
+          />
+        );
+      case "docs":
+        return (
+          <Input
+            className="font-mono text-xs"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="https://github.com/owner/repo/blob/main/docs/spec.md"
+          />
+        );
+      case "jira-ticket":
+        return (
+          <Input
+            className="font-mono text-xs"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="IIP707-123"
+          />
+        );
+      default:
+        return <Input value={value} onChange={(e) => onChange(e.target.value)} />;
+    }
+  })();
+
+  return (
+    <div>
+      <Label>
+        {def.label}
+        {def.required && <span className="ml-1 text-err">*</span>}
+      </Label>
+      {field}
+      {def.help && <p className="mt-1 m3-label-sm text-ink-faint">{def.help}</p>}
+    </div>
   );
 }
