@@ -1,0 +1,87 @@
+# Đầu-cuối: requirement trên GitHub → chia task → làm → PR → cập nhật Jira.
+#
+# Đây là workflow dành cho trigger: tạo một trigger nguồn `github`, query là label
+# (ví dụ `ai-feature`), bật auto. Khi một issue mang label đó xuất hiện, nội dung
+# issue trở thành goal của run và bước đầu tiên đọc thẳng từ goal — không cần ai
+# dán gì vào.
+#
+# Phần Jira dùng jira_create_issue (kèm parentKey là tạo subtask) và jira_transition.
+# Nếu goal không nêu ticket Jira nào thì bước `tasks` bỏ qua phần Jira, không tự
+# bịa ra một ticket cha.
+name: github-req-to-jira
+description: >-
+  Requirement từ GitHub issue → chia thành subtask trên Jira → impl → gate test → PR →
+  cập nhật lại Jira. Thiết kế để chạy bằng trigger, không cần ai bấm.
+folder: auto
+steps:
+  - key: read-req
+    type: agent
+    title: Đọc requirement, soát chỗ thiếu
+    agentName: docs-planner
+    permissionMode: default
+    instruction: >-
+      Goal của run này CHÍNH LÀ nội dung issue GitHub. Đọc nó, rồi đối chiếu với docs/spec trong
+      Knowledge (knowledge_search) và với code hiện tại.
+      Kiểm đủ bốn thứ trước khi đi tiếp: (1) tiêu chí nghiệm thu có kiểm được đúng/sai không,
+      (2) đã nói đủ bốn trạng thái loading / rỗng / lỗi / mất mạng chưa, (3) dùng API nào,
+      (4) lần này KHÔNG làm gì.
+      Thiếu tiêu chí nghiệm thu, hoặc thiếu từ ba trong bốn trạng thái → dừng bằng workflow_ask
+      và đề nghị trả lại cho PO; đừng ghi nhận xét rồi vẫn chạy tiếp.
+      Chỗ mơ hồ mà đoán được thì cứ chạy tiếp nhưng ghi rõ giả định vào plan — nó sẽ đi vào mô tả PR.
+      Lưu plan bằng workflow_emit_artifact.
+
+  - key: tasks
+    type: agent
+    title: Chia task và đẩy lên Jira
+    agentName: fe-dev
+    dependsOn: [read-req]
+    permissionMode: acceptEdits
+    instruction: >-
+      Đọc plan ở artifact. Chia thành các task nhỏ, mỗi task làm xong là kiểm được, và nói rõ
+      task nào chờ task nào.
+      Nếu goal có nêu một ticket Jira: tạo mỗi task thành một subtask bằng jira_create_issue với
+      parentKey là ticket đó, rồi jira_transition ticket cha sang In Progress.
+      Nếu goal KHÔNG nêu ticket Jira nào: bỏ qua phần Jira, chỉ ghi danh sách task vào artifact —
+      đừng tự tạo ticket cha.
+
+  - key: impl
+    type: agent
+    title: Làm lần lượt các task
+    agentName: fe-dev
+    dependsOn: [tasks]
+    permissionMode: acceptEdits
+    maxRetries: 1
+    instruction: >-
+      Làm theo đúng thứ tự đã chia. Theo chuẩn repo. Không tự quyết mấy nhóm việc này — tiền,
+      đăng nhập, dữ liệu người dùng, quyền, xoá dữ liệu, đổi schema, đổi API contract, thêm/đổi
+      thư viện, đổi kiến trúc, sửa script phát hành — gặp thì dừng hỏi bằng workflow_ask.
+      Xong task nào thì jira_transition subtask tương ứng nếu có.
+
+  - key: verify
+    type: gate
+    title: Test phải xanh
+    commandName: Test
+    dependsOn: [impl]
+    onFail: impl
+    maxLoops: 3
+
+  - key: pr
+    type: agent
+    title: Mở PR
+    agentName: fe-dev
+    dependsOn: [verify]
+    permissionMode: acceptEdits
+    instruction: >-
+      Commit và mở PR. Mô tả gồm: link issue GitHub gốc, danh sách task đã làm, tiêu chí nghiệm
+      thu đã kiểm, và mọi giả định đã ghi ở bước đầu. KHÔNG merge.
+
+  - key: report
+    type: agent
+    title: Báo ngược lại Jira và GitHub
+    agentName: fe-dev
+    dependsOn: [pr]
+    permissionMode: acceptEdits
+    instruction: >-
+      jira_comment lên ticket cha (nếu có): link PR, đã làm gì, còn gì chưa làm và vì sao.
+      Chuyển các subtask đã xong sang trạng thái phù hợp. Comment lại issue GitHub gốc kèm link PR.
+      Ticket cha KHÔNG tự chuyển sang Done — nó đi theo PR được merge, mà merge là việc của người.

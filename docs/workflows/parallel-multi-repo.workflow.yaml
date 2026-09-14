@@ -1,0 +1,81 @@
+# Fan-out rồi join: một plan, ba repo làm song song, một lần gộp lại.
+#
+# `dependsOn` là thứ tạo ra hình dạng này. Ba bước impl cùng khai `dependsOn: [plan]`
+# nên chúng sẵn sàng cùng lúc; `cwdLabel` đẩy mỗi bước vào một repo khác nhau nên
+# chúng không tranh working tree của nhau. Bước `integrate` khai cả ba nên nó là
+# chỗ hợp lưu — nó chỉ chạy khi cả ba xong.
+#
+# Sửa `cwdLabel` cho khớp label path trong project của bạn trước khi chạy.
+name: parallel-multi-repo
+description: >-
+  Song song nhiều repo: plan chung → FE + BE + iOS impl và test đồng thời → gộp lại mở PR.
+  Số nhánh chạy cùng lúc bị chặn bởi setting workflows.maxParallel.
+folder: auto
+steps:
+  - key: plan
+    type: agent
+    title: Plan chung cho cả ba repo
+    agentName: docs-planner
+    permissionMode: default
+    instruction: >-
+      Đọc goal và docs liên quan. Chia việc theo từng repo (FE / BE / iOS): repo nào đổi gì,
+      contract giữa chúng là gì, thứ tự nào bắt buộc. Ghi rõ phần nào KHÔNG được tự đổi
+      (API contract là một). Lưu plan bằng workflow_emit_artifact.
+
+  - key: impl-fe
+    type: agent
+    title: FE
+    agentName: fe-dev
+    cwdLabel: FE
+    dependsOn: [plan]
+    permissionMode: acceptEdits
+    instruction: Impl phần FE trong plan. Chỉ chạm repo FE.
+
+  - key: impl-be
+    type: agent
+    title: BE
+    agentName: fe-dev
+    cwdLabel: BE
+    dependsOn: [plan]
+    permissionMode: acceptEdits
+    instruction: >-
+      Impl phần BE trong plan. Không đổi API contract để cho FE dễ — bản app cũ đang nằm trên
+      máy người dùng vẫn phải chạy được.
+
+  - key: impl-ios
+    type: agent
+    title: iOS
+    agentName: ios-dev
+    cwdLabel: iOS
+    dependsOn: [plan]
+    permissionMode: acceptEdits
+    instruction: Impl phần iOS trong plan. Chỉ chạm repo iOS.
+
+  - key: verify-fe
+    type: gate
+    title: FE test
+    commandName: Test
+    cwdLabel: FE
+    dependsOn: [impl-fe]
+    onFail: impl-fe
+    maxLoops: 2
+
+  - key: verify-ios
+    type: gate
+    title: iOS build
+    commandName: Build
+    cwdLabel: iOS
+    dependsOn: [impl-ios]
+    onFail: impl-ios
+    maxLoops: 2
+
+  - key: integrate
+    type: agent
+    title: Gộp lại, mở PR cho từng repo
+    agentName: fe-dev
+    dependsOn: [verify-fe, verify-ios, impl-be]
+    permissionMode: acceptEdits
+    instruction: >-
+      Ba nhánh đã xong. Kiểm tra chúng khớp nhau ở chỗ giao (tên field, kiểu dữ liệu, thứ tự
+      gọi), rồi commit và mở PR RIÊNG cho từng repo có thay đổi, mô tả PR nói rõ nó đi kèm PR nào
+      bên repo khác. KHÔNG merge.

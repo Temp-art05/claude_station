@@ -33,6 +33,7 @@ import { markInterrupted } from "./services/session-ledger";
 import { followOpenClaudeTerminals } from "./services/terminals";
 import { unwatchAllGitDirs } from "./services/git-watch";
 import { unfollowAll } from "./services/transcript-follower";
+import { startTriggerLoop, stopTriggerLoop } from "./services/workflow-triggers";
 import { backfillChatSearch, ensureSearchTables } from "./services/search";
 import { reconcileWorktreesOnBoot } from "./services/sessions";
 import { reconcileRunsOnBoot } from "./services/workflow-runner";
@@ -191,6 +192,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     // One last drain, so a turn in flight is stored with what it did.
     unfollowAll();
     unwatchAllGitDirs();
+    stopTriggerLoop();
     killAllPtys();
     killAllRuns();
     app.close().finally(() => process.exit(0));
@@ -208,6 +210,11 @@ try {
       app.log.info(`checkpoints: ingested ${added} commit(s), orphaned ${orphaned}`);
     }
   });
+
+  // Workflow triggers. Off unless `workflows.triggersEnabled` says otherwise, so
+  // a fresh install never starts a run on its own.
+  const armed = startTriggerLoop();
+  if (armed > 0) app.log.info(`workflow triggers: ${armed} armed`);
   // The hosts alias is redirected from port 80, so it needs no port either way.
   const uiUrl = env.stationHost
     ? `http://${env.stationHost}`

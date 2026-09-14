@@ -122,6 +122,38 @@ which you can talk to mid-run to skip, confirm or redirect a step. An agent paus
 reports) are downloadable per step. A restart marks the in-flight step interrupted rather than
 re-running it blind.
 
+**Shapes other than a straight line.** A step can declare `dependsOn`, and every step whose
+dependencies are settled starts together — so a plan can fan out to FE, BE and iOS at once and a
+later step can wait for all three. Two steps never share a working tree: one claims the repo and the
+other waits for the next round, unless a step names another repo with `cwdLabel` or takes its own
+worktree with `isolate`. `workflows.maxParallel` caps the fan-out (2 by default). A step with no
+`dependsOn` still means "after the one above", so workflows written before any of this keep their
+exact order.
+
+**A `gate` step is the one that can say no.** It runs a project command and lets the exit code
+decide: pass, or send the run back to the step named in `onFail` with the failing log as context.
+That is the implement → test → fix loop, run by the scheduler rather than by an agent's own account
+of how it went. Two brakes: three rounds at most, and it stops early if two rounds produce identical
+output, because at that point it is turning on the spot.
+
+**Unattended runs.** Tick *Run unattended* when you start one and it stops asking you to confirm its
+own work. It still stops at a `manual` step, at a real question from the agent (with a notification,
+so it isn't waiting silently), and at merge — that stays yours, as does pushing to a store. An
+unattended run also carries a clock (`workflows.runBudgetMinutes`) so a hung step can't hold a repo
+lock all night. Set the question policy to *assume* and it answers its own questions instead, writing
+each assumption into the run for the PR description — except about money, auth, user data,
+permissions, deleting data, schemas or API contracts, where it stops regardless.
+
+**Triggers** turn a workflow you run into one that runs. A trigger watches a GitHub label or a Jira
+JQL search and starts a run — unattended — when matching work appears, with the issue's own text as
+the run's goal. Work already taken is never taken again (an agent commenting on a ticket would
+otherwise look like a fresh update, for ever), and one trigger runs one thing at a time. They are
+created disarmed, and `workflows.triggersEnabled` is the master switch, off until you turn it on.
+
+Six workflows in `docs/workflows/` show the shapes: sequential-unattended, fan-out across repos,
+branching on an answer, the gate loop, a review swarm in parallel worktrees, and GitHub requirement →
+Jira subtasks → PR. Import them with **Import folder** on the Workflows page.
+
 ### Agents
 
 ![Agents](docs/images/agents.png)
@@ -203,7 +235,7 @@ station to another machine.
 
 |                              |                                                                                                                                                                                                                                                                    |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Claude's own tools** (MCP) | `jira_*`, `excel_*`, `knowledge_search`, `list_project_commands`, `run_project_command`, `read_command_log`, `memory_*`. Every mutating call goes through the approval modal, except memory writes — those are this app's own notes, reviewable in the Memory tab. |
+| **Claude's own tools** (MCP) | `jira_*` (search, read, comment, transition, worklog, and create/update — `jira_create_issue` with a `parentKey` makes a subtask, which is how a requirement broken into tasks reaches the board), `excel_*`, `knowledge_search`, `list_project_commands`, `run_project_command`, `read_command_log`, `memory_*`. Every mutating call goes through the approval modal, except memory writes — those are this app's own notes, reviewable in the Memory tab. |
 | **Search**                   | SQLite FTS5 across chat history and imported knowledge.                                                                                                                                                                                                            |
 | **History**                  | Audit feed of everything the app and Claude did, per project.                                                                                                                                                                                                      |
 

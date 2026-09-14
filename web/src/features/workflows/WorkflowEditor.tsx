@@ -29,6 +29,7 @@ const TYPE_HINT: Record<WorkflowStepType, string> = {
   command: "Runs one of the project's build/test commands by name.",
   confirm: "Stops for you to answer the questions raised so far.",
   manual: "Stops for you to do something outside the app, then tick it off.",
+  gate: "Runs a command and lets the exit code decide: pass, or go back and fix it.",
 };
 
 function blankStep(index: number): WorkflowStepInput {
@@ -43,6 +44,11 @@ function blankStep(index: number): WorkflowStepInput {
     permissionMode: null,
     maxRetries: 0,
     condition: null,
+    dependsOn: [],
+    onFail: null,
+    maxLoops: 0,
+    cwdLabel: null,
+    isolate: false,
   };
 }
 
@@ -62,6 +68,11 @@ function toInput(workflow: Workflow): WorkflowInput {
       permissionMode: s.permissionMode,
       maxRetries: s.maxRetries,
       condition: s.condition,
+      dependsOn: s.dependsOn,
+      onFail: s.onFail,
+      maxLoops: s.maxLoops,
+      cwdLabel: s.cwdLabel,
+      isolate: s.isolate,
     })),
   };
 }
@@ -284,18 +295,53 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                       </div>
                     )}
 
-                    {step.type === "command" && (
-                      <div className="w-56">
-                        <Label>Command name</Label>
-                        <Input
-                          className="font-mono text-xs"
-                          value={step.commandName ?? ""}
-                          onChange={(e) => patchStep(i, { commandName: e.target.value || null })}
-                          placeholder="Test"
-                        />
-                        <p className="mt-1 m3-label-sm text-ink-faint">
-                          Matched by name against the project's Commands at run time.
-                        </p>
+                    {(step.type === "command" || step.type === "gate") && (
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label>Command name</Label>
+                          <Input
+                            className="font-mono text-xs"
+                            value={step.commandName ?? ""}
+                            onChange={(e) => patchStep(i, { commandName: e.target.value || null })}
+                            placeholder="Test"
+                          />
+                          <p className="mt-1 m3-label-sm text-ink-faint">
+                            Matched by name against the project's Commands at run time.
+                          </p>
+                        </div>
+                        {step.type === "gate" && (
+                          <>
+                            <div>
+                              <Label>On fail, go back to</Label>
+                              <Select
+                                className="w-full"
+                                value={step.onFail ?? ""}
+                                onChange={(v) => patchStep(i, { onFail: v || null })}
+                                options={[
+                                  { value: "", label: "nothing — just fail" },
+                                  ...draft.steps
+                                    .filter((s) => s.key !== step.key)
+                                    .map((s) => ({ value: s.key, label: s.key })),
+                                ]}
+                              />
+                            </div>
+                            <div>
+                              <Label>Max loops</Label>
+                              <Input
+                                type="number"
+                                value={step.maxLoops}
+                                onChange={(e) =>
+                                  patchStep(i, {
+                                    maxLoops: Math.min(3, Math.max(0, Number(e.target.value) || 0)),
+                                  })
+                                }
+                              />
+                              <p className="mt-1 m3-label-sm text-ink-faint">
+                                3 is the ceiling, and two identical rounds stop it sooner.
+                              </p>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
 
@@ -335,15 +381,60 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                       </div>
                     </div>
 
-                    {step.type === "agent" && (
-                      <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
-                        <input
-                          type="checkbox"
-                          checked={step.requiresConfirm}
-                          onChange={(e) => patchStep(i, { requiresConfirm: e.target.checked })}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label>Runs after</Label>
+                        <Input
+                          className="font-mono text-xs"
+                          value={step.dependsOn.join(", ")}
+                          onChange={(e) =>
+                            patchStep(i, {
+                              dependsOn: e.target.value
+                                .split(",")
+                                .map((k) => k.trim())
+                                .filter(Boolean),
+                            })
+                          }
+                          placeholder="the step above"
                         />
-                        Stop for my confirmation after this step
-                      </label>
+                        <p className="mt-1 m3-label-sm text-ink-faint">
+                          Name two or more keys and this step waits for all of them — which is also
+                          how two steps naming the same one end up running side by side.
+                        </p>
+                      </div>
+                      <div>
+                        <Label>Path label</Label>
+                        <Input
+                          value={step.cwdLabel ?? ""}
+                          onChange={(e) => patchStep(i, { cwdLabel: e.target.value || null })}
+                          placeholder="the run's own directory"
+                        />
+                        <p className="mt-1 m3-label-sm text-ink-faint">
+                          Which repo of the project this step works in.
+                        </p>
+                      </div>
+                    </div>
+
+                    {step.type === "agent" && (
+                      <div className="space-y-1.5">
+                        <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                          <input
+                            type="checkbox"
+                            checked={step.requiresConfirm}
+                            onChange={(e) => patchStep(i, { requiresConfirm: e.target.checked })}
+                          />
+                          Stop for my confirmation after this step
+                        </label>
+                        <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                          <input
+                            type="checkbox"
+                            checked={step.isolate}
+                            onChange={(e) => patchStep(i, { isolate: e.target.checked })}
+                          />
+                          Own git worktree — needed for steps that run beside one another in the
+                          same repo
+                        </label>
+                      </div>
                     )}
                   </div>
                 )}

@@ -21,6 +21,7 @@ import { projectKey, useUiState } from "@/lib/uiStore";
 import { FilterChip } from "@/components/ui/chip";
 import { cn } from "@/lib/utils";
 import { RunView } from "./RunView";
+import { TriggersPanel } from "./TriggersPanel";
 import {
   useDeleteRun,
   useImportToProject,
@@ -141,6 +142,8 @@ export function WorkflowsTab({ project, envSets }: Props) {
           ))}
         </div>
       )}
+
+      {imported.length > 0 && <TriggersPanel project={project} workflows={imported} />}
 
       {runs.length > 0 && (
         <>
@@ -336,6 +339,8 @@ function StartDialog({
   const [pathId, setPathId] = useState(project.paths[0]?.id ?? "");
   const [envSetId, setEnvSetId] = useState("");
   const [useWorktree, setUseWorktree] = useState(false);
+  const [autoMode, setAutoMode] = useState(false);
+  const [askPolicy, setAskPolicy] = useState<"stop" | "assume">("stop");
 
   // Dynamic mode: the run opens with its stepper on top and an interactive
   // claude terminal below driving the steps (reporting progress back).
@@ -405,6 +410,39 @@ function StartDialog({
             </span>
           </span>
         </label>
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={autoMode}
+            onChange={(e) => setAutoMode(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Run unattended
+            <span className="block m3-label-sm text-ink-faint">
+              No stopping to have its own work confirmed. It still stops at a manual step, at a real
+              question from the agent, and at merge — that stays yours.
+            </span>
+          </span>
+        </label>
+        {autoMode && (
+          <div>
+            <Label>When the agent genuinely asks something</Label>
+            <Select
+              className="w-full"
+              value={askPolicy}
+              onChange={(v) => setAskPolicy(v as "stop" | "assume")}
+              options={[
+                { value: "stop", label: "Stop and wait for me (you get a notification)" },
+                { value: "assume", label: "Assume, carry on, and put the assumption in the PR" },
+              ]}
+            />
+            <p className="mt-1 m3-label-sm text-ink-faint">
+              Assume still refuses to decide about money, auth, user data, permissions, deleting
+              data, schemas or API contracts — those stop regardless.
+            </p>
+          </div>
+        )}
         {start.isError && (
           <p className="text-xs text-err">
             {start.error instanceof Error ? start.error.message : "Could not start"}
@@ -438,6 +476,8 @@ function StartDialog({
                   cwdPathId: pathId || undefined,
                   envSetId: envSetId || null,
                   useWorktree,
+                  autoMode,
+                  askPolicy: autoMode ? askPolicy : undefined,
                 },
                 { onSuccess: (run) => onStarted(run.id) },
               )

@@ -12,10 +12,12 @@ import { readSheet, writeWorkbook } from "../services/excel";
 import {
   addComment,
   addWorklog,
+  createIssue,
   getIssue,
   getTransitions,
   searchIssues,
   transitionIssue,
+  updateIssue,
 } from "../services/jira";
 import {
   createMemory,
@@ -29,6 +31,7 @@ import {
 import { search } from "../services/search";
 import {
   artifactDir,
+  assumeAnswers,
   emitArtifactRecord,
   hasPendingAsk,
   markAwaitingInput,
@@ -56,9 +59,7 @@ export function stationMcpServer(
   /** Set when this session is executing a workflow step — unlocks the workflow tools. */
   workflowRunStepId?: string | null,
 ) {
-  const workflowTools = workflowRunStepId
-    ? buildWorkflowTools(projectId, workflowRunStepId)
-    : [];
+  const workflowTools = workflowRunStepId ? buildWorkflowTools(projectId, workflowRunStepId) : [];
 
   /**
    * A memory this session may read or change: its own project's, or a global
@@ -121,7 +122,12 @@ export function stationMcpServer(
             statusName: args.statusName,
             transitionId: args.transitionId,
           });
-          audit(projectId, "jira_transitioned", `Claude transitioned ${args.key} (${label})`, args.key);
+          audit(
+            projectId,
+            "jira_transitioned",
+            `Claude transitioned ${args.key} (${label})`,
+            args.key,
+          );
           return text(`Transitioned ${args.key}: ${label}`);
         },
       ),
@@ -131,8 +137,59 @@ export function stationMcpServer(
         { key: z.string(), timeSpent: z.string(), comment: z.string().optional() },
         async (args) => {
           await addWorklog(args.key, args.timeSpent, args.comment);
-          audit(projectId, "jira_worklogged", `Claude logged ${args.timeSpent} on ${args.key}`, args.key);
+          audit(
+            projectId,
+            "jira_worklogged",
+            `Claude logged ${args.timeSpent} on ${args.key}`,
+            args.key,
+          );
           return text(`Logged ${args.timeSpent} on ${args.key}.`);
+        },
+      ),
+      tool(
+        "jira_create_issue",
+        "Create a Jira issue. Pass parentKey to make it a subtask of that issue — that is how a " +
+          "requirement broken into tasks ends up on the board instead of inside one comment. " +
+          "The issue type is worked out from the project unless you name one.",
+        {
+          summary: z.string(),
+          description: z.string().optional(),
+          parentKey: z.string().optional().describe("Parent issue key — makes this a subtask"),
+          projectKey: z.string().optional().describe("Needed only without a parentKey"),
+          issueType: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        },
+        async (args) => {
+          const created = await createIssue(args);
+          audit(
+            projectId,
+            "jira_issue_created",
+            `Claude created ${created.key}${args.parentKey ? ` under ${args.parentKey}` : ""}`,
+            created.key,
+          );
+          return text(`Created ${created.key} — ${created.url}`);
+        },
+      ),
+      tool(
+        "jira_update_issue",
+        "Update a Jira issue's summary, description, labels or assignee. Status is a transition, " +
+          "not a field — use jira_transition for that.",
+        {
+          key: z.string(),
+          summary: z.string().optional(),
+          description: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+          assignee: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("Account id on Cloud, username on Server/DC. null unassigns."),
+        },
+        async (args) => {
+          const { key, ...fields } = args;
+          await updateIssue(key, fields);
+          audit(projectId, "jira_issue_updated", `Claude updated ${key}`, key);
+          return text(`Updated ${key}.`);
         },
       ),
 
@@ -193,7 +250,10 @@ export function stationMcpServer(
         },
         async (args) => {
           const safe = args.filename.replace(/[/\\]/g, "_");
-          const target = join(storeDirFor(projectId), safe.endsWith(".xlsx") ? safe : `${safe}.xlsx`);
+          const target = join(
+            storeDirFor(projectId),
+            safe.endsWith(".xlsx") ? safe : `${safe}.xlsx`,
+          );
           writeWorkbook(target, args.sheets);
           audit(projectId, "knowledge_imported", `Claude wrote ${safe}`, sessionId);
           return text(`Wrote ${target}. It now shows up in the project's Knowledge tab.`);
@@ -381,7 +441,6 @@ export function stationMcpServer(
   });
 }
 
-
 /**
  * Only present when the session is executing a workflow step. A plain chat
  * session shouldn't be able to answer-block itself or write run artifacts.
@@ -407,7 +466,7 @@ function buildWorkflowTools(projectId: string, runStepId: string) {
             z.object({
               key: z
                 .string()
-                .describe("short stable id, e.g. \"auth\" — later steps read answers.<key>"),
+                .describe('short stable id, e.g. "auth" — later steps read answers.<key>'),
               question: z.string(),
               kind: z.enum(["text", "choice", "bool"]).optional(),
               options: z.array(z.string()).optional().describe("required when kind is choice"),
@@ -428,6 +487,15 @@ function buildWorkflowTools(projectId: string, runStepId: string) {
             options: q.options,
           })),
         );
+
+        // An unattended run set to `assume` doesn't park: it answers its own
+        // question, writes down what it assumed, and carries on — which is the
+        // "questions you can guess at" half of the rule. Everything it assumed
+        // reaches the PR through the run's assumptions, so the guess is visible
+        // rather than buried in a transcript nobody opens.
+        const assumed = assumeAnswers(runId, args.questions);
+        if (assumed) return json({ answers: assumed, assumed: true });
+
         markAwaitingInput(runId);
         const answers = await new Promise<Record<string, string>>((resolve) => {
           registerAsk(runStepId, resolve);

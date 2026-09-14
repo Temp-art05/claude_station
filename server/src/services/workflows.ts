@@ -9,6 +9,7 @@ import {
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
+import { graphProblem } from "../lib/workflow-graph";
 
 type WorkflowRow = typeof schema.workflows.$inferSelect;
 type StepRow = typeof schema.workflowSteps.$inferSelect;
@@ -28,7 +29,23 @@ function toStep(row: StepRow): WorkflowStep {
     permissionMode: row.permissionMode as WorkflowStep["permissionMode"],
     maxRetries: row.maxRetries,
     condition: row.condition,
+    dependsOn: parseDependsOn(row.dependsOn),
+    onFail: row.onFail,
+    maxLoops: row.maxLoops,
+    cwdLabel: row.cwdLabel,
+    isolate: row.isolate,
   };
+}
+
+/** Stored as JSON; a row written before the column existed reads as "no deps". */
+function parseDependsOn(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
 }
 
 function stepsOf(workflowId: string): WorkflowStep[] {
@@ -80,10 +97,24 @@ function assertUniqueKeys(input: WorkflowInput): void {
     if (step.type === "agent" && !step.agentName) {
       throw badRequest(`Step "${step.key}" is an agent step but names no agent`);
     }
-    if (step.type === "command" && !step.commandName) {
-      throw badRequest(`Step "${step.key}" is a command step but names no command`);
+    if ((step.type === "command" || step.type === "gate") && !step.commandName) {
+      throw badRequest(`Step "${step.key}" is a ${step.type} step but names no command`);
+    }
+    if (step.type !== "gate" && step.onFail) {
+      throw badRequest(`Step "${step.key}" sets onFail, which only a gate step has`);
     }
   }
+  assertGraph(input);
+}
+
+/**
+ * A dependency that names nothing, or a cycle, has to be caught at save time,
+ * with the whole list in hand. Caught at run time instead it would surface as a
+ * run that simply never starts a step, which reads like a hung scheduler.
+ */
+function assertGraph(input: WorkflowInput): void {
+  const problem = graphProblem(input.steps);
+  if (problem) throw badRequest(problem);
 }
 
 function writeSteps(workflowId: string, input: WorkflowInput): void {
@@ -104,6 +135,11 @@ function writeSteps(workflowId: string, input: WorkflowInput): void {
         permissionMode: step.permissionMode,
         maxRetries: step.maxRetries,
         condition: step.condition,
+        dependsOn: step.dependsOn.length > 0 ? JSON.stringify(step.dependsOn) : null,
+        onFail: step.onFail,
+        maxLoops: step.maxLoops,
+        cwdLabel: step.cwdLabel,
+        isolate: step.isolate,
         createdAt: now,
       })
       .run();
@@ -192,7 +228,9 @@ export function listWorkflowFolders(): { folder: string; count: number }[] {
   }
   return [...counts.entries()]
     .map(([folder, count]) => ({ folder, count }))
-    .sort((a, b) => (a.folder === "" ? 1 : b.folder === "" ? -1 : a.folder.localeCompare(b.folder)));
+    .sort((a, b) =>
+      a.folder === "" ? 1 : b.folder === "" ? -1 : a.folder.localeCompare(b.folder),
+    );
 }
 
 // ── Project import ────────────────────────────────────────────────────────────
@@ -287,6 +325,16 @@ export function exportWorkflowYaml(workflow: Workflow): string {
         ...(s.permissionMode ? { permissionMode: s.permissionMode } : {}),
         ...(s.maxRetries ? { maxRetries: s.maxRetries } : {}),
         ...(s.condition ? { condition: s.condition } : {}),
+        ...(s.dependsOn.length > 0 ? { dependsOn: s.dependsOn } : {}),
+        ...(s.onFail ? { onFail: s.onFail } : {}),
+        ...(s.maxLoops ? { maxLoops: s.maxLoops } : {}),
+        ...(s.cwdLabel ? { cwdLabel: s.cwdLabel } : {}),
+        ...(s.isolate ? { isolate: true } : {}),
+        ...(s.dependsOn.length > 0 ? { dependsOn: s.dependsOn } : {}),
+        ...(s.onFail ? { onFail: s.onFail } : {}),
+        ...(s.maxLoops ? { maxLoops: s.maxLoops } : {}),
+        ...(s.cwdLabel ? { cwdLabel: s.cwdLabel } : {}),
+        ...(s.isolate ? { isolate: true } : {}),
       })),
     },
     { lineWidth: 100, noRefs: true },
@@ -333,7 +381,7 @@ export function renderWorkflowRunbook(
     "- Trước khi BẮT ĐẦU mỗi step: in một dòng `▶ Step k/n — <title>` + 1-2 câu bạn sắp làm gì.",
     "- Kết thúc step: tóm tắt kết quả (file đã tạo/sửa, kết luận). Step có ⏸ thì DỪNG HẲN, chờ tôi trả lời rồi mới sang step sau.",
     "- Câu hỏi cần tôi chốt → hỏi thẳng trong chat và chờ; không tự đoán.",
-    "- Tôi có thể điều khiển bằng chat bất cứ lúc nào: \"bỏ qua step X\", \"quay lại step Y\", \"sửa yêu cầu: …\", \"đang ở step nào?\" — làm theo và xác nhận lại kế hoạch.",
+    '- Tôi có thể điều khiển bằng chat bất cứ lúc nào: "bỏ qua step X", "quay lại step Y", "sửa yêu cầu: …", "đang ở step nào?" — làm theo và xác nhận lại kế hoạch.',
     "- Chỉ làm việc của step đang chạy; không tự ý gộp/nhảy step trừ khi tôi bảo.",
     "- Instruction có thể nhắc các tool `workflow_ask` / `workflow_emit_artifact` / `workflow_note` (chỉ có ở chế độ engine). Trong phiên này quy đổi: workflow_ask = hỏi tôi trực tiếp trong chat; workflow_emit_artifact = ghi ra file và nói rõ đường dẫn; workflow_note = in một dòng tóm tắt.",
     ...(progress
@@ -355,7 +403,13 @@ export function renderWorkflowRunbook(
 
 /** Imports never fail on a name clash — they get a -2/-3 suffix instead. */
 export function uniqueWorkflowName(base: string): string {
-  const taken = new Set(db.select().from(schema.workflows).all().map((r) => r.name));
+  const taken = new Set(
+    db
+      .select()
+      .from(schema.workflows)
+      .all()
+      .map((r) => r.name),
+  );
   if (!taken.has(base)) return base;
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;

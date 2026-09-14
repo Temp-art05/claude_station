@@ -10,6 +10,7 @@ import { REPO_ROOT } from "../lib/repo-root";
 import { runningIds, tmuxEnabled } from "../services/pty-manager";
 import { cursorHealth, watchedRepos } from "../services/checkpoints";
 import { captureHealth } from "../services/session-ledger";
+import { triggerHealth } from "../services/workflow-triggers";
 
 const exec = promisify(execFile);
 
@@ -94,6 +95,9 @@ export function settingsRoutes(app: FastifyInstance): void {
       // Commit capture: repos being watched, and repos where something is wrong.
       checkpointRepos: watchedRepos().length,
       checkpointRepoIssues: cursorHealth(),
+      // Standing orders: what is armed to start a run on its own, and what is
+      // failing to look. A trigger that errors every poll is otherwise silent.
+      workflowTriggers: triggerHealth(),
     };
   });
 }

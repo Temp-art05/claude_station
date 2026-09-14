@@ -109,6 +109,8 @@ export function useStartRun(projectId: string) {
       cwdPathId?: string;
       envSetId?: string | null;
       useWorktree?: boolean;
+      autoMode?: boolean;
+      askPolicy?: "stop" | "assume";
     }) => api.post<WorkflowRun>(`/api/projects/${projectId}/workflow-runs`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["workflow-runs", projectId] }),
   });

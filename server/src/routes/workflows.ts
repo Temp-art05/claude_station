@@ -6,6 +6,7 @@ import {
   knowledgeFolderSchema,
   workflowInputSchema,
   workflowRunInputSchema,
+  workflowTriggerInputSchema,
   type FolderImportResult,
 } from "@claude-station/shared";
 import { TOKEN } from "../lib/auth";
@@ -42,6 +43,13 @@ import {
   retryStep,
   skipStep,
 } from "../services/workflow-runner";
+import {
+  createTrigger,
+  deleteTrigger,
+  listTriggers,
+  pollTrigger,
+  updateTrigger,
+} from "../services/workflow-triggers";
 
 const idParam = z.object({ id: z.string() });
 
@@ -285,6 +293,40 @@ export function workflowRoutes(app: FastifyInstance): void {
     const { id } = idParam.parse(req.params);
     deleteRun(id);
     reply.code(204);
+  });
+
+  // ── Triggers ──────────────────────────────────────────────────────────────
+
+  app.get<{ Params: { id: string } }>("/api/projects/:id/workflow-triggers", async (req) => {
+    const { id } = idParam.parse(req.params);
+    return listTriggers(id);
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/workflow-triggers",
+    async (req, reply) => {
+      const { id } = idParam.parse(req.params);
+      const input = workflowTriggerInputSchema.parse(req.body);
+      reply.code(201);
+      return createTrigger(id, input);
+    },
+  );
+
+  app.put<{ Params: { id: string } }>("/api/workflow-triggers/:id", async (req) => {
+    const { id } = idParam.parse(req.params);
+    return updateTrigger(id, workflowTriggerInputSchema.parse(req.body));
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/workflow-triggers/:id", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    deleteTrigger(id);
+    reply.code(204);
+  });
+
+  /** Check now, rather than waiting out the interval to learn a query matches nothing. */
+  app.post<{ Params: { id: string } }>("/api/workflow-triggers/:id/poll", async (req) => {
+    const { id } = idParam.parse(req.params);
+    return pollTrigger(id);
   });
 
   /** Download an artifact produced during a run. */

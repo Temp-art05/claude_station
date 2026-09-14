@@ -1,0 +1,69 @@
+# Nhiều góc nhìn chạy song song rồi gộp (fan-out / fan-in trên cùng một repo).
+#
+# Ba reviewer cùng đọc một diff, mỗi con một góc, rồi một con gộp lại. Khác với
+# parallel-multi-repo ở một điểm quan trọng: cả ba làm việc trên CÙNG một repo,
+# nên chúng khai `isolate: true` để mỗi con có worktree riêng. Không có cờ đó thì
+# repo lock sẽ chặn con thứ hai và nó hiện ra như một step hỏng.
+#
+# Ba con đọc chứ không sửa, nên chia nhỏ góc nhìn là có lãi: một prompt "review đi"
+# luôn trả về cùng một loại nhận xét, ba prompt hẹp thì không.
+name: review-swarm
+description: >-
+  Ba reviewer song song trên cùng một repo (lỗi · hiệu năng · chuẩn code), mỗi con một worktree
+  riêng, rồi gộp thành một báo cáo xếp theo mức nghiêm trọng.
+folder: auto
+steps:
+  - key: scope
+    type: agent
+    title: Chốt phạm vi review
+    agentName: fe-dev
+    permissionMode: default
+    instruction: >-
+      Xác định diff cần review (branch hiện tại so với base, hoặc PR nêu trong goal). Ghi danh
+      sách file và một tóm tắt ngắn ra artifact để ba reviewer dùng chung — đừng để mỗi con tự
+      hiểu phạm vi một kiểu.
+
+  - key: review-bugs
+    type: agent
+    title: Soát lỗi đúng/sai
+    agentName: fe-dev
+    dependsOn: [scope]
+    isolate: true
+    permissionMode: default
+    instruction: >-
+      Chỉ tìm lỗi làm chương trình chạy sai: sai logic, sai điều kiện biên, race, null/undefined,
+      lỗi không được xử lý. Mỗi phát hiện phải kèm file:line và một kịch bản cụ thể khiến nó hỏng.
+      Không nhận xét style. Ghi kết quả ra artifact.
+
+  - key: review-perf
+    type: agent
+    title: Soát hiệu năng
+    agentName: fe-dev
+    dependsOn: [scope]
+    isolate: true
+    permissionMode: default
+    instruction: >-
+      Chỉ tìm chỗ tốn kém: query trong vòng lặp, render thừa, đọc file lặp lại, dữ liệu load cả
+      cục khi chỉ cần một phần. Kèm file:line và ước lượng tại sao nó tốn. Ghi ra artifact.
+
+  - key: review-style
+    type: agent
+    title: Soát chuẩn repo
+    agentName: fe-dev
+    dependsOn: [scope]
+    isolate: true
+    permissionMode: default
+    instruction: >-
+      Đối chiếu với CLAUDE.md và kiến trúc của repo: đặt tên, tầng nào được gọi tầng nào, chỗ
+      nào lặp lại code đã có sẵn. Kèm file:line. Ghi ra artifact.
+
+  - key: merge-report
+    type: agent
+    title: Gộp thành một báo cáo
+    agentName: fe-dev
+    dependsOn: [review-bugs, review-perf, review-style]
+    permissionMode: acceptEdits
+    instruction: >-
+      Đọc ba artifact, bỏ trùng, xếp theo mức nghiêm trọng thật (một lỗi logic đứng trên mười
+      nhận xét đặt tên). Cái nào ba con nói khác nhau thì nói rõ là đang mâu thuẫn chứ đừng chọn
+      bừa. Ghi báo cáo ra artifact và comment lên PR nếu goal có nêu PR.

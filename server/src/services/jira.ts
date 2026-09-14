@@ -298,6 +298,115 @@ export async function addWorklog(
   });
 }
 
+/**
+ * The issue types this project offers, and which of them is a subtask.
+ *
+ * Asked rather than assumed: "Sub-task", "Subtask" and "Sub-Task" are all real
+ * spellings across the Jira instances we talk to, and a hardcoded guess fails
+ * with an error that reads like the ticket is at fault.
+ */
+export async function projectIssueTypes(
+  projectKey: string,
+): Promise<{ id: string; name: string; subtask: boolean }[]> {
+  const data = await jiraFetch<{
+    projects?: { issuetypes?: { id: string; name: string; subtask?: boolean }[] }[];
+  }>(
+    `/issue/createmeta?projectKeys=${encodeURIComponent(projectKey)}&expand=projects.issuetypes`,
+  );
+  return (data.projects?.[0]?.issuetypes ?? []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    subtask: t.subtask === true,
+  }));
+}
+
+export interface CreateIssueInput {
+  /** Omit when `parentKey` is given — the parent's project is the right one. */
+  projectKey?: string;
+  summary: string;
+  description?: string;
+  /** Makes the new issue a subtask of this one. */
+  parentKey?: string;
+  /** Defaults to the project's subtask type when there's a parent, else Task. */
+  issueType?: string;
+  labels?: string[];
+}
+
+/**
+ * Create an issue — the piece that turns "break this requirement into tasks"
+ * into something the board can show, rather than a list inside one comment.
+ */
+export async function createIssue(input: CreateIssueInput): Promise<{ key: string; url: string }> {
+  const cfg = jiraConfig();
+  const projectKey = (input.projectKey ?? input.parentKey?.split("-")[0] ?? "").toUpperCase();
+  if (!projectKey) throw badRequest("Provide projectKey, or a parentKey to take it from");
+
+  let issueType = input.issueType;
+  if (!issueType) {
+    const types = await projectIssueTypes(projectKey);
+    const wanted = input.parentKey
+      ? types.find((t) => t.subtask)
+      : types.find((t) => !t.subtask && t.name.toLowerCase() === "task") ??
+        types.find((t) => !t.subtask);
+    if (!wanted) {
+      throw badRequest(
+        `No ${input.parentKey ? "subtask" : "task"} issue type in ${projectKey}. Available: ${types
+          .map((t) => t.name)
+          .join(", ")}`,
+      );
+    }
+    issueType = wanted.name;
+  }
+
+  const data = await jiraFetch<{ key?: string }>("/issue", {
+    method: "POST",
+    body: {
+      fields: {
+        project: { key: projectKey },
+        summary: input.summary,
+        issuetype: { name: issueType },
+        ...(input.parentKey ? { parent: { key: input.parentKey.toUpperCase() } } : {}),
+        ...(input.description
+          ? { description: isServer(cfg) ? input.description : toAdf(input.description) }
+          : {}),
+        ...(input.labels?.length ? { labels: input.labels } : {}),
+      },
+    },
+  });
+  if (!data.key) throw badRequest("Jira accepted the issue but returned no key");
+  return { key: data.key, url: `${cfg.baseUrl.replace(/\/$/, "")}/browse/${data.key}` };
+}
+
+export interface UpdateIssueInput {
+  summary?: string;
+  description?: string;
+  labels?: string[];
+  /** Account id on Cloud, username on Server/DC. `null` unassigns. */
+  assignee?: string | null;
+}
+
+export async function updateIssue(key: string, input: UpdateIssueInput): Promise<void> {
+  const cfg = jiraConfig();
+  const fields: Record<string, unknown> = {};
+  if (input.summary !== undefined) fields.summary = input.summary;
+  if (input.description !== undefined) {
+    fields.description = isServer(cfg) ? input.description : toAdf(input.description);
+  }
+  if (input.labels !== undefined) fields.labels = input.labels;
+  if (input.assignee !== undefined) {
+    // The two deployments name the same field differently, and sending the wrong
+    // one is accepted and silently ignored rather than rejected.
+    fields.assignee =
+      input.assignee === null
+        ? null
+        : isServer(cfg)
+          ? { name: input.assignee }
+          : { accountId: input.assignee };
+  }
+  if (Object.keys(fields).length === 0) throw badRequest("Nothing to update");
+  await jiraFetch(`/issue/${encodeURIComponent(key)}`, { method: "PUT", body: { fields } });
+}
+
 /** Seed text for a "Work on this with Claude" session. */
 export async function issueContext(key: string): Promise<string> {
   const issue = await getIssue(key);
