@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import type { WorkflowRun, WorkflowStep } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { TOKEN } from "../lib/auth";
+import { isComposerReady, isTrustDialog } from "../lib/claude-screen";
 import { env } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
@@ -31,23 +32,6 @@ import { recentOutput, write as ptyWrite, sessionAlive } from "./pty-manager";
 const TURN_TIMEOUT_MS = 45 * 60_000;
 /** How long to wait for the CLI to reach its composer before giving up on it. */
 const READY_TIMEOUT_MS = 60_000;
-
-/**
- * What the composer looks like once the CLI is ready for input. Matching on the
- * hint line rather than the prompt glyph: the glyph appears inside dialogs too.
- */
-const COMPOSER = /\? for shortcuts|auto[- ]accept edits|auto mode on|bypass permissions on/i;
-
-/**
- * The first-run dialog, and the reason this check exists at all.
- *
- * The CLI asks whether it trusts a folder it has not seen before, and the
- * highlighted answer is "No, exit". A prompt typed blind ends with Enter, so a
- * step used to answer that question by quitting — and all anyone saw was a
- * terminal that vanished and a step stuck on `running` for ever.
- */
-const TRUST_DIALOG =
-  /trust (the )?(files|this folder)|Is this a project you created or one you trust/i;
 
 /**
  * The MCP config a step's CLI is started with.
@@ -132,8 +116,10 @@ async function waitForComposer(terminalId: string): Promise<{ ok: boolean; error
     if (!sessionAlive(terminalId)) {
       return { ok: false, error: "The step's terminal exited before it was ready" };
     }
-    const text = recentOutput(terminalId);
-    if (TRUST_DIALOG.test(text)) {
+    // The visible screen is enough, and this runs twice a second: asking tmux for
+    // the whole scrollback each time would be paying for history nobody reads.
+    const text = recentOutput(terminalId, 4000);
+    if (isTrustDialog(text)) {
       return {
         ok: false,
         error:
@@ -141,7 +127,7 @@ async function waitForComposer(terminalId: string): Promise<{ ok: boolean; error
           "once — it is asked per folder, and a run must not answer it on your behalf.",
       };
     }
-    if (COMPOSER.test(text)) return { ok: true };
+    if (isComposerReady(text)) return { ok: true };
     if (Date.now() > until) {
       return {
         ok: false,

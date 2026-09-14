@@ -323,9 +323,21 @@ function repaintWhenResized(id: string, cols: number, rows: number): void {
  * before typing a prompt into it. Typing blind is how a run once answered the
  * CLI's "do you trust this folder?" dialog with its default — which is *No, exit*.
  */
+/**
+ * The recent screen as text, for code that needs to *read* a terminal rather than
+ * show it — "has the CLI reached its prompt", "is it asking about trusting this
+ * folder".
+ *
+ * A tmux-backed session keeps no byte log on purpose (see `attach`), so reading
+ * `scrollback` there returns an empty string however healthy the terminal is.
+ * That is not a smaller answer, it is a wrong one: a caller polling for a prompt
+ * waits out its timeout while the prompt sits on screen. So tmux is asked for the
+ * pane instead, and the byte log is the fallback for terminals it does not hold.
+ */
 export function recentOutput(id: string, bytes = 4000): string {
   const m = sessions.get(id);
   if (!m) return "";
+  if (m.tmuxBacked) return tmux.capturePane(id, 80).slice(-bytes);
   const joined = Buffer.concat(m.scrollback);
   return joined.subarray(Math.max(0, joined.length - bytes)).toString("utf8");
 }

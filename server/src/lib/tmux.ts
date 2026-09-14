@@ -134,9 +134,7 @@ export interface NewSessionInput {
 export function newSessionArgs(input: NewSessionInput): string[] {
   const env = input.env ?? {};
   const envFlags =
-    input.envFlag === false
-      ? []
-      : Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+    input.envFlag === false ? [] : Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   // Login + interactive, same as pty-manager's direct spawn: PATH shims
   // (nvm/asdf/…) only resolve in a login shell. tmux runs this through `sh -c`,
   // hence the quoting.
@@ -192,9 +190,7 @@ export function windowSizeLine(size: { cols: number; rows: number }): string {
  * the client, so the app's own PTY lets go the moment this window opens.
  */
 export function launcherLine(terminalId: string): string {
-  return `exec tmux ${attachArgs(terminalId, { steal: true })
-    .map(shq)
-    .join(" ")}`;
+  return `exec tmux ${attachArgs(terminalId, { steal: true }).map(shq).join(" ")}`;
 }
 
 function run(args: string[]): string {
@@ -206,6 +202,39 @@ function run(args: string[]): string {
     env: childBaseEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+/**
+ * What the pane is showing right now, as plain text.
+ *
+ * The byte log is not an option for a tmux-backed terminal: it deliberately
+ * keeps none, because tmux holds the real screen and replaying bytes into a
+ * fresh emulator puts text in the wrong columns. Anything server-side that needs
+ * to *read* the screen — "has the CLI reached its prompt yet" — has to ask tmux,
+ * and this is that question.
+ */
+export function capturePaneArgs(terminalId: string, lines = 200): string[] {
+  return [
+    "-L",
+    TMUX_SOCKET,
+    "capture-pane",
+    "-p",
+    // No `=` prefix here: that is exact-match syntax for a *session* target, and
+    // capture-pane wants a pane. With it tmux answers "can't find pane" about a
+    // session that is plainly there.
+    "-t",
+    sessionName(terminalId),
+    "-S",
+    `-${Math.max(0, lines)}`,
+  ];
+}
+
+export function capturePane(terminalId: string, lines = 200): string {
+  try {
+    return run(capturePaneArgs(terminalId, lines));
+  } catch {
+    return "";
+  }
 }
 
 export function hasSession(terminalId: string): boolean {
@@ -270,8 +299,6 @@ export interface TmuxClient {
   cols: number;
   rows: number;
 }
-
-
 
 function parseClients(out: string): TmuxClient[] {
   return out.split("\n").flatMap((line) => {
@@ -388,11 +415,8 @@ export async function sessionClientsAsync(terminalId: string): Promise<TmuxClien
  */
 export async function repaintSession(terminalId: string): Promise<void> {
   const clients = await sessionClientsAsync(terminalId);
-  await Promise.all(
-    clients.map((c) => runAsync(refreshClientArgs(c.name)).catch(() => undefined)),
-  );
+  await Promise.all(clients.map((c) => runAsync(refreshClientArgs(c.name)).catch(() => undefined)));
 }
-
 
 export function killSession(terminalId: string): void {
   try {
