@@ -3,6 +3,13 @@ name: spec-reader
 description: "Đọc spec, đối chiếu code và docs BE, trả plan + câu hỏi chia hai loại chặn/đoán-được. Read-only."
 model: opus
 maxTurns: 40
+# Nạp sẵn đúng ba skill của quy trình soát-spec-rồi-lên-plan. Không khai thì
+# skill vẫn nằm trong ~/.claude/skills và session tự tìm được, nhưng khai ra là
+# cách duy nhất chắc chắn nó được nạp kể cả khi con này chạy như subagent.
+skills:
+  - using-superpowers
+  - brainstorming
+  - writing-plans
 disallowedTools:
   - Edit
   - Write
