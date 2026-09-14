@@ -4,13 +4,7 @@ import { eq } from "drizzle-orm";
 import type { WorkflowRun, WorkflowStep } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { TOKEN } from "../lib/auth";
-import {
-  isBusy,
-  isComposerReady,
-  isTrustDialog,
-  needsApproval,
-  waitingForPerson,
-} from "../lib/claude-screen";
+import { isBusy, isComposerReady, isTrustDialog, waitingForPerson } from "../lib/claude-screen";
 import { env } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
@@ -140,12 +134,12 @@ async function waitForComposer(terminalId: string): Promise<TurnOutcome> {
     const text = recentOutput(terminalId, 4000);
     // Somebody is already mid-answer in here. Failing the step out from under
     // them is the rudest possible reading of a terminal that is working fine.
-    if (waitingForPerson(text) && !isTrustDialog(text)) {
+    const dialog = isTrustDialog(text) ? null : waitingForPerson(text);
+    if (dialog) {
       return {
         ok: false,
         waiting: true,
-        error:
-          "Terminal của step đang hỏi bạn — trả lời ngay trong đó, xong thì bấm Tiếp tục (hoặc Retry nếu muốn chạy lại step).",
+        error: `Terminal của step đang chờ bạn (${dialog}) — trả lời ngay trong đó, xong thì bấm Tiếp tục.`,
       };
     }
     if (isTrustDialog(text)) {
@@ -243,13 +237,12 @@ export async function runTurnInTerminal(input: {
     // a person — to approve a command, or to pick between options the agent put
     // up. The run stops there and says so, and the answer is given in the
     // terminal where the question is.
-    if (waitingForPerson(screen)) {
+    const dialog = waitingForPerson(screen);
+    if (dialog) {
       return {
         ok: false,
         waiting: true,
-        error: needsApproval(screen)
-          ? "Terminal của step đang xin phê duyệt — trả lời trong đó, xong thì bấm Tiếp tục."
-          : "Terminal của step đang hỏi bạn — trả lời trong đó, xong thì bấm Tiếp tục.",
+        error: `Terminal của step đang chờ bạn (${dialog}) — trả lời trong đó, xong thì bấm Tiếp tục.`,
       };
     }
 

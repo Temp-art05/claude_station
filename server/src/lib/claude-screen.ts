@@ -56,11 +56,40 @@ const APPROVAL =
  * composer, so "not busy and no composer" read as "the CLI never came up", and a
  * step was failed out from under somebody who was mid-answer.
  */
-const WAITING_FOR_PERSON =
-  /Do you want to proceed\?|requires approval|Esc to cancel|Tab to amend|Chat about this|Type something\.|✓ Submit/i;
+const WAITING_MARKERS: [RegExp, string][] = [
+  [/Do you want to proceed\?/i, "hộp xin phê duyệt"],
+  [/requires approval/i, "lệnh cần phê duyệt"],
+  [/Chat about this/i, "form câu hỏi của agent"],
+  [/✓ Submit/i, "form câu hỏi của agent"],
+];
 
-export function waitingForPerson(screen: string): boolean {
-  return WAITING_FOR_PERSON.test(screen) || TRUST_DIALOG.test(screen);
+/**
+ * Footers a dialog draws — and so does a dialog that has just closed, for the
+ * fraction of a second before the screen is redrawn.
+ *
+ * They were part of the detection and turned it into a liar: a step parked in
+ * front of an empty terminal claiming somebody was being asked something. A claim
+ * about the user's own screen, contradicted by the screen. They still help name
+ * what is there once something else establishes that a dialog is up, which is all
+ * they are good for.
+ */
+const WEAK_MARKERS = /Esc to cancel|Tab to amend/i;
+
+/**
+ * Which dialog is on screen, or null.
+ *
+ * Returns the marker rather than a boolean because the engine then stops a step
+ * with a reason somebody can check against their own screen.
+ */
+export function waitingForPerson(screen: string): string | null {
+  for (const [re, what] of WAITING_MARKERS) if (re.test(screen)) return what;
+  if (TRUST_DIALOG.test(screen)) return "hộp hỏi có tin thư mục này không";
+  return null;
+}
+
+/** True when something *else* has established a dialog is up and we want its name. */
+export function looksLikeDialog(screen: string): boolean {
+  return waitingForPerson(screen) !== null || WEAK_MARKERS.test(screen);
 }
 
 export function isBusy(screen: string): boolean {

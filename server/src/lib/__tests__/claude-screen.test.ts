@@ -3,6 +3,7 @@ import {
   isBusy,
   isComposerReady,
   isTrustDialog,
+  looksLikeDialog,
   needsApproval,
   waitingForPerson,
 } from "../claude-screen";
@@ -134,22 +135,63 @@ const QUESTION_PANE = `
 
 describe("waitingForPerson", () => {
   it("recognises the question UI an agent puts up", () => {
-    expect(waitingForPerson(QUESTION_PANE)).toBe(true);
+    expect(waitingForPerson(QUESTION_PANE)).toBe("form câu hỏi của agent");
     // These are the two that made it look like a dead terminal.
     expect(isBusy(QUESTION_PANE)).toBe(false);
     expect(isComposerReady(QUESTION_PANE)).toBe(false);
   });
 
   it("recognises an approval dialog", () => {
-    expect(waitingForPerson(APPROVAL_PANE)).toBe(true);
+    expect(waitingForPerson(APPROVAL_PANE)).toBe("hộp xin phê duyệt");
   });
 
   it("counts the trust dialog, which is the same thing at first run", () => {
-    expect(waitingForPerson("Do you trust the files in this folder?")).toBe(true);
+    expect(waitingForPerson("Do you trust the files in this folder?")).toBe(
+      "hộp hỏi có tin thư mục này không",
+    );
   });
 
   it("leaves a working turn and an idle composer alone", () => {
-    expect(waitingForPerson(BUSY_PANE)).toBe(false);
-    expect(waitingForPerson(READY_PANE)).toBe(false);
+    expect(waitingForPerson(BUSY_PANE)).toBeNull();
+    expect(waitingForPerson(READY_PANE)).toBeNull();
+  });
+});
+
+/**
+ * The screen a step was parked in front of while claiming somebody was being
+ * asked something. Nothing is open; the composer hint simply mentions a key.
+ * A claim about the user's screen that the user can see is false costs more than
+ * the detection is worth, so this pins the exact pane.
+ */
+const FRESH_START_PANE = `
+ ▐▛███▛█   Claude Code v2.1.270
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Team
+  ▝▝ ▝▝    ~/SkillsAgent/claude_station/data/worktrees/mu102v40-f6276142-df4
+
+›
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents
+`;
+
+describe("the weak markers that made it lie", () => {
+  it("does not park a run on a dialog footer alone", () => {
+    // These outlive the dialog they belong to by a frame. Treating one as proof
+    // is how a step ended up parked in front of an empty terminal.
+    expect(waitingForPerson("  Esc to cancel · Tab to amend")).toBeNull();
+  });
+
+  it("still uses them to recognise a dialog once something else says so", () => {
+    expect(looksLikeDialog("  Esc to cancel · Tab to amend")).toBe(true);
+    expect(looksLikeDialog(FRESH_START_PANE)).toBe(false);
+  });
+});
+
+describe("a terminal that is not asking anything", () => {
+  it("is not reported as waiting", () => {
+    expect(waitingForPerson(FRESH_START_PANE)).toBeNull();
+  });
+
+  it("is reported as ready to be typed at", () => {
+    expect(isComposerReady(FRESH_START_PANE)).toBe(true);
+    expect(isBusy(FRESH_START_PANE)).toBe(false);
   });
 });

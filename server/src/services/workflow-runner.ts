@@ -767,6 +767,11 @@ async function runAgentStep(
     terminalId,
     startedAt: existing?.startedAt ?? nowIso(),
     error: null,
+    // The note describes the last thing that stopped this step. Starting it again
+    // makes that description false, and a stale one is read as current — which is
+    // exactly how a step came to say it was waiting on an answer while its
+    // terminal sat empty.
+    note: null,
   });
 
   const prompt =
