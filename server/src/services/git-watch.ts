@@ -5,7 +5,7 @@
 // seconds per open tab is pure waste. So we watch instead and only tell the client
 // *that* something changed; the client re-runs the queries it actually needs.
 import { watch, type FSWatcher } from "node:fs";
-import { sep } from "node:path";
+import { join, sep } from "node:path";
 
 /** Directories whose churn says nothing about the working tree's git status. */
 const IGNORED_DIRS = new Set([
@@ -115,4 +115,84 @@ export function watchTree(cwd: string, onChange: () => void): () => void {
 /** True when the tree is being watched for real (vs. the degraded poll-only path). */
 export function isWatching(cwd: string): boolean {
   return entries.get(cwd)?.watcher != null;
+}
+
+// ── A watcher that outlives the UI ────────────────────────────────────────────
+
+/**
+ * `watchTree` above is refcounted by its listeners: the watcher comes up when a
+ * client opens the Diff tab and is torn down when the last one leaves. That is
+ * right for a refresh signal — nobody is looking, nobody pays — and wrong for
+ * commit capture, which has to keep working with every tab closed.
+ *
+ * So this is a second, separate watcher with a different shape:
+ *   - it never detaches, and
+ *   - it watches `<repo>/.git` alone, NOT recursively.
+ *
+ * Non-recursive on `.git` is the cheap part. Refs are all it needs to see, and a
+ * build writing thousands of files into `DerivedData` cannot reach it — the
+ * recursive tree watcher filters that churn in a callback, which is far later than
+ * not receiving it at all.
+ */
+const gitDirWatchers = new Map<string, { watcher: FSWatcher; timer: NodeJS.Timeout | null }>();
+
+/** True when a name inside `.git` means the user-visible refs moved. */
+function isRefChange(entry: string): boolean {
+  const first = entry.split(sep)[0];
+  return !!first && GIT_DIR_WATCHED.includes(first);
+}
+
+/**
+ * Call `onRefsChanged` (debounced) whenever this repo's refs move. Idempotent per
+ * repo: a second call for the same path keeps the first watcher.
+ *
+ * Returns false when no watcher could be started, so the caller can fall back to
+ * polling and say the capture is degraded rather than silently going blind.
+ */
+export function watchGitDir(repoPath: string, onRefsChanged: () => void): boolean {
+  if (gitDirWatchers.has(repoPath)) return true;
+  const gitDir = join(repoPath, ".git");
+  try {
+    const entry: { watcher: FSWatcher; timer: NodeJS.Timeout | null } = {
+      watcher: watch(gitDir, { persistent: false }, (_event, filename) => {
+        if (!filename || !isRefChange(filename.toString())) return;
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.timer = setTimeout(() => {
+          entry.timer = null;
+          try {
+            onRefsChanged();
+          } catch {
+            /* one bad repo must not stop the others */
+          }
+        }, DEBOUNCE_MS);
+      }),
+      timer: null,
+    };
+    entry.watcher.on("error", () => unwatchGitDir(repoPath));
+    gitDirWatchers.set(repoPath, entry);
+    return true;
+  } catch {
+    // Not a repo, a worktree whose `.git` is a file, OS watch limits.
+    return false;
+  }
+}
+
+export function unwatchGitDir(repoPath: string): void {
+  const entry = gitDirWatchers.get(repoPath);
+  if (!entry) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  try {
+    entry.watcher.close();
+  } catch {
+    /* already gone */
+  }
+  gitDirWatchers.delete(repoPath);
+}
+
+export function unwatchAllGitDirs(): void {
+  for (const path of [...gitDirWatchers.keys()]) unwatchGitDir(path);
+}
+
+export function watchedGitDirs(): string[] {
+  return [...gitDirWatchers.keys()];
 }

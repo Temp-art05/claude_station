@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { query, type Options, type PermissionResult, type Query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  type Options,
+  type PermissionResult,
+  type Query,
+  type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { asc, desc, eq } from "drizzle-orm";
 import type { ChatServerMsg, PermissionMode } from "@claude-station/shared";
 import { db, schema } from "../db";
@@ -14,6 +20,9 @@ import { agentBundleDirs, agentDefinition, agentsForProject } from "./agents";
 import { envVarsFor } from "./env-sets";
 import { attachedAssetDirs } from "./library";
 import { notify } from "./notify";
+import { filesFromToolUse, toolLabel } from "../lib/tool-files";
+import * as ledger from "./session-ledger";
+import { snapshotTree, touchesBetween, type TreeSnapshot } from "./tree-snapshot";
 import { buildWorkspaceContext } from "./workspace-context";
 
 type Listener = (msg: ChatServerMsg) => void;
@@ -30,6 +39,20 @@ interface Live {
   seq: number;
   pending: Map<string, PendingPermission>;
   activeQuery: Query | null;
+  /**
+   * The ledger turn this session currently has open, or null when nothing is
+   * being captured. Held here rather than passed down `runTurn` because a failed
+   * resume retries the same user prompt (see `runTurn`'s `isRetry`), and that
+   * must stay ONE turn — token totals and A2's candidate window both go wrong if
+   * one prompt becomes two.
+   */
+  turnId: string | null;
+  /**
+   * The working tree as it was when the turn started. Compared against the tree at
+   * the end, this is the only way to see an edit made through `Bash` — a tool call
+   * names its file, a shell command does not.
+   */
+  treeBefore: TreeSnapshot | null;
 }
 
 const live = new Map<string, Live>();
@@ -53,6 +76,8 @@ function state(sessionId: string): Live {
       seq: last?.seq ?? 0,
       pending: new Map(),
       activeQuery: null,
+      turnId: null,
+      treeBefore: null,
     };
     live.set(sessionId, s);
   }
@@ -363,15 +388,55 @@ export async function sendUserMessage(
     message: { type: "user_input", text },
   });
 
+  // Before the turn touches anything. Cheap even on a 6.3GB repo (measured at
+  // 23-54ms), and without it every Bash-driven edit is invisible.
+  s.treeBefore = snapshotTree(repoKey);
+  // The user's own text, not the prompt we assemble: attachment notes and resume
+  // recaps are our additions and would only pad the record.
+  s.turnId = ledger.openTurn({
+    projectId: session.projectId,
+    sourceKind: "sdk",
+    cwd: repoKey,
+    chatSessionId: sessionId,
+    workflowRunId: workflowRunIdOf(session.workflowRunStepId),
+    model: session.model,
+    prompt: text,
+  });
+
   try {
     await runTurn(sessionId, session, `${text}${attachmentNote(sessionId, attachmentIds)}`);
   } finally {
+    // The result branch normally closes the turn. Reaching here still open means
+    // the stream ended without one — an abort, or a throw the catch already
+    // reported — so close it rather than leave a row stuck on `running`.
+    if (s.turnId) {
+      // A turn that died still changed files; record them before closing it.
+      recordTreeChanges(sessionId, repoKey);
+      ledger.closeTurn(s.turnId, { status: s.abort?.signal.aborted ? "interrupted" : "error" });
+      s.turnId = null;
+    }
+    s.treeBefore = null;
     s.running = false;
     s.abort = null;
     s.activeQuery = null;
     if (lockRepo) repoLocks.delete(repoKey);
     broadcast(sessionId, { t: "status", value: "idle" });
   }
+}
+
+/**
+ * The run a workflow step belongs to. The step id is what the session carries;
+ * the ledger wants the run, so that "which commits did this run produce" is one
+ * query later on.
+ */
+function workflowRunIdOf(runStepId: string | null): string | null {
+  if (!runStepId) return null;
+  const step = db
+    .select({ runId: schema.workflowRunSteps.runId })
+    .from(schema.workflowRunSteps)
+    .where(eq(schema.workflowRunSteps.id, runStepId))
+    .get();
+  return step?.runId ?? null;
 }
 
 async function runTurn(
@@ -398,6 +463,11 @@ async function runTurn(
 
       const seq = persist(sessionId, message);
       broadcast(sessionId, { t: "message", seq, message });
+
+      // Written as they happen, not batched at the end: a turn killed by a crash
+      // still leaves behind what it had already touched, which is exactly what
+      // commit attribution needs.
+      recordToolUse(sessionId, session, message);
 
       if (typeof raw.session_id === "string" && raw.session_id !== session.sdkSessionId) {
         // Resume can mint a new id — always keep the newest.
@@ -431,6 +501,24 @@ async function runTurn(
           durationMs: typeof result.duration_ms === "number" ? result.duration_ms : null,
           isError: result.is_error === true,
         });
+
+        // Whatever moved in the tree during the turn, whichever tool moved it.
+        recordTreeChanges(sessionId, session.worktreePath ?? session.cwd);
+
+        // `usage` on the result is the whole turn's, so no accumulating needed.
+        // This is also the only surface that reports a cost at all: CLI
+        // transcripts carry none (measured), so the ledger leaves theirs NULL.
+        const usage = (raw.usage ?? {}) as Record<string, unknown>;
+        ledger.closeTurn(s.turnId, {
+          status: result.is_error ? "error" : "done",
+          inputTokens: num(usage.input_tokens),
+          outputTokens: num(usage.output_tokens),
+          cacheReadTokens: num(usage.cache_read_input_tokens),
+          cacheCreateTokens: num(usage.cache_creation_input_tokens),
+          costUsd: typeof result.total_cost_usd === "number" ? result.total_cost_usd : null,
+          durationMs: typeof result.duration_ms === "number" ? result.duration_ms : null,
+        });
+        s.turnId = null;
       }
     }
   } catch (err) {
@@ -465,10 +553,64 @@ async function runTurn(
   }
 }
 
+/**
+ * Compare the tree against the snapshot taken at the start of the turn and record
+ * the difference as ground truth (`source: "tree"`).
+ *
+ * Includes what the turn committed as it went: with a clean tree at both ends, the
+ * status comparison alone would say a turn that committed its work changed nothing.
+ */
+function recordTreeChanges(sessionId: string, cwd: string): void {
+  const s = state(sessionId);
+  if (!s.turnId || !s.treeBefore) return;
+  const touches = touchesBetween(s.treeBefore, snapshotTree(cwd));
+  if (touches.length > 0) ledger.recordFiles(s.turnId, touches);
+}
+
+/** Usage numbers arrive as unknown from the raw message; missing means zero. */
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Ledger the tool calls in one assistant message: how many, and which files they
+ * named.
+ *
+ * Files land with `source: "tool"` — a hint, deliberately not treated as the
+ * whole truth. A tool call names its file, but an edit made through `Bash` names
+ * nothing, so this list is always a lower bound; the working-tree snapshot at the
+ * turn boundary is what closes the gap.
+ */
+function recordToolUse(
+  sessionId: string,
+  session: ReturnType<typeof loadSession>,
+  message: SDKMessage,
+): void {
+  const turnId = state(sessionId).turnId;
+  if (!turnId) return;
+  const content = (message as unknown as { message?: { content?: unknown } }).message?.content;
+  if (!Array.isArray(content)) return;
+
+  const cwd = session.worktreePath ?? session.cwd;
+  const touches: ledger.FileTouch[] = [];
+  let calls = 0;
+
+  for (const block of content as Array<Record<string, unknown>>) {
+    if (block.type !== "tool_use" || typeof block.name !== "string") continue;
+    calls += 1;
+    const label = toolLabel(block.name, block.input);
+    for (const touch of filesFromToolUse(block.name, block.input, cwd)) {
+      touches.push({ ...touch, source: "tool", toolName: label });
+    }
+  }
+
+  if (calls > 0) ledger.bumpToolCalls(turnId, calls);
+  if (touches.length > 0) ledger.recordFiles(turnId, touches);
+}
+
 function extractDelta(raw: Record<string, unknown>): string | null {
   const event = raw.event as
-    | { type?: string; delta?: { type?: string; text?: string } }
-    | undefined;
+    { type?: string; delta?: { type?: string; text?: string } } | undefined;
   if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
     return event.delta.text ?? null;
   }
@@ -497,6 +639,13 @@ function recapFor(sessionId: string, turns = 12): string {
 
 export async function interrupt(sessionId: string): Promise<void> {
   const s = state(sessionId);
+  // Say it plainly here: the turn ends because the user stopped it, not because
+  // it failed. The finally in sendUserMessage would infer this from the abort
+  // signal, but only for a turn that is still open by then.
+  if (s.turnId) {
+    ledger.closeTurn(s.turnId, { status: "interrupted" });
+    s.turnId = null;
+  }
   for (const [id, p] of s.pending) {
     clearTimeout(p.timer);
     p.resolve({ behavior: "deny", message: "Interrupted by the user." });

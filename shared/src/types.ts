@@ -1154,6 +1154,16 @@ export const appSettingsSchema = z.object({
   "terminal.tmux": z.boolean().default(true),
   "notifications.enabled": z.boolean().default(true),
   "git.useWorktreeDefault": z.boolean().default(false),
+  /** Session ledger: record what each turn did (see docs/plans/session-ledger.md). */
+  "ledger.enabled": z.boolean().default(true),
+  /**
+   * Snapshot the git working tree at both ends of a turn, so files changed through
+   * Bash are recorded too — a tool call alone misses them. Measured at 23-54ms on
+   * real iOS repos (one of them 6.3GB), so it is on by default.
+   */
+  "ledger.treeSnapshot": z.boolean().default(true),
+  /** How far back to look for the turn that produced a commit. */
+  "ledger.windowHours": z.number().int().min(1).max(720).default(24),
   "theme.mode": z.enum(["dark", "light"]).default("dark"),
   "theme.accent": z.enum(["teal", "amber", "violet", "emerald"]).default("teal"),
 });

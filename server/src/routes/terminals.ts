@@ -19,16 +19,19 @@ import { assertPathAllowed } from "../lib/path-safety";
 import * as tmux from "../lib/tmux";
 import { envVarsFor } from "../services/env-sets";
 import * as pty from "../services/pty-manager";
-import { claudeCommand, createTerminal, removeTerminalContext } from "../services/terminals";
+import {
+  claudeCommand,
+  createTerminal,
+  removeTerminalContext,
+  stopFollowing,
+} from "../services/terminals";
 
 const idParam = z.object({ id: z.string() });
 
 export function terminalRoutes(app: FastifyInstance): void {
   app.get<{ Params: { id: string } }>("/api/projects/:id/terminals", async (req) => {
     const { id } = idParam.parse(req.params);
-    const { kind } = z
-      .object({ kind: terminalKindSchema.optional() })
-      .parse(req.query ?? {});
+    const { kind } = z.object({ kind: terminalKindSchema.optional() }).parse(req.query ?? {});
     const rows = db
       .select()
       .from(schema.terminals)
@@ -47,7 +50,8 @@ export function terminalRoutes(app: FastifyInstance): void {
     // created while it was on that its work is gone.
     const alive = pty.tmuxInstalled() ? pty.sessionAliveIds() : new Set<string>();
     return rows.map((t) => {
-      const status = t.status === "running" && !pty.isRunning(t.id) ? ("orphaned" as const) : t.status;
+      const status =
+        t.status === "running" && !pty.isRunning(t.id) ? ("orphaned" as const) : t.status;
       return { ...t, status, tmuxAlive: alive.has(t.id) };
     });
   });
@@ -83,6 +87,9 @@ export function terminalRoutes(app: FastifyInstance): void {
     // detached `claude` would keep running with nothing pointing at it.
     pty.killSession(id);
     removeTerminalContext(id);
+    // Drain once more before letting go, so the turn that was in flight is stored
+    // with what it actually did.
+    stopFollowing(existing?.claudeSessionId ?? null);
     db.update(schema.terminals)
       .set({ status: "exited", closedAt: nowIso(), pid: null })
       .where(eq(schema.terminals.id, id))
@@ -243,11 +250,13 @@ export function terminalRoutes(app: FastifyInstance): void {
     // after the query and the limit after that, so dropping them can't make the
     // page come back short.
     const alive = pty.tmuxEnabled() ? pty.sessionAliveIds() : new Set<string>();
-    return rows
-      .filter((t) => t.status === "exited" || !alive.has(t.id))
-      .slice(0, limit)
-      // Whether continuing will really resume, or just reopen in the same directory.
-      .map((t) => ({ ...t, transcript: hasTranscript(t.claudeSessionId) }));
+    return (
+      rows
+        .filter((t) => t.status === "exited" || !alive.has(t.id))
+        .slice(0, limit)
+        // Whether continuing will really resume, or just reopen in the same directory.
+        .map((t) => ({ ...t, transcript: hasTranscript(t.claudeSessionId) }))
+    );
   });
 
   /**
@@ -362,6 +371,7 @@ export function terminalRoutes(app: FastifyInstance): void {
         .send({ error: "This session is still running — close it before deleting its history" });
     }
     removeTerminalContext(id);
+    stopFollowing(existing.claudeSessionId, "history row and transcript deleted by the user");
     const transcript = removeTranscript(existing.claudeSessionId);
     db.delete(schema.terminals).where(eq(schema.terminals.id, id)).run();
     db.insert(schema.workHistory)

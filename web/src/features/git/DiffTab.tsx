@@ -40,6 +40,8 @@ import { androidVectorToSvg, svgDataUrl } from "./androidVector";
 import { FileTree } from "./FileTree";
 import { MarkdownView } from "./MarkdownView";
 import { SideBySideDiff, splitHunks } from "./SideBySideDiff";
+import { CheckpointBadge, CheckpointStrip, type CheckpointView } from "./CheckpointStrip";
+import { LedgerAttribution } from "./LedgerAttribution";
 import { useGitWatch } from "./useGitWatch";
 
 interface StatusResponse {
@@ -83,6 +85,8 @@ interface LogEntry {
   date: string;
   subject: string;
   refs: string[];
+  /** The session this commit was attributed to, when one could be established. */
+  checkpoint: CheckpointView | null;
 }
 
 interface Changelist {
@@ -452,6 +456,12 @@ export function DiffTab({ project }: { project: Project }) {
   });
 
   const changeSelected = selected?.type === "change" ? selected.path : null;
+  // The commit list already carries each commit's checkpoint, so selecting one
+  // costs no extra request.
+  const commitCheckpointId =
+    selected?.type === "commit"
+      ? (history?.commits.find((c) => c.hash === selected.hash)?.checkpoint?.id ?? null)
+      : null;
   const { data: diff } = useQuery({
     queryKey: ["git-diff", project.id, pathId, changeSelected],
     queryFn: () =>
@@ -1243,7 +1253,10 @@ export function DiffTab({ project }: { project: Project }) {
                 >
                   <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent/60" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate m3-label-md text-ink">{c.subject}</span>
+                    <span className="flex items-baseline gap-1">
+                      <CheckpointBadge checkpoint={c.checkpoint} />
+                      <span className="min-w-0 truncate m3-label-md text-ink">{c.subject}</span>
+                    </span>
                     <span className="block truncate m3-label-sm text-ink-faint">
                       <span className="font-mono">{c.shortHash}</span> · {c.author} · {c.date}
                       {c.refs.map((r) => (
@@ -1341,7 +1354,13 @@ export function DiffTab({ project }: { project: Project }) {
             {selected.type === "change" && (
               <>
                 <Badge>{changes.find((f) => f.path === selected.path)?.status ?? ""}</Badge>
-                <div className="ml-auto flex items-center gap-1">
+                {/* Which turn last wrote this file — nothing shown when none did. */}
+                <LedgerAttribution
+                  projectId={project.id}
+                  repoPath={project.paths.find((p) => p.id === pathId)?.path}
+                  relPath={selected.path}
+                />
+                <div className="ml-auto flex shrink-0 items-center gap-1">
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1390,6 +1409,14 @@ export function DiffTab({ project }: { project: Project }) {
               </span>
             )}
           </div>
+        )}
+        {/* Who made this commit, and why — nothing rendered for an orphan. */}
+        {commitSel && commitCheckpointId && (
+          <CheckpointStrip
+            projectId={project.id}
+            checkpointId={commitCheckpointId}
+            pathId={pathId}
+          />
         )}
 
         <div className="min-h-0 flex-1">
