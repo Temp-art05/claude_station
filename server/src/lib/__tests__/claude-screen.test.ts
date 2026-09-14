@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isBusy, isComposerReady, isTrustDialog, needsApproval } from "../claude-screen";
+import {
+  isBusy,
+  isComposerReady,
+  isTrustDialog,
+  needsApproval,
+  waitingForPerson,
+} from "../claude-screen";
 import { capturePaneArgs } from "../tmux";
 
 /**
@@ -105,5 +111,45 @@ describe("telling a turn that ended from one that is waiting", () => {
     expect(isBusy(READY_PANE)).toBe(false);
     expect(needsApproval(READY_PANE)).toBe(false);
     expect(isComposerReady(READY_PANE)).toBe(true);
+  });
+});
+
+/**
+ * The CLI's own question UI, captured while somebody was halfway through
+ * answering it. The engine read "no composer, not busy" as a terminal that had
+ * never started, and failed the step out from under them.
+ */
+const QUESTION_PANE = `
+● I've mapped the situation. Before writing the plan I need 4 decisions.
+
+← ⊠ Playbook? ⊠ Tắt gì ⊠ Cách tắt □ Nhánh ✓ Submit →
+
+  1. Từ develop, pick 4 (bỏ bump)
+  2. Từ develop, pick cả 5
+  3. Merge release/1.5.0 vào develop
+  4. Khác — mình mô tả
+  5. Type something.
+  6. Chat about this
+`;
+
+describe("waitingForPerson", () => {
+  it("recognises the question UI an agent puts up", () => {
+    expect(waitingForPerson(QUESTION_PANE)).toBe(true);
+    // These are the two that made it look like a dead terminal.
+    expect(isBusy(QUESTION_PANE)).toBe(false);
+    expect(isComposerReady(QUESTION_PANE)).toBe(false);
+  });
+
+  it("recognises an approval dialog", () => {
+    expect(waitingForPerson(APPROVAL_PANE)).toBe(true);
+  });
+
+  it("counts the trust dialog, which is the same thing at first run", () => {
+    expect(waitingForPerson("Do you trust the files in this folder?")).toBe(true);
+  });
+
+  it("leaves a working turn and an idle composer alone", () => {
+    expect(waitingForPerson(BUSY_PANE)).toBe(false);
+    expect(waitingForPerson(READY_PANE)).toBe(false);
   });
 });

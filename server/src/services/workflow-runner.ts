@@ -18,7 +18,7 @@ import { badRequest } from "../lib/path-safety";
 import { dependentsOf as dependentsOfKey, readySteps as readyStepsOf } from "../lib/workflow-graph";
 import { agentDefinition } from "./agents";
 import { interrupt, isRunning } from "./claude-session";
-import { runTurnInTerminal, terminalForStep } from "./workflow-step-terminal";
+import { runTurnInTerminal, terminalForStep, type TurnOutcome } from "./workflow-step-terminal";
 import { startRun as startCommandRun } from "./commands";
 import { normalizeMentions, resolveMentions } from "./mentions";
 import { evaluateCondition, ConditionError } from "./workflow-condition";
@@ -749,7 +749,7 @@ async function runAgentStep(
   step: WorkflowStep,
   index: number,
   attempt: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<TurnOutcome> {
   const existing = run.runSteps.find((s) => s.stepKey === step.key);
   const target = resolveStepPath(run, step);
 
@@ -1064,7 +1064,7 @@ function settleStep(
   run: WorkflowRun,
   step: WorkflowStep,
   attempt: number,
-  result: { ok: boolean; error?: string; tail?: string },
+  result: { ok: boolean; error?: string; tail?: string; waiting?: boolean },
 ): Settled {
   const runId = run.id;
   const stepRow = db
@@ -1083,6 +1083,17 @@ function settleStep(
     if (run.autoMode) {
       notify("Workflow needs an answer", `${run.title}: ${step.title}`);
     }
+    return { stop: true };
+  }
+
+  // The turn stopped in front of a person — a dialog in the step's own terminal.
+  // Not done, not failed: answer it there. Retrying would throw away the question
+  // they are halfway through, and failing says the terminal is broken when it is
+  // working exactly as intended.
+  if (result.waiting) {
+    upsertRunStep(runId, step.key, { status: "awaiting_input", note: result.error ?? null });
+    setRunStatus(runId, "awaiting_input", step.key);
+    if (run.autoMode) notify("Workflow đang chờ bạn", `${run.title}: ${step.title}`);
     return { stop: true };
   }
 
@@ -1361,11 +1372,18 @@ export function restartRun(runId: string, mode: "resume" | "fresh" = "resume"): 
     reset += 1;
   }
 
+  // Starting over means starting over from the workflow as it is now. A run keeps
+  // a snapshot so edits can't rewrite it mid-flight; a fresh restart is exactly
+  // the moment that stops being what anybody wants — it is usually the edit that
+  // made them press it.
+  const source = keepDone ? null : getWorkflow(run.workflowId);
+
   db.update(schema.workflowRuns)
     .set({
       status: "running",
       currentStepKey: null,
       finishedAt: null,
+      ...(source && source.steps.length > 0 ? { definition: JSON.stringify(source.steps) } : {}),
       // An unattended run's clock starts again with it, or a run restarted after
       // its budget ran out would expire on its first step.
       deadlineAt: run.autoMode

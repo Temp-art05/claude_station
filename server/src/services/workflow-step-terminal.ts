@@ -4,7 +4,13 @@ import { eq } from "drizzle-orm";
 import type { WorkflowRun, WorkflowStep } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { TOKEN } from "../lib/auth";
-import { isBusy, isComposerReady, isTrustDialog, needsApproval } from "../lib/claude-screen";
+import {
+  isBusy,
+  isComposerReady,
+  isTrustDialog,
+  needsApproval,
+  waitingForPerson,
+} from "../lib/claude-screen";
 import { env } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
@@ -26,6 +32,16 @@ import { ensureUsableSize, recentOutput, write as ptyWrite, sessionAlive } from 
  *     which is exactly the "this step is finished" signal the engine needs. It is
  *     what A1 bought, used for something A1 was not built for.
  */
+
+/**
+ * What one turn came to. `waiting` is the third state the engine needs and did
+ * not have: not finished, not failed — stopped in front of a person.
+ */
+export interface TurnOutcome {
+  ok: boolean;
+  error?: string;
+  waiting?: boolean;
+}
 
 /** How long to wait for one turn before calling the step stuck. */
 const TURN_TIMEOUT_MS = 45 * 60_000;
@@ -113,7 +129,7 @@ export function terminalForStep(
  * it takes, and — worse — the CLI may be showing a dialog rather than a composer,
  * in which case the keystrokes answer the dialog instead.
  */
-async function waitForComposer(terminalId: string): Promise<{ ok: boolean; error?: string }> {
+async function waitForComposer(terminalId: string): Promise<TurnOutcome> {
   const until = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
     if (!sessionAlive(terminalId)) {
@@ -122,6 +138,16 @@ async function waitForComposer(terminalId: string): Promise<{ ok: boolean; error
     // The visible screen is enough, and this runs twice a second: asking tmux for
     // the whole scrollback each time would be paying for history nobody reads.
     const text = recentOutput(terminalId, 4000);
+    // Somebody is already mid-answer in here. Failing the step out from under
+    // them is the rudest possible reading of a terminal that is working fine.
+    if (waitingForPerson(text) && !isTrustDialog(text)) {
+      return {
+        ok: false,
+        waiting: true,
+        error:
+          "Terminal của step đang hỏi bạn — trả lời ngay trong đó, xong thì bấm Tiếp tục (hoặc Retry nếu muốn chạy lại step).",
+      };
+    }
     if (isTrustDialog(text)) {
       return {
         ok: false,
@@ -176,7 +202,7 @@ export async function runTurnInTerminal(input: {
   prompt: string;
   /** Stop waiting at this moment, whatever the turn is doing. */
   deadlineAt?: number;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<TurnOutcome> {
   const { terminalId, prompt } = input;
 
   // tmux keeps the work alive across a server restart, but this process loses the
@@ -213,15 +239,17 @@ export async function runTurnInTerminal(input: {
 
     const screen = recentOutput(terminalId, 4000);
 
-    // An approval dialog is not a finished turn, and it is not a failure either:
-    // it is the CLI waiting for a person. Say so, rather than let the step look
-    // done or hang until its budget runs out.
-    if (needsApproval(screen)) {
+    // A dialog is not a finished turn and not a failure: it is the CLI waiting for
+    // a person — to approve a command, or to pick between options the agent put
+    // up. The run stops there and says so, and the answer is given in the
+    // terminal where the question is.
+    if (waitingForPerson(screen)) {
       return {
         ok: false,
-        error:
-          "The step's terminal is asking you to approve something — open it and answer, then retry " +
-          "this step. Give the step a permission mode that covers what it needs if this keeps happening.",
+        waiting: true,
+        error: needsApproval(screen)
+          ? "Terminal của step đang xin phê duyệt — trả lời trong đó, xong thì bấm Tiếp tục."
+          : "Terminal của step đang hỏi bạn — trả lời trong đó, xong thì bấm Tiếp tục.",
       };
     }
 

@@ -47,6 +47,22 @@ const BUSY = /esc to interrupt|\(interrupt\)|Thinking…|Running…/i;
 const APPROVAL =
   /Do you want to proceed\?|requires approval|Do you want to (make this edit|create)|\bYes, and don't ask again\b/i;
 
+/**
+ * The CLI is asking the person something and will not move until they answer.
+ *
+ * Two shapes, and the engine used to mistake both for a broken terminal: the
+ * approval dialog for a command, and the question UI an agent opens to put
+ * choices to you. Neither is busy — nothing is running — and neither shows the
+ * composer, so "not busy and no composer" read as "the CLI never came up", and a
+ * step was failed out from under somebody who was mid-answer.
+ */
+const WAITING_FOR_PERSON =
+  /Do you want to proceed\?|requires approval|Esc to cancel|Tab to amend|Chat about this|Type something\.|✓ Submit/i;
+
+export function waitingForPerson(screen: string): boolean {
+  return WAITING_FOR_PERSON.test(screen) || TRUST_DIALOG.test(screen);
+}
+
 export function isBusy(screen: string): boolean {
   return BUSY.test(screen);
 }
