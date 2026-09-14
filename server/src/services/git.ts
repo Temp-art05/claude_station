@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { WORKTREES_DIR } from "../lib/data-dir";
+import { realish } from "../lib/path-compare";
 import { badRequest, conflict, isInside, tooLarge } from "../lib/path-safety";
 
 function git(cwd: string, args: string[]): string {
@@ -736,5 +737,171 @@ export function revertHunk(cwd: string, patch: string): void {
         .trim()
         .slice(0, 300)}`,
     );
+  }
+}
+
+// ── Checkpoints: what a commit is, and whether it still exists ────────────────
+
+/**
+ * `git patch-id --stable` of a commit: a hash of what the diff *does*, not of the
+ * commit object.
+ *
+ * This is what lets a checkpoint survive history being rewritten. Verified on a
+ * scratch repo: `--amend` (message only) and `rebase` both mint a new sha and keep
+ * the patch-id; a squash changes it; a cherry-pick keeps it.
+ *
+ * Null for a merge commit — there is no single patch — and for an empty one.
+ */
+export function patchId(cwd: string, sha: string): string | null {
+  try {
+    const show = execFileSync("git", ["show", "--no-color", sha], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const out = execFileSync("git", ["patch-id", "--stable"], {
+      cwd,
+      input: show,
+      encoding: "utf8",
+    });
+    const id = out.trim().split(/\s+/)[0];
+    return id && id.length >= 40 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether any ref still leads to this commit.
+ *
+ * Reachability, deliberately not `git cat-file -e`: after a rebase the old commit
+ * object is still in the repository until gc runs, so existence says yes for a
+ * commit nothing points at any more. Measured on a scratch repo — and this is the
+ * only thing that separates a rebase (old sha unreachable, re-point the
+ * checkpoint) from a cherry-pick (old sha still reachable, so the pick is a
+ * separate commit that happens to share a patch-id).
+ */
+export function shaReachable(cwd: string, sha: string): boolean {
+  try {
+    const out = execFileSync("git", ["branch", "--all", "--contains", sha], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (out.trim().length > 0) return true;
+  } catch {
+    // Unknown or unreachable commit: git exits non-zero.
+    return false;
+  }
+  try {
+    // Tags point at commits no branch contains, and they are refs like any other.
+    const out = execFileSync("git", ["tag", "--contains", sha], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export interface CommitMeta {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  /** Author date, ISO 8601 — the ledger compares timestamps, not relative text. */
+  committedAt: string;
+  parents: string[];
+}
+
+/**
+ * Commits reachable from any ref that came after `fromSha`, oldest first.
+ *
+ * Without `fromSha` only the newest `limit` are returned: a repo can hold 50k
+ * commits and there is no ledger for the old ones, so ingesting them would create
+ * nothing but orphan rows.
+ */
+export function commitsSince(cwd: string, fromSha: string | null, limit = 200): CommitMeta[] {
+  if (!isGitRepo(cwd)) return [];
+  const format = "%H\x1f%h\x1f%s\x1f%an\x1f%aI\x1f%P";
+  const args = ["log", "--all", "--date-order", `--pretty=format:${format}`];
+  if (fromSha && shaReachable(cwd, fromSha)) args.push(`${fromSha}..`);
+  else args.push(`-n${limit}`);
+
+  let out: string;
+  try {
+    out = git(cwd, args);
+  } catch {
+    return []; // empty repo, or a cursor pointing at a commit that is gone
+  }
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [sha, shortSha, subject, author, committedAt, parents] = line.split("\x1f");
+      return {
+        sha: sha!,
+        shortSha: shortSha ?? "",
+        subject: subject ?? "",
+        author: author ?? "",
+        committedAt: committedAt ?? "",
+        parents: (parents ?? "").split(" ").filter(Boolean),
+      };
+    })
+    .reverse();
+}
+
+/**
+ * The repo a path belongs to: the main checkout, not a worktree of it, with
+ * symlinks resolved.
+ *
+ * Resolved because this string is an identity — checkpoints are keyed on it. On
+ * macOS `/var/…` and `/private/var/…` are the same directory, and git reports the
+ * resolved form while a configured project path may hold either, so without this
+ * one repo becomes two and every lookup misses.
+ */
+export function mainRepoOf(cwd: string): string | null {
+  try {
+    const common = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+    if (!common) return null;
+    const root = common.endsWith("/.git") ? common.slice(0, -"/.git".length) : common;
+    return realish(root);
+  } catch {
+    return null;
+  }
+}
+
+/** The commit HEAD points at, or null in a repo with no commits. */
+export function headSha(cwd: string): string | null {
+  try {
+    return git(cwd, ["rev-parse", "HEAD"]).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every commit reachable from any ref, as a set.
+ *
+ * One git process for the whole repo, instead of `shaReachable` per commit. That
+ * matters: checking 2200 checkpoints one at a time costs ~21ms each — 46 seconds,
+ * on every boot — while this is a single call whose output is a few MB even for a
+ * large history.
+ */
+export function reachableSet(cwd: string): Set<string> | null {
+  try {
+    const out = git(cwd, ["rev-list", "--all"]);
+    const set = new Set<string>();
+    for (const line of out.split("\n")) {
+      const sha = line.trim();
+      if (sha) set.add(sha);
+    }
+    return set;
+  } catch {
+    // Empty repo or a git failure: null means "cannot tell", which callers must
+    // treat as "leave the rows alone" rather than "everything is gone".
+    return null;
   }
 }

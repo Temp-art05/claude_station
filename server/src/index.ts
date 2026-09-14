@@ -13,11 +13,13 @@ import { agentRoutes } from "./routes/agents";
 import { backupRoutes } from "./routes/backup";
 import { attachmentRoutes } from "./routes/attachments";
 import { chatRoutes } from "./routes/chat";
+import { checkpointRoutes } from "./routes/checkpoints";
 import { commandRoutes } from "./routes/commands";
 import { envRoutes } from "./routes/env";
 import { gitRoutes } from "./routes/git";
 import { integrationRoutes } from "./routes/integrations";
 import { knowledgeRoutes } from "./routes/knowledge";
+import { ledgerRoutes } from "./routes/ledger";
 import { memoryRoutes } from "./routes/memory";
 import { projectRoutes } from "./routes/projects";
 import { searchRoutes } from "./routes/search";
@@ -25,6 +27,12 @@ import { settingsRoutes } from "./routes/settings";
 import { terminalRoutes } from "./routes/terminals";
 import { workflowRoutes } from "./routes/workflows";
 import { seedGlobalMemories } from "./services/memory";
+import { catchUpRepos, watchProjectRepos } from "./services/checkpoints";
+import { scanTranscripts } from "./services/ledger-backfill";
+import { markInterrupted } from "./services/session-ledger";
+import { followOpenClaudeTerminals } from "./services/terminals";
+import { unwatchAllGitDirs } from "./services/git-watch";
+import { unfollowAll } from "./services/transcript-follower";
 import { backfillChatSearch, ensureSearchTables } from "./services/search";
 import { reconcileWorktreesOnBoot } from "./services/sessions";
 import { reconcileRunsOnBoot } from "./services/workflow-runner";
@@ -87,6 +95,40 @@ if (interruptedSteps > 0) {
     `${interruptedSteps} workflow step(s) interrupted by a restart — resume from the UI`,
   );
 }
+// A ledger turn still marked running belongs to a process that no longer exists.
+// Same rule as the workflow steps above: closed as interrupted, never resumed
+// blind. CLI turns are stored complete after every drain, so this only ever
+// catches Agent SDK turns the crash landed in the middle of.
+const interruptedTurns = markInterrupted();
+if (interruptedTurns > 0) {
+  app.log.warn(`${interruptedTurns} session turn(s) were interrupted by a restart`);
+}
+// Claude tabs that outlived the last process: the CLI kept appending to their
+// transcripts, so capture resumes from the stored byte offset instead of zero.
+const followed = followOpenClaudeTerminals();
+if (followed > 0) app.log.info(`following ${followed} claude conversation(s) for the ledger`);
+// Everything else the CLI has kept for these repos, including conversations that
+// ran outside the app. Whole store measured at 820ms; a file nothing appended to
+// is skipped, so this is close to free from the second boot onwards.
+const scanned = scanTranscripts();
+if (scanned.indexed + scanned.caughtUp > 0) {
+  app.log.info(
+    `ledger: indexed ${scanned.indexed} conversation(s), caught up ${scanned.caughtUp}, skipped ${scanned.skipped}`,
+  );
+}
+
+// Commit capture. The watcher here is separate from the Diff tab's: that one is
+// refcounted by open sockets and disappears with the last tab, which is right for
+// a refresh signal and useless for recording commits.
+//
+// Only the watchers go up here. Reading history is deferred until after the server
+// is listening — see the end of this file.
+const repos = watchProjectRepos();
+app.log.info(`checkpoints: watching ${repos.watched} repo(s)`);
+for (const repo of repos.degraded) {
+  app.log.warn(`No .git watcher for ${repo} — commits are picked up on the next scan only`);
+}
+
 // A worktree whose session is gone keeps its branch checked out, which makes that
 // branch impossible to switch to or delete until the worktree is dropped.
 const worktrees = reconcileWorktreesOnBoot();
@@ -108,10 +150,12 @@ projectRoutes(app);
 terminalRoutes(app);
 commandRoutes(app);
 chatRoutes(app);
+checkpointRoutes(app);
 attachmentRoutes(app);
 agentRoutes(app);
 gitRoutes(app);
 knowledgeRoutes(app);
+ledgerRoutes(app);
 memoryRoutes(app);
 workflowRoutes(app);
 integrationRoutes(app);
@@ -144,6 +188,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // One last drain, so a turn in flight is stored with what it did.
+    unfollowAll();
+    unwatchAllGitDirs();
     killAllPtys();
     killAllRuns();
     app.close().finally(() => process.exit(0));
@@ -152,6 +199,15 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 try {
   await app.listen({ port: env.port, host: env.host });
+
+  // Everything expensive happens here, after the port is open: reading a repo's
+  // history costs a git process per commit, and doing it before `listen` made the
+  // whole UI look like it had lost its data.
+  void catchUpRepos().then(({ added, orphaned }) => {
+    if (added > 0 || orphaned > 0) {
+      app.log.info(`checkpoints: ingested ${added} commit(s), orphaned ${orphaned}`);
+    }
+  });
   // The hosts alias is redirected from port 80, so it needs no port either way.
   const uiUrl = env.stationHost
     ? `http://${env.stationHost}`

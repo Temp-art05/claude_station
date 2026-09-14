@@ -8,6 +8,8 @@ import { settings, updateSettings, env as envConfig } from "../lib/config";
 import { DATA_DIR, CLAUDE_SKILLS_LINK_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
 import { runningIds, tmuxEnabled } from "../services/pty-manager";
+import { cursorHealth, watchedRepos } from "../services/checkpoints";
+import { captureHealth } from "../services/session-ledger";
 
 const exec = promisify(execFile);
 
@@ -86,6 +88,12 @@ export function settingsRoutes(app: FastifyInstance): void {
       // real terminal window and don't survive a server restart.
       tmux: { ...tmuxProbe, enabled: tmuxEnabled() },
       runningTerminals: runningIds().length,
+      // Session capture: which conversations stopped being recorded, and why.
+      // Provenance is only worth trusting if its gaps are visible.
+      ledgerCapture: captureHealth(),
+      // Commit capture: repos being watched, and repos where something is wrong.
+      checkpointRepos: watchedRepos().length,
+      checkpointRepoIssues: cursorHealth(),
     };
   });
 }

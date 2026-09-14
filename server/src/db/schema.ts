@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
@@ -548,3 +548,205 @@ export const gitChangelistFiles = sqliteTable(
   },
   (t) => [uniqueIndex("idx_git_changelist_files_unique").on(t.changelistId, t.path)],
 );
+
+/**
+ * One agent turn: a user prompt and everything the agent did answering it.
+ *
+ * The unit every provenance question actually asks about — "which session wrote
+ * this file", "what did that turn cost", "what was running in this repo at 14:22"
+ * — and the unit a commit gets attributed to. Message-level records already exist
+ * in `chat_messages`; they can't answer any of those without parsing every row.
+ *
+ * Filled from both surfaces: the Agent SDK in process, and the `claude` CLI's own
+ * transcripts under ~/.claude/projects, tailed. The transcript stays the source of
+ * truth — this table is an index over it and can be rebuilt at any time, so a
+ * parser bug means reindex, not migrate.
+ */
+export const sessionTurns = sqliteTable(
+  "session_turns",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** sdk | cli — which surface produced this turn. */
+    sourceKind: text("source_kind").notNull(),
+    chatSessionId: text("chat_session_id").references(() => chatSessions.id, {
+      onDelete: "cascade",
+    }),
+    /**
+     * The `claude` CLI conversation this turn belongs to. Deliberately NOT a
+     * foreign key: a transcript outlives — and often predates — any `terminals`
+     * row, which is exactly what the History panel's "From the CLI" section
+     * lists. Keying it to a row would mean inventing rows for conversations this
+     * app never opened, and closing a tab would cascade the history away.
+     */
+    claudeSessionId: text("claude_session_id"),
+    /** The tab, when one is known. NULL for turns recovered from a transcript. */
+    terminalId: text("terminal_id").references(() => terminals.id, { onDelete: "set null" }),
+    /**
+     * Set when the turn ran as a workflow step. Filled from the start even though
+     * nothing reads it yet: it is what makes "which commits did this run produce"
+     * a query instead of a migration.
+     */
+    workflowRunId: text("workflow_run_id"),
+    /** Turn number within its session, 1-based. */
+    seq: integer("seq").notNull(),
+    /** Repo path, or the session's own worktree — where the turn actually ran. */
+    cwd: text("cwd").notNull(),
+    gitBranch: text("git_branch"),
+    model: text("model"),
+    /** The user's prompt in full, redacted. Short, and the most valuable field here. */
+    promptText: text("prompt_text").notNull().default(""),
+    promptPreview: text("prompt_preview").notNull().default(""),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheCreateTokens: integer("cache_create_tokens").notNull().default(0),
+    /**
+     * Only the SDK reports a cost (`result.total_cost_usd`). CLI transcripts carry
+     * none — measured, not assumed — so this stays NULL for them rather than being
+     * derived from a price table that would silently rot every old number.
+     */
+    costUsd: real("cost_usd"),
+    durationMs: integer("duration_ms"),
+    toolCallCount: integer("tool_call_count").notNull().default(0),
+    status: text("status").notNull().default("running"), // running|done|error|interrupted
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+  },
+  (t) => [
+    index("idx_session_turns_project").on(t.projectId, t.startedAt),
+    index("idx_session_turns_chat").on(t.chatSessionId, t.seq),
+    // SQLite treats NULLs as distinct here, so SDK turns (no CLI id) don't collide.
+    uniqueIndex("idx_session_turns_cli_seq").on(t.claudeSessionId, t.seq),
+  ],
+);
+
+/** A file one turn touched. */
+export const sessionFiles = sqliteTable(
+  "session_files",
+  {
+    id: text("id").primaryKey(),
+    turnId: text("turn_id")
+      .notNull()
+      .references(() => sessionTurns.id, { onDelete: "cascade" }),
+    /** Denormalised: "who wrote this file" is then one indexed lookup, not a join. */
+    projectId: text("project_id").notNull(),
+    projectPathId: text("project_path_id").references(() => projectPaths.id, {
+      onDelete: "set null",
+    }),
+    absPath: text("abs_path").notNull(),
+    relPath: text("rel_path").notNull().default(""),
+    op: text("op").notNull(), // read|write|delete
+    /**
+     * Where the claim comes from, and they are not equally trustworthy:
+     *   tree — the git working tree really changed across the turn. Ground truth.
+     *   tool — an Edit/Write tool call said so. A hint only: measured on 224
+     *          transcripts, an edit made through Bash (`sed -i`, heredoc, `tee`)
+     *          appears in neither the tool calls nor the CLI's own file history.
+     */
+    source: text("source").notNull(), // tree|tool
+    toolName: text("tool_name"),
+  },
+  (t) => [
+    index("idx_session_files_path").on(t.projectId, t.absPath),
+    index("idx_session_files_turn").on(t.turnId),
+  ],
+);
+
+/**
+ * Follower bookkeeping, one row per CLI conversation. SDK sessions need none —
+ * they are captured in process.
+ *
+ * `byteOffset` is what makes capture survive a restart, and a tmux session the
+ * user carried on with in Terminal.app while the server was down: the CLI keeps
+ * appending, and the follower picks up where it left off instead of reparsing a
+ * file that can be 29MB. `mtimeMs`/`sizeBytes` let a boot scan skip everything
+ * nothing was appended to.
+ */
+export const sessionCapture = sqliteTable("session_capture", {
+  claudeSessionId: text("claude_session_id").primaryKey(),
+  projectId: text("project_id"),
+  terminalId: text("terminal_id"),
+  /** NULL once the CLI (or the History panel) has pruned the transcript. */
+  transcriptPath: text("transcript_path"),
+  byteOffset: integer("byte_offset").notNull().default(0),
+  mtimeMs: integer("mtime_ms").notNull().default(0),
+  sizeBytes: integer("size_bytes").notNull().default(0),
+  lastEventAt: text("last_event_at"),
+  updatedAt: text("updated_at").notNull(),
+  status: text("status").notNull().default("ok"), // ok|degraded|stopped
+  /** Why it is not ok, in words the Doctor panel can show as-is. */
+  detail: text("detail"),
+});
+
+/**
+ * A commit, linked back to the turn that produced it.
+ *
+ * What a commit message cannot tell you: which session made it, what it was asked,
+ * and why the change looks like that. Commits are observed rather than intercepted
+ * (no git hook is installed in the user's repo), so one made from a terminal, from
+ * Xcode, or while this app was closed still gets a row.
+ *
+ * `confidence` is part of the record, not a detail: an attribution that is only
+ * probable must say so, and one that cannot be made says `orphan` rather than
+ * guessing. A badge that is wrong is worse than no badge.
+ */
+export const checkpoints = sqliteTable(
+  "checkpoints",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    projectPathId: text("project_path_id").references(() => projectPaths.id, {
+      onDelete: "set null",
+    }),
+    /** The main checkout, never a worktree of it — one row per commit per repo. */
+    repoPath: text("repo_path").notNull(),
+    commitSha: text("commit_sha").notNull(),
+    /**
+     * `git patch-id --stable`: a hash of what the diff does. Survives `--amend`
+     * and rebase, which both mint a new sha, and is how a checkpoint re-points
+     * instead of breaking. NULL for a merge commit, which has no single patch.
+     */
+    patchId: text("patch_id"),
+    committedAt: text("committed_at").notNull(),
+    subject: text("subject").notNull().default(""),
+    author: text("author").notNull().default(""),
+    turnId: text("turn_id").references(() => sessionTurns.id, { onDelete: "set null" }),
+    /** Denormalised so "every commit of this session" needs no join. */
+    chatSessionId: text("chat_session_id"),
+    claudeSessionId: text("claude_session_id"),
+    confidence: text("confidence").notNull().default("orphan"), // exact|inferred|orphan
+    /** 0..1, meaningful for `inferred`; the tooltip shows it. */
+    score: real("score"),
+    /** Why it was attributed, or why it could not be — shown as-is in the UI. */
+    reason: text("reason").notNull().default(""),
+    /** The sha this checkpoint pointed at before a rewrite re-pointed it. */
+    supersededSha: text("superseded_sha"),
+    detectedAt: text("detected_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("idx_checkpoints_commit").on(t.repoPath, t.commitSha),
+    index("idx_checkpoints_project").on(t.projectId, t.committedAt),
+    index("idx_checkpoints_patch").on(t.patchId),
+    index("idx_checkpoints_turn").on(t.turnId),
+  ],
+);
+
+/**
+ * How far commit ingestion has read in each repo.
+ *
+ * This is what catches commits made while the server was down: boot reads the
+ * cursor and asks git for everything after it, instead of trusting that it saw
+ * every ref change as it happened.
+ */
+export const repoCursors = sqliteTable("repo_cursors", {
+  repoPath: text("repo_path").primaryKey(),
+  lastSeenSha: text("last_seen_sha"),
+  lastScanAt: text("last_scan_at").notNull(),
+  status: text("status").notNull().default("ok"), // ok|degraded|stopped
+  detail: text("detail"),
+});

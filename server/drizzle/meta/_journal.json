@@ -113,6 +113,20 @@
       "when": 1787301155019,
       "tag": "0015_projects-board",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1788424363843,
+      "tag": "0016_session-ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1788426569303,
+      "tag": "0017_checkpoints",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,7 @@ import { envVarsFor } from "./env-sets";
 import { createWorktree } from "./git";
 import { attachedAssetDirs } from "./library";
 import * as pty from "./pty-manager";
+import * as follower from "./transcript-follower";
 import { buildWorkspaceContext } from "./workspace-context";
 
 function terminalContextPath(terminalId: string): string {
@@ -149,6 +150,12 @@ export function createTerminal(
     closedAt: null,
   };
   db.insert(schema.terminals).values(row).run();
+  // The CLI writes the transcript itself; following it is how a terminal tab gets
+  // the same turn record an Agent SDK session gets. The file usually does not
+  // exist yet at this point — the follower waits for it.
+  if (claudeSessionId) {
+    follower.follow({ claudeSessionId, projectId, cwd, terminalId: id });
+  }
   db.insert(schema.workHistory)
     .values({
       id: newId(),
@@ -160,4 +167,34 @@ export function createTerminal(
     })
     .run();
   return row;
+}
+
+/**
+ * Start following every `claude` tab that is still running, after a restart.
+ *
+ * This is the case the byte offset exists for: while the server was down the tab
+ * stayed alive in tmux and the CLI kept appending, so the conversation is picked
+ * up where capture left off instead of from zero.
+ */
+export function followOpenClaudeTerminals(): number {
+  const rows = db
+    .select()
+    .from(schema.terminals)
+    .where(eq(schema.terminals.kind, "claude"))
+    .all()
+    .filter((t) => t.claudeSessionId && t.status !== "exited");
+  for (const row of rows) {
+    follower.follow({
+      claudeSessionId: row.claudeSessionId!,
+      projectId: row.projectId,
+      cwd: row.cwd,
+      terminalId: row.id,
+    });
+  }
+  return rows.length;
+}
+
+/** Closing a tab ends capture for it; a final drain keeps the last turn complete. */
+export function stopFollowing(claudeSessionId: string | null, detail?: string): void {
+  if (claudeSessionId) follower.unfollow(claudeSessionId, detail);
 }

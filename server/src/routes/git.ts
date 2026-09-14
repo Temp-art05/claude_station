@@ -4,10 +4,12 @@ import { z } from "zod";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
+import { checkpointsForShas, recordAppCommit } from "../services/checkpoints";
 import { resolveTree } from "../services/git-paths";
+import { lastTurnOfSession } from "../services/session-ledger";
 import {
-  addFiles,
   abortInProgress,
+  addFiles,
   branchInfo,
   branches,
   checkout,
@@ -18,6 +20,7 @@ import {
   deleteUntracked,
   diff,
   fetchAll,
+  headSha,
   isGitRepo,
   listFiles,
   log,
@@ -192,7 +195,16 @@ export function gitRoutes(app: FastifyInstance): void {
       })
       .parse(req.query ?? {});
     const cwd = resolveTree(id, q);
-    return { commits: log(cwd, q.limit, q.branch) };
+    const commits = log(cwd, q.limit, q.branch);
+    // Each commit carries the session that produced it, when one could be
+    // established. An extra field the old UI simply ignores.
+    const checkpoints = checkpointsForShas(
+      cwd,
+      commits.map((c) => c.hash),
+    );
+    return {
+      commits: commits.map((commit) => ({ ...commit, checkpoint: checkpoints[commit.hash] ?? null })),
+    };
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/git/commit-files", async (req) => {
@@ -316,6 +328,16 @@ export function gitRoutes(app: FastifyInstance): void {
     const cwd = resolveTree(id, body);
     for (const file of body.files) assertPathAllowed(`${cwd}/${file}`, id);
     const result = commit(cwd, body.files, body.message, body.amend);
+    // The one attribution with no inference in it: this app made the commit, and
+    // it knows which session asked for it. Recorded here rather than left to the
+    // watcher, so the strongest evidence available never degrades into a guess.
+    recordAppCommit({
+      repoPath: cwd,
+      commitSha: headSha(cwd) ?? "",
+      projectId: id,
+      turnId: body.sessionId ? lastTurnOfSession(body.sessionId) : null,
+      chatSessionId: body.sessionId ?? null,
+    });
     let pushed = false;
     if (body.push) {
       push(cwd);

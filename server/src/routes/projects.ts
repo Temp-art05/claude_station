@@ -14,6 +14,7 @@ import { newId, nowIso } from "../lib/id";
 import { parsePatch } from "../lib/patch";
 import { prettyPath, resolveDirectory } from "../lib/path-safety";
 import { deleteProject } from "../services/projects";
+import { watchProjectRepos } from "../services/checkpoints";
 
 const idParam = z.object({ id: z.string() });
 const pathIdParam = z.object({ id: z.string(), pathId: z.string() });
@@ -255,6 +256,9 @@ export function projectRoutes(app: FastifyInstance): void {
       .where(eq(schema.projectPaths.projectId, id))
       .all().length;
     insertPath(id, input, count, input.isDefault || count === 0);
+    // A new repo needs its own commit watcher; the call is idempotent for the
+    // ones already watched.
+    watchProjectRepos();
     reply.code(201);
     return loadProject(id);
   });
