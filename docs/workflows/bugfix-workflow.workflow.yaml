@@ -102,6 +102,7 @@ steps:
       - pr
     permissionMode: bypassPermissions
     instruction: >-
-      {{jiraTicket}} trống thì nói rõ và kết thúc. Ngược lại: comment lên ticket đúng bốn dòng —
-      nguyên nhân · cách sửa · test chống tái phát · link PR — rồi kéo sang trạng thái review (list
-      transitions trước). KHÔNG tự Done: Done đi theo PR được merge.
+      comment lên ticket đúng bốn dòng — nguyên nhân · cách sửa · test chống tái phát · link PR —
+      rồi kéo sang trạng thái review (list transitions trước). KHÔNG tự Done: Done đi theo PR được
+      merge.
+    condition: inputs.jiraTicket

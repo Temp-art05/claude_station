@@ -59,6 +59,7 @@ steps:
       Cả {{jiraProject}} lẫn {{jiraTicket}} đều trống → nói rõ "không gắn Jira" rồi kết thúc. Ngược
       lại: tra ticket đang mở TRƯỚC, dùng lại cái đã có; tạo phần còn thiếu, ghi rõ task nào thuộc
       FE task nào thuộc BE. Đẩy vào sprint "{{sprint}}" nếu có nêu.
+    condition: inputs.jiraProject || inputs.jiraTicket
   - key: impl-fe
     type: agent
     title: FE
@@ -138,5 +139,6 @@ steps:
       - pr
     permissionMode: bypassPermissions
     instruction: >-
-      Không gắn Jira thì kết thúc. Ngược lại: kéo task đã xong sang trạng thái review, comment lên
-      ticket kèm cả hai link PR và thứ tự merge. KHÔNG tự Done.
+      kéo task đã xong sang trạng thái review, comment lên ticket kèm cả hai link PR và thứ tự
+      merge. KHÔNG tự Done.
+    condition: inputs.jiraProject || inputs.jiraTicket

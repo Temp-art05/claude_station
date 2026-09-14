@@ -4,6 +4,7 @@ import { ConditionError, evaluateCondition } from "../workflow-condition";
 const ctx = {
   answers: { scope: "fe-only", offline: "false", auth: "custom-jwt", empty: null },
   stepStatus: { test: "failed", plan: "done", "impl-be": "skipped" },
+  inputs: { jiraProject: "IIP707", sprint: "", docs: "https://github.com/a/b/blob/main/x.md" },
 };
 
 describe("evaluateCondition", () => {
@@ -51,5 +52,44 @@ describe("evaluateCondition", () => {
     expect(() => evaluateCondition("1 == 1", ctx)).toThrow(ConditionError);
     expect(() => evaluateCondition("steps.test.running", ctx)).toThrow(ConditionError);
     expect(() => evaluateCondition("process.exit(1)", ctx)).toThrow(ConditionError);
+  });
+});
+
+describe("inputs", () => {
+  it("is true when the box was filled in", () => {
+    expect(evaluateCondition("inputs.jiraProject", ctx)).toBe(true);
+  });
+
+  it("is false for a box left empty, and for one that isn't there at all", () => {
+    // These are the same thing to a step: nothing to work with. The Jira steps
+    // used to spend a whole agent turn discovering it.
+    expect(evaluateCondition("inputs.sprint", ctx)).toBe(false);
+    expect(evaluateCondition("inputs.nothingLikeThis", ctx)).toBe(false);
+  });
+
+  it("compares a value when asked to", () => {
+    expect(evaluateCondition('inputs.jiraProject == "IIP707"', ctx)).toBe(true);
+    expect(evaluateCondition('inputs.jiraProject != "OTHER"', ctx)).toBe(true);
+  });
+});
+
+describe("||", () => {
+  it("runs the step when either side holds", () => {
+    // The case it exists for: a Jira step needs a project *or* a parent ticket.
+    expect(evaluateCondition("inputs.sprint || inputs.jiraProject", ctx)).toBe(true);
+    expect(evaluateCondition("inputs.jiraProject || inputs.sprint", ctx)).toBe(true);
+  });
+
+  it("skips when neither does", () => {
+    expect(evaluateCondition("inputs.sprint || inputs.nope", ctx)).toBe(false);
+  });
+
+  it("mixes clause kinds", () => {
+    expect(evaluateCondition('steps.test.failed || answers.scope == "full"', ctx)).toBe(true);
+    expect(evaluateCondition('steps.plan.failed || answers.scope == "full"', ctx)).toBe(false);
+  });
+
+  it("still refuses a clause it cannot read", () => {
+    expect(() => evaluateCondition("inputs.a || nonsense", ctx)).toThrow(ConditionError);
   });
 });

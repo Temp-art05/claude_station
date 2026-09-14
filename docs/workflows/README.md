@@ -43,6 +43,30 @@ Input kiểu `jira-sprint` liệt kê sprint đang mở của project đã chọ
 sprint mới rồi đẩy ticket vào. Sprint đã đóng không được liệt kê — đó không phải chỗ để thêm việc.
 Project không có scrum board thì ticket nằm ở backlog, và step nói rõ điều đó thay vì im lặng.
 
+## Step tự bỏ qua khi không có việc
+
+Điều kiện của step đọc được cả input, nên step nào không có gì để làm thì **bị skip, không chạy**:
+
+```yaml
+condition: inputs.jiraProject || inputs.jiraTicket
+```
+
+Đây là lý do có nó: run không điền Jira thì hai step `jira-tasks` và `jira-report` trước đây vẫn mở
+terminal, khởi động CLI, và tốn vài phút chỉ để nói "run này không gắn Jira". Giờ chúng hiện `skipped`
+ngay lập tức.
+
+Ngôn ngữ điều kiện vẫn cố tình nhỏ — bốn dạng và đúng một toán tử `||`:
+
+| Dạng | Ý nghĩa |
+|---|---|
+| `inputs.<key>` | ô đó có được điền không |
+| `inputs.<key> == "x"` | điền đúng giá trị đó |
+| `answers.<key> == "x"` | câu trả lời của bạn cho `workflow_ask` |
+| `steps.<key>.failed` / `.done` / `.skipped` | trạng thái step khác |
+
+`||` có vì nhu cầu thật: step Jira cần **hoặc** project **hoặc** ticket cha. Không có `&&` — cần
+"và" thì tách thành hai step, hoặc để chính agent quyết.
+
 ## Input và `@`
 
 Workflow khai `inputs` thì màn Start hiện đúng ô đó, mọi step đọc bằng `{{key}}`. Hai kiểu được

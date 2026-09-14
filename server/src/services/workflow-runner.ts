@@ -491,7 +491,7 @@ function conditionContext(run: WorkflowRun) {
   for (const q of run.questions) answers[q.key] = q.answer;
   const stepStatus: Record<string, string> = {};
   for (const s of run.runSteps) stepStatus[s.stepKey] = s.status;
-  return { answers, stepStatus };
+  return { answers, stepStatus, inputs: run.inputs };
 }
 
 /**

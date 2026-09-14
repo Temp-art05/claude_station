@@ -75,9 +75,6 @@ steps:
     instruction: >-
       Đọc plan ở artifact của step trước.
 
-      NẾU cả {{jiraProject}} lẫn {{jiraTicket}} đều trống (placeholder còn nguyên dấu ngoặc) → nói
-      rõ 'run này không gắn Jira' rồi kết thúc step, đừng tạo gì cả.
-
       TRƯỚC KHI TẠO BẤT KỲ TICKET NÀO: jira_search ticket đang mở trong {{jiraProject}} (và dưới
       {{jiraTicket}} nếu có ticket cha). Task nào đã có rồi — tiêu đề nói cùng một việc, không cần
       giống từng chữ — thì DÙNG LẠI, ghi 'đã có: KEY' vào bảng task, không tạo lại. Chạy lại
@@ -91,6 +88,7 @@ steps:
 
       Kết thúc: báo bằng số (tạo mới mấy, dùng lại mấy) và lưu bảng khoá task → tiêu đề → phụ thuộc
       → mới hay đã có, bằng workflow_emit_artifact.
+    condition: inputs.jiraProject || inputs.jiraTicket
   - key: confirm-plan
     type: agent
     title: Chốt confirm & finalize plan
@@ -216,11 +214,10 @@ steps:
     agentName: jira-pm
     permissionMode: bypassPermissions
     instruction: >-
-      NẾU run này không gắn Jira (xem step jira-tasks) → nói rõ và kết thúc, đừng làm gì.
-
-      Ngược lại: kéo các task đã xong sang trạng thái review của project (list transitions trước).
-      Comment lên ticket cha: đã làm gì · link PR · phần chưa làm và vì sao · giả định đã dùng.
-      KHÔNG tự chuyển sang Done — Done đi theo PR được merge, mà merge là việc của người.
+      kéo các task đã xong sang trạng thái review của project (list transitions trước). Comment lên
+      ticket cha: đã làm gì · link PR · phần chưa làm và vì sao · giả định đã dùng. KHÔNG tự chuyển
+      sang Done — Done đi theo PR được merge, mà merge là việc của người.
+    condition: inputs.jiraProject || inputs.jiraTicket
 inputs:
   - key: jiraProject
     label: Jira project (tuỳ chọn)

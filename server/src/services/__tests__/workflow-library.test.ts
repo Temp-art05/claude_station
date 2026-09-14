@@ -114,6 +114,28 @@ describe("shipped workflow library", () => {
     }
   });
 
+  it("skips its Jira steps instead of spending a turn discovering it has none", () => {
+    // A run started without a project or a parent ticket has nothing for these
+    // steps to do. Left unconditional they each open a terminal, start a CLI, and
+    // burn minutes to say so.
+    for (const file of files) {
+      const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      // A workflow whose Jira input is *required* always has work for these steps —
+      // specs-to-jira is exactly that, and a condition there would be noise.
+      const jiraIsOptional =
+        parsed.inputs.some((i) => /jira|parentTicket/i.test(i.key)) &&
+        !parsed.inputs.some((i) => /jira/i.test(i.key) && i.required);
+      if (!jiraIsOptional) continue;
+      for (const step of parsed.steps.filter((s) => s.agentName === "jira-pm")) {
+        expect({ file, key: step.key, condition: step.condition }).toEqual({
+          file,
+          key: step.key,
+          condition: expect.stringContaining("inputs."),
+        });
+      }
+    }
+  });
+
   it("creates tickets only after checking what is already there", () => {
     // Re-running a workflow on the same spec must not refill the board. The rule
     // lives in the jira-pm agent, but every step that creates has to invoke it.
