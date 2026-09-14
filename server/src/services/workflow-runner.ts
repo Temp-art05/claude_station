@@ -1372,6 +1372,94 @@ export function retryStep(runId: string, stepKey: string): WorkflowRun {
   return getRun(runId)!;
 }
 
+/**
+ * Start a finished run going again.
+ *
+ * Two modes, because "chạy lại" means two different things depending on why you
+ * are pressing it:
+ *
+ *   resume — the default, and the one you want after a step failed. Steps that
+ *     already finished stay finished; only what failed, hung, or never ran goes
+ *     back to pending. Redoing a plan that was fine, or creating a second set of
+ *     tickets, is not a retry — it is damage.
+ *
+ *   fresh — everything back to step one, terminals dropped so each step starts a
+ *     clean conversation. For when the run was pointed at the wrong thing and its
+ *     earlier steps are worth nothing.
+ *
+ * Either way the step's own idempotence still matters: `jira-pm` looks up open
+ * tickets before creating any, which is what makes a resumed run safe to point at
+ * a board it already touched.
+ */
+export function restartRun(runId: string, mode: "resume" | "fresh" = "resume"): WorkflowRun {
+  const run = getRun(runId);
+  if (!run) throw badRequest("Run not found");
+  if (run.mode === "terminal") throw badRequest("A terminal-mode run is driven by its own session");
+
+  const keepDone = mode === "resume";
+  let kept = 0;
+  let reset = 0;
+
+  for (const step of run.steps) {
+    const rs = run.runSteps.find((s) => s.stepKey === step.key);
+    const settled = rs?.status === "done" || rs?.status === "skipped";
+    if (keepDone && settled) {
+      kept += 1;
+      continue;
+    }
+
+    // Questions belong to turns that are gone; left behind they block the run
+    // before it starts a single step.
+    if (rs) {
+      for (const q of run.questions) {
+        if (q.runStepId === rs.id) {
+          db.delete(schema.workflowQuestions).where(eq(schema.workflowQuestions.id, q.id)).run();
+        }
+      }
+      pendingAsks.delete(rs.id);
+    }
+
+    upsertRunStep(runId, step.key, {
+      status: "pending",
+      attempt: 1,
+      loops: 0,
+      error: null,
+      note: null,
+      startedAt: null,
+      finishedAt: null,
+      // A fresh run gets fresh terminals: keeping them would carry the old
+      // conversation into a run that exists because the old one was wrong.
+      ...(keepDone ? {} : { sessionId: null, terminalId: null, commandRunId: null }),
+    });
+    reset += 1;
+  }
+
+  db.update(schema.workflowRuns)
+    .set({
+      status: "running",
+      currentStepKey: null,
+      finishedAt: null,
+      // An unattended run's clock starts again with it, or a run restarted after
+      // its budget ran out would expire on its first step.
+      deadlineAt: run.autoMode
+        ? new Date(Date.now() + setting("workflows.runBudgetMinutes") * 60_000).toISOString()
+        : null,
+    })
+    .where(eq(schema.workflowRuns.id, runId))
+    .run();
+
+  emit(runId, {
+    t: "error",
+    message:
+      mode === "resume"
+        ? `Chạy tiếp: giữ ${kept} step đã xong, chạy lại ${reset} step.`
+        : `Chạy lại từ đầu: ${reset} step.`,
+  });
+  setRunStatus(runId, "running", null);
+  void advanceRun(runId);
+  return getRun(runId)!;
+}
+
 export function skipStep(runId: string, stepKey: string): WorkflowRun {
   const run = getRun(runId);
   if (!run) throw badRequest("Run not found");

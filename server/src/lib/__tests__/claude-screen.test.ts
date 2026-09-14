@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isComposerReady, isTrustDialog } from "../claude-screen";
+import { isBusy, isComposerReady, isTrustDialog, needsApproval } from "../claude-screen";
 import { capturePaneArgs } from "../tmux";
 
 /**
@@ -65,5 +65,45 @@ describe("capturePaneArgs", () => {
     expect(args).toEqual(
       expect.arrayContaining(["capture-pane", "-p", "-t", "cs-t1", "-S", "-120"]),
     );
+  });
+});
+
+/** Captured while a step's CLI sat waiting for a person, which the engine read as
+ *  a finished turn — it asked to confirm work that had not happened yet. */
+const APPROVAL_PANE = `
+ Bash command
+   │ git -C /Users/x/data/worktrees/abc status --porcelain
+   Check worktree status
+ This command requires approval
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for: git *
+   4. No
+`;
+
+const BUSY_PANE = `
+● Reading docs/plans/feature.md
+  ⎿ 120 lines
+
+· Working… (12s · esc to interrupt)
+`;
+
+describe("telling a turn that ended from one that is waiting", () => {
+  it("does not call an approval dialog idle", () => {
+    expect(needsApproval(APPROVAL_PANE)).toBe(true);
+    // This is the pair that matters: the composer hint is still on screen behind
+    // the dialog, so "composer is ready" alone would have called this finished.
+    expect(isBusy(APPROVAL_PANE)).toBe(false);
+  });
+
+  it("knows a turn is still running", () => {
+    expect(isBusy(BUSY_PANE)).toBe(true);
+    expect(needsApproval(BUSY_PANE)).toBe(false);
+  });
+
+  it("calls an idle composer idle", () => {
+    expect(isBusy(READY_PANE)).toBe(false);
+    expect(needsApproval(READY_PANE)).toBe(false);
+    expect(isComposerReady(READY_PANE)).toBe(true);
   });
 });

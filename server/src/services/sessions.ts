@@ -55,14 +55,35 @@ export function releaseAllWorktrees(): { removed: string[]; kept: string[] } {
  * Returns what it removed and what it deliberately left alone.
  */
 export function reconcileWorktreesOnBoot(): { removed: string[]; kept: string[] } {
-  const live = new Set(db.select({ id: schema.chatSessions.id }).from(schema.chatSessions).all().map((s) => s.id));
-  const isLive = (sessionId: string) => live.has(sessionId);
+  // A worktree is named after whatever owns it, and two things do: a chat session
+  // and — since workflow steps started running in real terminals — a terminal.
+  // Counting only sessions reaped every step terminal's checkout on the next
+  // boot, and the step then failed on a cwd that no longer existed, which reads
+  // as the terminal being broken rather than deleted.
+  const live = new Set([
+    ...db
+      .select({ id: schema.chatSessions.id })
+      .from(schema.chatSessions)
+      .all()
+      .map((s) => s.id),
+    ...db
+      .select({ id: schema.terminals.id, closedAt: schema.terminals.closedAt })
+      .from(schema.terminals)
+      .all()
+      .filter((t) => t.closedAt === null)
+      .map((t) => t.id),
+  ]);
+  const isLive = (ownerId: string) => live.has(ownerId);
 
   const removed: string[] = [];
   const kept: string[] = [];
   // Several projects can point at one repo; each repo only needs looking at once.
   const repos = new Set(
-    db.select({ path: schema.projectPaths.path }).from(schema.projectPaths).all().map((p) => p.path),
+    db
+      .select({ path: schema.projectPaths.path })
+      .from(schema.projectPaths)
+      .all()
+      .map((p) => p.path),
   );
   for (const repo of repos) {
     // A path that moved or was deleted must not take the whole boot down with it.
@@ -108,9 +129,7 @@ export function createChatSession(projectId: string, input: ChatSessionInput) {
   const row = {
     id,
     projectId,
-    title:
-      input.title ??
-      (agentName ? agentName : `Session ${new Date().toLocaleString()}`),
+    title: input.title ?? (agentName ? agentName : `Session ${new Date().toLocaleString()}`),
     sdkSessionId: null,
     cwd: chosen.path,
     envSetId: input.envSetId ?? null,

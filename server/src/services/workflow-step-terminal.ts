@@ -4,13 +4,12 @@ import { eq } from "drizzle-orm";
 import type { WorkflowRun, WorkflowStep } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { TOKEN } from "../lib/auth";
-import { isComposerReady, isTrustDialog } from "../lib/claude-screen";
+import { isBusy, isComposerReady, isTrustDialog, needsApproval } from "../lib/claude-screen";
 import { env } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
-import { onTurnClosed } from "./session-ledger";
-import { createTerminal } from "./terminals";
-import { recentOutput, write as ptyWrite, sessionAlive } from "./pty-manager";
+import { createTerminal, reviveTerminal } from "./terminals";
+import { ensureUsableSize, recentOutput, write as ptyWrite, sessionAlive } from "./pty-manager";
 
 /**
  * Running a workflow step inside a real `claude` terminal.
@@ -84,7 +83,11 @@ export function terminalForStep(
       .from(schema.terminals)
       .where(eq(schema.terminals.id, existing.terminalId))
       .get();
-    if (row?.claudeSessionId && sessionAlive(row.id)) {
+    // `sessionAlive` only says tmux still holds the work. After a server restart
+    // that is true while this process has no PTY for it — nothing to read, nothing
+    // to type into — so the step would wait out its minute on an empty screen.
+    // Reattach first, and only reuse the terminal if that worked.
+    if (row?.claudeSessionId && sessionAlive(row.id) && reviveTerminal(row.id)) {
       return { terminalId: row.id, claudeSessionId: row.claudeSessionId };
     }
   }
@@ -145,6 +148,28 @@ async function waitForComposer(terminalId: string): Promise<{ ok: boolean; error
  * Bracketed paste, then Enter: without the markers a multi-line prompt is read as
  * a line at a time and the CLI answers the first paragraph.
  */
+/**
+ * How often to look at the screen while a turn runs. A turn is minutes long; a
+ * second of latency on noticing it ended costs nothing, and each look is a tmux
+ * call.
+ */
+const WATCH_INTERVAL_MS = 1000;
+/** A turn that never even starts drawing is a prompt that did not land. */
+const START_TIMEOUT_MS = 90_000;
+
+/**
+ * Type the prompt in and wait for the turn to actually end.
+ *
+ * End-of-turn is read from the screen, not from the ledger. The transcript
+ * follower refreshes a turn's totals on every append — that is what keeps a live
+ * conversation's row correct — so "the ledger closed the turn" means "we know
+ * more about it now", not "it is over". Trusting it marked a step finished while
+ * its CLI sat on an approval dialog, and the run then asked to confirm work that
+ * had not happened.
+ *
+ * Bracketed paste, then Enter: without the markers a multi-line prompt is read as
+ * a line at a time and the CLI answers the first paragraph.
+ */
 export async function runTurnInTerminal(input: {
   terminalId: string;
   claudeSessionId: string;
@@ -152,43 +177,73 @@ export async function runTurnInTerminal(input: {
   /** Stop waiting at this moment, whatever the turn is doing. */
   deadlineAt?: number;
 }): Promise<{ ok: boolean; error?: string }> {
-  const { terminalId, claudeSessionId, prompt } = input;
+  const { terminalId, prompt } = input;
 
-  // Subscribe before typing: a short turn can close before the await is reached.
-  let resolveTurn: (result: { ok: boolean; error?: string }) => void = () => {};
-  const finished = new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    resolveTurn = resolve;
-  });
-  const off = onTurnClosed(claudeSessionId, (_turnId, status) => {
-    resolveTurn(
-      status === "done" ? { ok: true } : { ok: false, error: `The turn ended as ${status}` },
-    );
-  });
+  // tmux keeps the work alive across a server restart, but this process loses the
+  // PTY — and a terminal it cannot type into is worse than one that is gone,
+  // because the screen still looks fine. Cheap no-op when it is attached.
+  if (!reviveTerminal(terminalId)) {
+    return { ok: false, error: "The step's terminal could not be reattached" };
+  }
+  // Nobody is watching this one, so nobody has told it how big it is. Left at
+  // whatever a stray measurement set, the CLI has no room to draw the composer
+  // this then waits for.
+  ensureUsableSize(terminalId);
 
-  try {
-    const ready = await waitForComposer(terminalId);
-    if (!ready.ok) return ready;
+  const ready = await waitForComposer(terminalId);
+  if (!ready.ok) return ready;
 
-    const paste = `\x1b[200~${prompt.replace(/\r\n?/g, "\n")}\x1b[201~\r`;
-    if (!ptyWrite(terminalId, paste)) {
-      return { ok: false, error: "Could not write the prompt into the step's terminal" };
+  const paste = `\x1b[200~${prompt.replace(/\r\n?/g, "\n")}\x1b[201~\r`;
+  if (!ptyWrite(terminalId, paste)) {
+    return { ok: false, error: "Could not write the prompt into the step's terminal" };
+  }
+
+  const budget = input.deadlineAt
+    ? Math.max(30_000, input.deadlineAt - Date.now())
+    : TURN_TIMEOUT_MS;
+  const until = Date.now() + Math.min(budget, TURN_TIMEOUT_MS);
+  const startedBy = Date.now() + START_TIMEOUT_MS;
+  let sawWork = false;
+
+  for (;;) {
+    await new Promise((r) => setTimeout(r, WATCH_INTERVAL_MS));
+    if (!sessionAlive(terminalId)) {
+      return { ok: false, error: "The step's terminal exited while the turn was running" };
     }
 
-    const budget = input.deadlineAt
-      ? Math.max(30_000, input.deadlineAt - Date.now())
-      : TURN_TIMEOUT_MS;
-    const timeout = new Promise<{ ok: boolean; error?: string }>((resolve) =>
-      setTimeout(
-        () =>
-          resolve({
-            ok: false,
-            error: `No turn finished within ${Math.round(budget / 60_000)} minutes — open the step's terminal to see where it is`,
-          }),
-        Math.min(budget, TURN_TIMEOUT_MS),
-      ).unref?.(),
-    );
-    return await Promise.race([finished, timeout]);
-  } finally {
-    off();
+    const screen = recentOutput(terminalId, 4000);
+
+    // An approval dialog is not a finished turn, and it is not a failure either:
+    // it is the CLI waiting for a person. Say so, rather than let the step look
+    // done or hang until its budget runs out.
+    if (needsApproval(screen)) {
+      return {
+        ok: false,
+        error:
+          "The step's terminal is asking you to approve something — open it and answer, then retry " +
+          "this step. Give the step a permission mode that covers what it needs if this keeps happening.",
+      };
+    }
+
+    if (isBusy(screen)) {
+      sawWork = true;
+      continue;
+    }
+
+    // Back at an idle composer after having worked: the turn is over.
+    if (sawWork && isComposerReady(screen)) return { ok: true };
+
+    if (!sawWork && Date.now() > startedBy) {
+      return {
+        ok: false,
+        error: "The prompt was typed but the CLI never started working — open the step's terminal",
+      };
+    }
+    if (Date.now() > until) {
+      return {
+        ok: false,
+        error: `The turn did not finish within ${Math.round((until - (Date.now() - budget)) / 60_000)} minutes — open the step's terminal to see where it is`,
+      };
+    }
   }
 }

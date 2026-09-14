@@ -8,6 +8,8 @@ import { buildClaudeCommand } from "../lib/claude-cli";
 import { TERMINAL_CONTEXT_DIR, projectKnowledgeDir } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
+import { TOKEN } from "../lib/auth";
+import { env as env_ } from "../lib/config";
 import { envVarsFor } from "./env-sets";
 import { createWorktree } from "./git";
 import { attachedAssetDirs } from "./library";
@@ -191,6 +193,67 @@ export function createTerminal(
  * stayed alive in tmux and the CLI kept appending, so the conversation is picked
  * up where capture left off instead of from zero.
  */
+/**
+ * Attach this process to a terminal whose PTY it no longer has.
+ *
+ * tmux keeps the work running across a server restart, so a row can be perfectly
+ * alive — the `claude` session still sitting at its prompt — while this process
+ * holds nothing it can read or write. `pty.start` reattaches a live tmux session
+ * and ignores the command; only when the session is really gone does the command
+ * start something new.
+ *
+ * Returns false when there is nothing to revive. Used by the Restart button and
+ * by the workflow runner, which otherwise hands a step a terminal it cannot type
+ * into — the step then waits out its timeout looking at an empty string.
+ */
+export function reviveTerminal(id: string): boolean {
+  if (pty.isRunning(id)) return true;
+  const existing = db.select().from(schema.terminals).where(eq(schema.terminals.id, id)).get();
+  if (!existing) return false;
+
+  const env: Record<string, string> = existing.envSetId ? envVarsFor(existing.envSetId) : {};
+  // Terminal-mode workflow runs curl step progress back with these two vars.
+  // extraEnv is never persisted — and shouldn't be, port/token can change across
+  // boots — so re-derive it when this terminal drives a run.
+  const drivesRun = db
+    .select()
+    .from(schema.workflowRuns)
+    .where(eq(schema.workflowRuns.terminalId, id))
+    .get();
+  if (drivesRun) {
+    env.CLAUDE_STATION_URL = `http://127.0.0.1:${env_.port}`;
+    env.CLAUDE_STATION_TOKEN = TOKEN;
+  }
+
+  const cwd = assertPathAllowed(existing.cwd, existing.projectId);
+  try {
+    const { pid } = pty.start({
+      id,
+      cwd,
+      env,
+      // App-agent terminals re-run their start command; claude tabs resume the CLI
+      // by session id, so reopening one never lands in another's conversation.
+      command:
+        existing.command ??
+        (existing.kind === "claude"
+          ? claudeCommand(true, {
+              projectId: existing.projectId,
+              terminalId: id,
+              cwd,
+              sessionId: existing.claudeSessionId,
+            })
+          : undefined),
+    });
+    db.update(schema.terminals)
+      .set({ status: "running", pid, closedAt: null })
+      .where(eq(schema.terminals.id, id))
+      .run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function followOpenClaudeTerminals(): number {
   const rows = db
     .select()

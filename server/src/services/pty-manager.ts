@@ -176,9 +176,25 @@ export function attach(id: string, listener: PtyListener): () => void {
  * not reliably, and a size that already matches draws nothing at all — which is
  * exactly the reconnect case. See repaintWhenResized for why it waits first.
  */
+/**
+ * Below this, a "size" is a measurement taken before layout rather than a window
+ * anybody is looking at. Honouring one is destructive: tmux adopts it
+ * (`window-size latest`), the program inside redraws into a few columns, and the
+ * screen it had is gone — a `claude` session squeezed to 8x3 stops drawing its
+ * composer at all, which is how a workflow step ends up waiting for a prompt
+ * that can no longer be printed.
+ */
+const MIN_USABLE_COLS = 40;
+const MIN_USABLE_ROWS = 10;
+
+export function isUsableSize(cols: number, rows: number): boolean {
+  return cols >= MIN_USABLE_COLS && rows >= MIN_USABLE_ROWS;
+}
+
 export function resizeAndPaint(id: string, cols: number, rows: number): void {
   const m = sessions.get(id);
   if (!m || m.exited) return;
+  if (!isUsableSize(cols, rows)) return;
   const unchanged = m.pty.cols === cols && m.pty.rows === rows;
   resize(id, cols, rows);
   if (m.tmuxBacked) repaintWhenResized(id, cols, rows);
@@ -336,7 +352,11 @@ function repaintWhenResized(id: string, cols: number, rows: number): void {
  */
 export function recentOutput(id: string, bytes = 4000): string {
   const m = sessions.get(id);
-  if (!m) return "";
+  // No PTY here does not mean no screen: after a server restart tmux is still
+  // holding the session, and "what is on screen" is answerable from it. Reading
+  // the byte log in that case reports an empty terminal for a terminal that is
+  // sitting at its prompt.
+  if (!m) return tmux.hasSession(id) ? tmux.capturePane(id, 80).slice(-bytes) : "";
   if (m.tmuxBacked) return tmux.capturePane(id, 80).slice(-bytes);
   const joined = Buffer.concat(m.scrollback);
   return joined.subarray(Math.max(0, joined.length - bytes)).toString("utf8");
@@ -393,6 +413,22 @@ export function sessionAliveIds(): Set<string> {
 /** Whether this process's PTY for `id` is a tmux client (false once detached). */
 export function isTmuxBacked(id: string): boolean {
   return sessions.get(id)?.tmuxBacked ?? false;
+}
+
+/**
+ * Give an unwatched terminal a size worth drawing at.
+ *
+ * A tab supplies geometry as it renders; a terminal opened by a workflow step has
+ * no tab, so whatever the session was left at is what the program gets — and a
+ * session another client once shrank stays shrunk. Only ever grows: a pane
+ * somebody is actually watching keeps their size.
+ */
+export function ensureUsableSize(id: string, cols = 200, rows = 50): void {
+  const m = sessions.get(id);
+  if (!m || m.exited) return;
+  const current = m.tmuxBacked ? tmux.windowSize(id) : { cols: m.pty.cols, rows: m.pty.rows };
+  if (current && isUsableSize(current.cols, current.rows)) return;
+  resizeAndPaint(id, Math.max(cols, MIN_USABLE_COLS), Math.max(rows, MIN_USABLE_ROWS));
 }
 
 export function isRunning(id: string): boolean {

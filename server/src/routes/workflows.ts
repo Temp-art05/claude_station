@@ -40,6 +40,7 @@ import {
   getRun,
   listRuns,
   reportTerminalProgress,
+  restartRun,
   retryStep,
   skipStep,
 } from "../services/workflow-runner";
@@ -299,6 +300,18 @@ export function workflowRoutes(app: FastifyInstance): void {
       return skipStep(id, key);
     },
   );
+
+  /**
+   * Start a finished run going again. `resume` keeps what already succeeded;
+   * `fresh` puts every step back to the beginning with new terminals.
+   */
+  app.post<{ Params: { id: string } }>("/api/workflow-runs/:id/restart", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const { mode } = z
+      .object({ mode: z.enum(["resume", "fresh"]).default("resume") })
+      .parse(req.body ?? {});
+    return restartRun(id, mode);
+  });
 
   app.post<{ Params: { id: string } }>("/api/workflow-runs/:id/cancel", async (req) => {
     const { id } = idParam.parse(req.params);

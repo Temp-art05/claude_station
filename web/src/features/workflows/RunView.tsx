@@ -23,6 +23,7 @@ import { wsUrl } from "@/lib/token";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "@/features/terminals/TerminalPane";
 import { LogPane } from "@/features/commands/LogPane";
+import { useConfirm } from "@/components/ui/confirm";
 import { useRestartTerminal } from "@/features/terminals/hooks";
 
 const DOT: Record<WorkflowRunStepStatus, string> = {
@@ -59,6 +60,7 @@ export function RunView({
   const [terminalEpoch, setTerminalEpoch] = useState(0);
   // Set when the runbook is (re)sent by hand — the pane types whatever lands here.
   const [resent, setResent] = useState<string | null>(null);
+  const confirm = useConfirm();
   const restartTerminal = useRestartTerminal(projectId);
 
   const { data: run } = useQuery({
@@ -142,6 +144,12 @@ export function RunView({
     mutationFn: (key: string) => api.post(`/api/workflow-runs/${runId}/steps/${key}/skip`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["workflow-run", runId] }),
   });
+  const restart = useMutation({
+    mutationFn: (mode: "resume" | "fresh") =>
+      api.post(`/api/workflow-runs/${runId}/restart`, { mode }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["workflow-run", runId] }),
+  });
+
   const cancel = useMutation({
     mutationFn: () => api.post(`/api/workflow-runs/${runId}/cancel`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["workflow-run", runId] }),
@@ -150,6 +158,11 @@ export function RunView({
   if (!run) return <p className="p-6 text-sm text-ink-muted">Loading run…</p>;
 
   const open = run.questions.filter((q) => q.answer === null);
+  // What a resume would keep. Shown on the button because "chạy lại" is two very
+  // different actions depending on how much of the run was actually fine.
+  const doneCount = run.runSteps.filter(
+    (s) => s.status === "done" || s.status === "skipped",
+  ).length;
   const finished = run.status === "done" || run.status === "failed" || run.status === "cancelled";
 
   return (
@@ -180,6 +193,39 @@ export function RunView({
           <Button size="sm" variant="danger" className="ml-auto" onClick={() => cancel.mutate()}>
             <Ban size={16} /> Cancel run
           </Button>
+        )}
+        {finished && (
+          <div className="ml-auto flex items-center gap-2">
+            {doneCount > 0 && (
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={restart.isPending}
+                title={`Giữ ${doneCount} step đã xong, chỉ chạy lại phần còn lại`}
+                onClick={() => restart.mutate("resume")}
+              >
+                <RotateCw size={16} /> Chạy tiếp ({doneCount} step giữ nguyên)
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant={doneCount > 0 ? "ghost" : "primary"}
+              disabled={restart.isPending}
+              title="Mọi step về lại từ đầu, mỗi step một terminal mới"
+              onClick={() =>
+                void confirm({
+                  title: "Chạy lại từ đầu?",
+                  body:
+                    doneCount > 0
+                      ? `${doneCount} step đã xong sẽ được làm lại từ đầu — kể cả những step đã tạo ticket hoặc đã sửa code.`
+                      : "Mọi step chạy lại từ đầu, mỗi step mở terminal mới.",
+                  confirmLabel: "Chạy lại từ đầu",
+                }).then((ok) => ok && restart.mutate("fresh"))
+              }
+            >
+              <RotateCw size={16} /> Chạy lại từ đầu
+            </Button>
+          </div>
         )}
       </div>
       {run.goal && (

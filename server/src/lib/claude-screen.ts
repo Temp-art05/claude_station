@@ -29,6 +29,32 @@ const COMPOSER =
 const TRUST_DIALOG =
   /trust (the )?(files|this folder)|Is this a project you created or one you trust|Do you trust the files in this folder/i;
 
+/**
+ * The CLI is mid-turn. It prints this while it works, and stops printing it the
+ * moment the turn ends — which is the only honest end-of-turn signal available
+ * from the outside: the transcript's totals are refreshed on every append, so
+ * "the ledger closed the turn" means "we know more about it now", not "it is
+ * over".
+ */
+const BUSY = /esc to interrupt|\(interrupt\)|Thinking…|Running…/i;
+
+/**
+ * The CLI is asking the person to approve something — a command it may not run
+ * on its own. Left undetected this looks exactly like a finished turn: output
+ * stops, nothing more is written to the transcript, and a step waits or, worse,
+ * is called done.
+ */
+const APPROVAL =
+  /Do you want to proceed\?|requires approval|Do you want to (make this edit|create)|\bYes, and don't ask again\b/i;
+
+export function isBusy(screen: string): boolean {
+  return BUSY.test(screen);
+}
+
+export function needsApproval(screen: string): boolean {
+  return APPROVAL.test(screen);
+}
+
 export function isComposerReady(screen: string): boolean {
   return COMPOSER.test(screen);
 }
