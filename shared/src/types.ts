@@ -852,6 +852,8 @@ export const workflowRunStepSchema = z.object({
   /** gate only: how many times this check has sent the run back already. */
   loops: z.number().int().default(0),
   sessionId: z.string().nullable(),
+  /** The `claude` terminal this step runs in — what the run view shows live. */
+  terminalId: z.string().nullable().default(null),
   commandRunId: z.string().nullable(),
   note: z.string().nullable(),
   error: z.string().nullable(),

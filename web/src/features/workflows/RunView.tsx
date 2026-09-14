@@ -22,6 +22,7 @@ import { fileUrl } from "@/lib/upload";
 import { wsUrl } from "@/lib/token";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "@/features/terminals/TerminalPane";
+import { LogPane } from "@/features/commands/LogPane";
 import { useRestartTerminal } from "@/features/terminals/hooks";
 
 const DOT: Record<WorkflowRunStepStatus, string> = {
@@ -81,6 +82,40 @@ export function RunView({
     enabled: untouched === true,
     staleTime: Infinity,
   });
+
+  /**
+   * What can be watched: a terminal per agent step, a log per gate that ran, and
+   * the run's own terminal for runs started before steps had their own.
+   */
+  const watchable = [
+    ...(run?.runSteps ?? [])
+      .filter((s) => s.terminalId || s.commandRunId)
+      .map((s) => ({
+        key: s.stepKey,
+        kind: s.terminalId ? ("terminal" as const) : ("log" as const),
+        terminalId: s.terminalId,
+        commandRunId: s.commandRunId,
+        status: s.status,
+      })),
+    ...(run?.terminalId && !(run?.runSteps ?? []).some((s) => s.terminalId === run.terminalId)
+      ? [
+          {
+            key: "runbook",
+            kind: "terminal" as const,
+            terminalId: run.terminalId,
+            commandRunId: null,
+            status: run.status,
+          },
+        ]
+      : []),
+  ];
+  // Follow the run unless the user picked a step to look at.
+  const [watchKey, setWatchKey] = useState<string | null>(null);
+  const watching =
+    watchable.find((w) => w.key === watchKey) ??
+    watchable.find((w) => w.status === "running") ??
+    watchable.find((w) => w.status === "awaiting_input") ??
+    watchable[watchable.length - 1];
 
   // Any WS event just invalidates: one source of truth (the GET), no local merge.
   useEffect(() => {
@@ -300,48 +335,84 @@ export function RunView({
         })}
       </div>
 
-      {run.mode === "terminal" && run.terminalId && (
+      {/*
+        Every agent step runs in a real `claude` terminal, and a gate's command log
+        is shown in the same frame — so "what is it doing right now" is one place
+        rather than a hunt across tabs.
+      */}
+      {watchable.length > 0 && (
         <div className="mt-3">
-          <div className="mb-1.5 flex items-center justify-between">
-            <p className="text-xs font-bold tracking-wide text-ink-faint uppercase">
-              Claude terminal — điều khiển run này (skip / confirm / đổi hướng bằng chat)
+          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+            <p className="mr-auto text-xs font-bold tracking-wide text-ink-faint uppercase">
+              Đang chạy ở đâu — bấm để xem từng step
             </p>
-            <Button
-              size="sm"
-              variant="ghost"
-              title="Restart the terminal (claude --continue resumes the conversation)"
-              disabled={restartTerminal.isPending}
-              onClick={() =>
-                restartTerminal.mutate(run.terminalId!, {
-                  onSuccess: () => setTerminalEpoch((e) => e + 1),
-                })
-              }
-            >
-              <RotateCw size={16} /> Restart
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              title="Gõ lại runbook vào terminal — dùng khi terminal trống hoặc bạn đã xoá nó đi"
-              onClick={async () => {
-                const { seed: text } = await api.get<{ seed: string }>(
-                  `/api/workflow-runs/${runId}/runbook`,
-                );
-                // New identity each time, so the pane treats it as a fresh seed.
-                setResent(`${text}\n`);
-                setTerminalEpoch((e) => e + 1);
-              }}
-            >
-              Gửi lại runbook
-            </Button>
+            {run.terminalId && watching?.terminalId === run.terminalId && (
+              <Button
+                size="sm"
+                variant="ghost"
+                title="Gõ lại runbook vào terminal — dùng khi terminal trống hoặc bạn đã xoá nó đi"
+                onClick={async () => {
+                  const { seed: text } = await api.get<{ seed: string }>(
+                    `/api/workflow-runs/${runId}/runbook`,
+                  );
+                  setResent(`${text}\n`);
+                  setTerminalEpoch((e) => e + 1);
+                }}
+              >
+                Gửi lại runbook
+              </Button>
+            )}
+            {watching?.terminalId && (
+              <Button
+                size="sm"
+                variant="ghost"
+                title="Restart the terminal (claude --continue resumes the conversation)"
+                disabled={restartTerminal.isPending}
+                onClick={() =>
+                  restartTerminal.mutate(watching.terminalId!, {
+                    onSuccess: () => setTerminalEpoch((e) => e + 1),
+                  })
+                }
+              >
+                <RotateCw size={16} /> Restart
+              </Button>
+            )}
           </div>
+
+          <div className="mb-1.5 flex flex-wrap gap-1">
+            {watchable.map((w) => (
+              <button
+                key={w.key}
+                type="button"
+                onClick={() => setWatchKey(w.key)}
+                className={cn(
+                  "rounded-pill border px-2 py-0.5 font-mono m3-label-sm",
+                  w.key === watching?.key
+                    ? "border-accent/40 bg-accent/15 text-accent"
+                    : "border-hairline bg-white/5 text-ink-muted hover:bg-white/10",
+                )}
+              >
+                {w.key}
+                {w.kind === "log" ? " · log" : ""}
+              </button>
+            ))}
+          </div>
+
           <div className="h-[46vh] min-h-[300px] overflow-hidden rounded-lg border border-edge">
-            <TerminalPane
-              key={terminalEpoch}
-              terminalId={run.terminalId}
-              seedText={seed ?? resent ?? (untouched ? runbook?.seed : undefined)}
-              onSeedSent={onSeedSent}
-            />
+            {watching?.kind === "log" && watching.commandRunId ? (
+              <LogPane runId={watching.commandRunId} />
+            ) : watching?.terminalId ? (
+              <TerminalPane
+                key={`${watching.terminalId}:${terminalEpoch}`}
+                terminalId={watching.terminalId}
+                seedText={
+                  watching.terminalId === run.terminalId
+                    ? (seed ?? resent ?? (untouched ? runbook?.seed : undefined))
+                    : undefined
+                }
+                onSeedSent={onSeedSent}
+              />
+            ) : null}
           </div>
         </div>
       )}

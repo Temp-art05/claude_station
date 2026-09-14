@@ -2,7 +2,6 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type {
-  PermissionMode,
   Workflow,
   WorkflowArtifact,
   WorkflowQuestion,
@@ -18,12 +17,12 @@ import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
 import { dependentsOf as dependentsOfKey, readySteps as readyStepsOf } from "../lib/workflow-graph";
 import { agentDefinition } from "./agents";
-import { interrupt, isRunning, sendUserMessage } from "./claude-session";
+import { interrupt, isRunning } from "./claude-session";
+import { runTurnInTerminal, terminalForStep } from "./workflow-step-terminal";
 import { startRun as startCommandRun } from "./commands";
 import { normalizeMentions, resolveMentions } from "./mentions";
 import { evaluateCondition, ConditionError } from "./workflow-condition";
 import { getWorkflow } from "./workflows";
-import { createChatSession } from "./sessions";
 import { notify } from "./notify";
 
 export type RunEvent =
@@ -81,6 +80,7 @@ function toRunStep(row: typeof schema.workflowRunSteps.$inferSelect): WorkflowRu
     attempt: row.attempt,
     loops: row.loops,
     sessionId: row.sessionId,
+    terminalId: row.terminalId,
     commandRunId: row.commandRunId,
     note: row.note,
     error: row.error,
@@ -736,6 +736,14 @@ function resolveStepPath(
   return match ? { id: match.id, path: match.path } : { id: null, path: run.cwd };
 }
 
+/**
+ * One agent step, in a real terminal.
+ *
+ * The step's turn is typed into a `claude` PTY and the engine waits for the
+ * ledger to say that turn closed. Everything the engine does around it —
+ * scheduling, gates, retries, questions — is unchanged; what changed is that the
+ * work is visible while it happens instead of afterwards.
+ */
 async function runAgentStep(
   run: WorkflowRun,
   step: WorkflowStep,
@@ -743,30 +751,20 @@ async function runAgentStep(
   attempt: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const existing = run.runSteps.find((s) => s.stepKey === step.key);
-  let sessionId = existing?.sessionId ?? null;
+  const target = resolveStepPath(run, step);
 
-  // Retries reuse the same session so the agent keeps its context.
-  if (!sessionId) {
-    const session = createChatSession(run.projectId, {
-      title: `${run.title} · ${step.title}`,
-      cwdPathId: resolveStepPath(run, step).id ?? undefined,
-      permissionMode: (step.permissionMode ?? "default") as PermissionMode,
-      origin: `workflow:${run.id}`,
-      envSetId: run.envSetId,
-      // A step that declares itself isolated gets its own worktree even when the
-      // run doesn't use one: that is the only way two branches may touch one repo.
-      useWorktree: step.isolate || run.useWorktree,
-      agentName: step.agentName,
-      kind: "workflow",
-      workflowRunStepId: existing?.id ?? null,
-    });
-    sessionId = session.id;
+  let terminalId: string;
+  let claudeSessionId: string;
+  try {
+    ({ terminalId, claudeSessionId } = terminalForStep(run, step, target.id));
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
   upsertRunStep(run.id, step.key, {
     status: "running",
     attempt,
-    sessionId,
+    terminalId,
     startedAt: existing?.startedAt ?? nowIso(),
     error: null,
   });
@@ -776,19 +774,13 @@ async function runAgentStep(
       ? `${await stepContext(run, step, index)}\n\n[Retry ${attempt}: the previous attempt failed. Fix the cause and finish the step.]`
       : await stepContext(run, step, index);
 
-  try {
-    await sendUserMessage(sessionId, prompt);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  const session = db
-    .select()
-    .from(schema.chatSessions)
-    .where(eq(schema.chatSessions.id, sessionId))
-    .get();
-  if (session?.status === "error") return { ok: false, error: "The agent turn ended in an error" };
-  return { ok: true };
+  const row = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, run.id)).get();
+  return runTurnInTerminal({
+    terminalId,
+    claudeSessionId,
+    prompt,
+    deadlineAt: row?.deadlineAt ? Date.parse(row.deadlineAt) : undefined,
+  });
 }
 
 async function runCommandStep(

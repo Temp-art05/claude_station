@@ -498,6 +498,11 @@ export const workflowRunSteps = sqliteTable(
      * counts re-runs of the step itself — the two caps must not multiply. */
     loops: integer("loops").notNull().default(0),
     sessionId: text("session_id"),
+    /**
+     * The `claude` terminal this step ran in. Steps run in a real PTY so the work
+     * can be watched as it happens, and the run view needs the id to show it.
+     */
+    terminalId: text("terminal_id"),
     commandRunId: text("command_run_id"),
     note: text("note"),
     error: text("error"),

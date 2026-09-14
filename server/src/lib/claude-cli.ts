@@ -21,6 +21,15 @@ export interface ClaudeCliContext {
    * two Claude tabs share a repo.
    */
   sessionId?: string;
+  /**
+   * Path to an MCP config giving this CLI the station's own tools. A terminal
+   * running a workflow step needs `workflow_ask`, `jira_*` and the build
+   * commands exactly as an in-process session does — without it the step's
+   * instructions refer to tools that are not there.
+   */
+  mcpConfigFile?: string;
+  /** Matches the step's own mode, so a long implement step isn't a click farm. */
+  permissionMode?: string;
 }
 
 /**
@@ -32,6 +41,12 @@ export function buildClaudeCommand(restart: boolean, ctx: ClaudeCliContext = {})
   const parts = [
     ...(ctx.contextFile ? [`--append-system-prompt-file ${shq(ctx.contextFile)}`] : []),
     ...(ctx.extraDirs ?? []).map((d) => `--add-dir ${shq(d)}`),
+    // --strict-mcp-config so the step gets exactly the station's tools and not
+    // whatever this machine happens to have configured globally.
+    ...(ctx.mcpConfigFile
+      ? [`--mcp-config ${shq(ctx.mcpConfigFile)}`, "--strict-mcp-config"]
+      : []),
+    ...(ctx.permissionMode ? [`--permission-mode ${shq(ctx.permissionMode)}`] : []),
   ];
   const flags = parts.length > 0 ? ` ${parts.join(" ")}` : "";
 

@@ -101,3 +101,42 @@ describe("buildClaudeCommand with a session id", () => {
     expect(buildClaudeCommand(true)).toBe("claude --continue || claude");
   });
 });
+
+describe("buildClaudeCommand for a workflow step", () => {
+  it("hands the step the station's tools, and only those", () => {
+    const cmd = buildClaudeCommand(false, {
+      sessionId: "s1",
+      mcpConfigFile: "/data/workflows/r1/mcp.json",
+    });
+    expect(cmd).toContain("--mcp-config '/data/workflows/r1/mcp.json'");
+    // Without --strict-mcp-config the step also inherits whatever MCP servers this
+    // machine happens to have configured, which is not what the workflow asked for.
+    expect(cmd).toContain("--strict-mcp-config");
+  });
+
+  it("starts the CLI in the step's own permission mode", () => {
+    expect(buildClaudeCommand(false, { permissionMode: "acceptEdits" })).toContain(
+      "--permission-mode 'acceptEdits'",
+    );
+  });
+
+  it("leaves both flags off for an ordinary terminal", () => {
+    const cmd = buildClaudeCommand(false, { sessionId: "s1" });
+    expect(cmd).not.toContain("--mcp-config");
+    expect(cmd).not.toContain("--permission-mode");
+  });
+
+  it("repeats them on the restart fallback, or a failed resume loses its tools", () => {
+    const cmd = buildClaudeCommand(true, {
+      sessionId: "s1",
+      mcpConfigFile: "/tmp/mcp.json",
+      permissionMode: "acceptEdits",
+    });
+    const [resume, fallback] = cmd.split(" || ");
+    for (const branch of [resume, fallback]) {
+      expect(branch).toContain("--mcp-config '/tmp/mcp.json'");
+      expect(branch).toContain("--strict-mcp-config");
+      expect(branch).toContain("--permission-mode 'acceptEdits'");
+    }
+  });
+});

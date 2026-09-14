@@ -1,14 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useMutation } from "@tanstack/react-query";
-import {
-  ChevronLeft,
-  Import,
-  Play,
-  Terminal,
-  Trash2,
-  Workflow as WorkflowIcon,
-} from "@/components/ui/icons";
+import { ChevronLeft, Import, Play, Trash2, Workflow as WorkflowIcon } from "@/components/ui/icons";
 import type { EnvSet, Project, Workflow, WorkflowInputDef } from "@claude-station/shared";
 import { useQuery } from "@tanstack/react-query";
 import { useConfirm } from "@/components/ui/confirm";
@@ -354,23 +346,6 @@ function StartDialog({
   const [autoMode, setAutoMode] = useState(false);
   const [askPolicy, setAskPolicy] = useState<"stop" | "assume">("stop");
 
-  // Dynamic mode: the run opens with its stepper on top and an interactive
-  // claude terminal below driving the steps (reporting progress back).
-  const claudeRun = useMutation({
-    mutationFn: () =>
-      api.post<{ run: { id: string }; terminalId: string; seed: string }>(
-        `/api/projects/${project.id}/workflows/${workflowId}/terminal-run`,
-        {
-          goal: goal.trim() || undefined,
-          cwdPathId: pathId || undefined,
-          envSetId: envSetId || null,
-          useWorktree,
-          inputs,
-        },
-      ),
-    onSuccess: ({ run, seed }) => onStarted(run.id, seed),
-  });
-
   return (
     <Dialog open onClose={onClose} title="Start workflow run">
       <div className="space-y-3">
@@ -477,22 +452,9 @@ function StartDialog({
             {start.error instanceof Error ? start.error.message : "Could not start"}
           </p>
         )}
-        {claudeRun.isError && (
-          <p className="text-xs text-err">
-            {claudeRun.error instanceof Error ? claudeRun.error.message : "Could not open terminal"}
-          </p>
-        )}
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
             Cancel
-          </Button>
-          <Button
-            variant="ghost"
-            disabled={claudeRun.isPending}
-            title="Mở màn run với stepper + terminal Claude bên dưới — bạn điều khiển từng step bằng chat (skip / confirm / đổi hướng), stepper tự nhảy theo"
-            onClick={() => claudeRun.mutate()}
-          >
-            <Terminal size={16} /> {claudeRun.isPending ? "Opening…" : "Run with Claude terminal"}
           </Button>
           <Button
             variant="primary"
