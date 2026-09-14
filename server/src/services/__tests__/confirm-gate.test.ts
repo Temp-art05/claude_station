@@ -5,48 +5,59 @@ import yaml from "js-yaml";
 import { workflowInputSchema } from "@claude-station/shared";
 
 /**
- * The confirmation gate belongs to the step, not to the engine.
+ * The confirmation gate is a conversation, not a form.
  *
- * It used to be a question the engine invented after a step finished. That works
- * — the run parks, the run view shows it — but the terminal underneath sat
- * silent, and the terminal is where somebody watching a step is actually looking.
- * A step that stops for confirmation with nothing on screen reads as a step that
- * hung.
+ * It started as a question the engine invented after a step finished: the run
+ * view showed a box, you typed one answer, the run moved on. Two things were
+ * wrong with that. The terminal underneath — where the work actually happened —
+ * sat silent, so a stopped step read as a hung one. And reviewing work is rarely
+ * one answer: you ask the agent to change something, look again, ask again.
  *
- * So the instruction now goes into the step's own prompt, which is built here in
- * the runner. These assert the wording that makes that work, because it is the
- * kind of text an edit can quietly drop.
+ * So a step that needs confirming parks, its terminal is free, and you talk to
+ * the agent that did the work for as long as you want. `continueStep` is the
+ * moment you are satisfied — the only thing the run actually needs to know.
  */
-
 const RUNNER = readFileSync(join(import.meta.dirname, "../workflow-runner.ts"), "utf8");
 
-describe("the confirm gate the step is told to raise", () => {
-  it("is added to the prompt only when the step asked for it and someone is watching", () => {
+describe("the confirm gate", () => {
+  it("parks the step instead of filing a question", () => {
+    const settle = RUNNER.slice(RUNNER.indexOf("function settleStep"));
+    const gate = settle.slice(settle.indexOf("step.requiresConfirm"));
+    expect(gate.slice(0, 600)).toContain('status: "awaiting_input"');
+    // A question would take one answer and close, which is the shape this stopped
+    // being.
+    expect(gate.slice(0, 600)).not.toContain("recordQuestions");
+  });
+
+  it("only gates when somebody is there to talk to", () => {
     expect(RUNNER).toContain("step.requiresConfirm && !run.autoMode");
-    // An unattended run has nobody to confirm to: the gate is the thing that mode
-    // exists to remove.
-    expect(RUNNER).toMatch(/## Before you finish this step/);
   });
 
-  it("names workflow_ask and the key the engine will look for", () => {
-    expect(RUNNER).toMatch(/workflow_ask.*confirmKey\(step\)|confirmKey\(step\).*workflow_ask/s);
-    expect(RUNNER).toContain("function confirmKey(step: WorkflowStep)");
+  it("tells the person where to look, in the note the step carries", () => {
+    expect(RUNNER).toMatch(/terminal của step, rồi bấm Tiếp tục/);
+  });
+});
+
+describe("continueStep", () => {
+  const FN = RUNNER.slice(
+    RUNNER.indexOf("export function continueStep"),
+    RUNNER.indexOf("export function skipStep"),
+  );
+
+  it("refuses to walk past a question the agent actually asked", () => {
+    // That kind is parked inside a tool call: only an answer releases it, and
+    // continuing would leave the agent waiting for ever.
+    expect(FN).toContain("q.answer === null");
+    expect(FN).toMatch(/answer it instead of continuing past it/);
   });
 
-  it("nudges in the step's own terminal before inventing the question", () => {
-    // Order matters: the engine files its own question only after the terminal
-    // has been asked and said nothing. The other way round, the gate is invisible
-    // again for every step that would have complied.
-    const nudge = RUNNER.slice(RUNNER.indexOf("async function nudgeForConfirmation"));
-    const askInTerminal = nudge.indexOf("runTurnInTerminal");
-    const inventHere = nudge.indexOf("recordQuestions");
-    expect(askInTerminal).toBeGreaterThan(-1);
-    expect(inventHere).toBeGreaterThan(askInTerminal);
+  it("only applies to a step that is waiting", () => {
+    expect(FN).toMatch(/rs\.status !== "awaiting_input"/);
   });
 
-  it("never leaves a step marked done while it waits", () => {
-    const nudge = RUNNER.slice(RUNNER.indexOf("async function nudgeForConfirmation"));
-    expect(nudge).toContain('status: "awaiting_input"');
+  it("marks the step done and lets the run carry on", () => {
+    expect(FN).toContain('status: "done"');
+    expect(FN).toContain("advanceRun(runId)");
   });
 });
 
@@ -57,8 +68,8 @@ describe("the workflows that use it", () => {
     for (const file of readdirSync(DIR).filter((f) => f.endsWith(".yaml"))) {
       const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
       for (const step of parsed.steps.filter((s) => s.requiresConfirm)) {
-        // A gate or a command has no turn to ask in — marking one for
-        // confirmation would park the run with nothing able to raise a question.
+        // A gate or a command has no terminal to talk in — marking one for
+        // confirmation would park the run with nothing to review.
         expect({ file, key: step.key, type: step.type }).toEqual({
           file,
           key: step.key,

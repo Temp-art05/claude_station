@@ -565,21 +565,6 @@ async function stepContext(run: WorkflowRun, step: WorkflowStep, index: number):
 
   if (instruction) lines.push("", "## Your task for this step", instruction);
 
-  // The confirmation gate is asked by the step itself, in its own terminal, so it
-  // is visible where the work is visible. An engine-side question appeared only
-  // in the run view — the terminal sat silent, which is the one place somebody
-  // watching a step is actually looking.
-  if (step.requiresConfirm && !run.autoMode) {
-    lines.push(
-      "",
-      "## Before you finish this step",
-      `Call \`workflow_ask\` with key \`${confirmKey(step)}\` — one question, kind "text" — saying in ` +
-        "one or two lines what you did and what you want confirmed. The run waits there until it is " +
-        "answered, and your answer reaches every later step.",
-      "Do this as the last thing in the turn, after the work is done. Do not end the turn without it.",
-    );
-  }
-
   // Anything tagged with @ is read here, not by the agent: a step that has to go
   // and fetch its own spec spends a turn doing it, and a run's turns are the one
   // thing it has a budget of.
@@ -1052,14 +1037,8 @@ export async function advanceRun(runId: string): Promise<WorkflowRun> {
       if (after.status === "cancelled") return after;
 
       let stop = false;
-      const nudges: { step: WorkflowStep; stepRowId: string }[] = [];
       for (const { step, attempt, result } of outcomes) {
-        const settled = settleStep(after, step, attempt, result);
-        if (settled.stop) stop = true;
-        if (settled.nudge) nudges.push(settled.nudge);
-      }
-      for (const nudge of nudges) {
-        await nudgeForConfirmation(getRun(runId)!, nudge.step, nudge.stepRowId);
+        if (settleStep(after, step, attempt, result).stop) stop = true;
       }
       if (stop) return getRun(runId)!;
     }
@@ -1072,12 +1051,6 @@ export async function advanceRun(runId: string): Promise<WorkflowRun> {
 interface Settled {
   /** The run cannot dispatch anything more until a person acts. */
   stop: boolean;
-  /**
-   * The step was supposed to ask for confirmation and finished without asking.
-   * The loop nudges it in its own terminal rather than inventing the question
-   * here — the point of the gate is that it is visible where the work is.
-   */
-  nudge?: { step: WorkflowStep; stepRowId: string };
 }
 
 /**
@@ -1117,9 +1090,17 @@ function settleStep(
 
   if (result.ok) {
     upsertRunStep(runId, step.key, { status: "done", finishedAt: nowIso(), error: null });
+    // The gate is a conversation, not a form. The step's terminal is right there
+    // and its turn has ended, so the way to review work is to talk to the agent
+    // that did it — ask it to change something, ask again, then let the run go on.
+    // A question in the run view instead would take one answer and close.
     if (step.requiresConfirm && !run.autoMode) {
-      const asked = run.questions.some((q) => q.runStepId === stepRow.id);
-      if (!asked) return { stop: true, nudge: { step, stepRowId: stepRow.id } };
+      upsertRunStep(runId, step.key, {
+        status: "awaiting_input",
+        note: "Xong — xem lại và trao đổi trong terminal của step, rồi bấm Tiếp tục",
+      });
+      setRunStatus(runId, "awaiting_input", step.key);
+      return { stop: true };
     }
     return { stop: false };
   }
@@ -1149,63 +1130,6 @@ function settleStep(
     return { stop: true };
   }
   return { stop: false };
-}
-
-/** The key a step's confirmation question is filed under, in one place. */
-function confirmKey(step: WorkflowStep): string {
-  return `${step.key}-confirm`;
-}
-
-/**
- * Ask a step that forgot to ask.
- *
- * It is typed into the step's own terminal, so the question arrives where the
- * work did — the same reason the instruction is in the prompt rather than in the
- * engine. Only when a nudged step still says nothing does the engine file the
- * question itself: a gate the workflow author asked for must never be stepped
- * over quietly, and a question in the run view beats no question at all.
- */
-async function nudgeForConfirmation(
-  run: WorkflowRun,
-  step: WorkflowStep,
-  stepRowId: string,
-): Promise<void> {
-  const row = db
-    .select()
-    .from(schema.workflowRunSteps)
-    .where(eq(schema.workflowRunSteps.id, stepRowId))
-    .get();
-
-  if (row?.terminalId && row.sessionId) {
-    await runTurnInTerminal({
-      terminalId: row.terminalId,
-      claudeSessionId: row.sessionId,
-      prompt:
-        `This step is marked as needing my confirmation. Call \`workflow_ask\` now with key ` +
-        `\`${confirmKey(step)}\`, kind "text", saying in one or two lines what you did and what you ` +
-        `want confirmed. Don't do any more work — just ask.`,
-    });
-    const after = getRun(run.id);
-    const asked = after?.questions.some((q) => q.runStepId === stepRowId && q.answer === null);
-    if (asked) {
-      upsertRunStep(run.id, step.key, { status: "awaiting_input" });
-      setRunStatus(run.id, "awaiting_input", step.key);
-      return;
-    }
-  }
-
-  recordQuestions(run.id, stepRowId, [
-    {
-      key: confirmKey(step),
-      // No engine-speak here. "finished but never asked" describes a fallback
-      // nobody outside this file knows exists, and it reads as an accusation
-      // about something the person did not do.
-      question: `"${step.title}" xong rồi. Xem lại rồi xác nhận, hoặc nói cần sửa gì.`,
-      kind: "text",
-    },
-  ]);
-  upsertRunStep(run.id, step.key, { status: "awaiting_input" });
-  setRunStatus(run.id, "awaiting_input", step.key);
 }
 
 /**
@@ -1459,6 +1383,38 @@ export function restartRun(runId: string, mode: "resume" | "fresh" = "resume"): 
         : `Chạy lại từ đầu: ${reset} step.`,
   });
   setRunStatus(runId, "running", null);
+  void advanceRun(runId);
+  return getRun(runId)!;
+}
+
+/**
+ * "I have looked at it, carry on."
+ *
+ * The other half of the confirm gate. The step is parked, its terminal is free,
+ * and the person talks to the agent there for as long as they need — one
+ * exchange or ten. Nothing is recorded as an answer because nothing was a
+ * question: what the run needs is the moment they are satisfied, which is this.
+ */
+export function continueStep(runId: string, stepKey: string): WorkflowRun {
+  const run = getRun(runId);
+  if (!run) throw badRequest("Run not found");
+  const rs = run.runSteps.find((s) => s.stepKey === stepKey);
+  if (!rs) throw badRequest("Step not found in this run");
+  if (rs.status !== "awaiting_input") throw badRequest("This step is not waiting for you");
+
+  // A question the agent itself raised is a different thing: it is parked inside
+  // a tool call and only an answer releases it.
+  const open = run.questions.filter((q) => q.answer === null && q.runStepId === rs.id);
+  if (open.length > 0) {
+    throw badRequest("This step asked you something — answer it instead of continuing past it");
+  }
+
+  upsertRunStep(runId, stepKey, {
+    status: "done",
+    note: "bạn đã xác nhận",
+    finishedAt: nowIso(),
+  });
+  setRunStatus(runId, "running", stepKey);
   void advanceRun(runId);
   return getRun(runId)!;
 }

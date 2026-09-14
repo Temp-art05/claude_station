@@ -144,6 +144,11 @@ export function RunView({
     mutationFn: (key: string) => api.post(`/api/workflow-runs/${runId}/steps/${key}/skip`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["workflow-run", runId] }),
   });
+  const continueStep = useMutation({
+    mutationFn: (key: string) => api.post(`/api/workflow-runs/${runId}/steps/${key}/continue`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["workflow-run", runId] }),
+  });
+
   const restart = useMutation({
     mutationFn: (mode: "resume" | "fresh") =>
       api.post(`/api/workflow-runs/${runId}/restart`, { mode }),
@@ -354,7 +359,19 @@ export function RunView({
                 </div>
 
                 {!finished && (
-                  <div className="flex shrink-0 gap-0.5">
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {status === "awaiting_input" &&
+                      !run.questions.some((q) => q.answer === null && q.runStepId === rs?.id) && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          disabled={continueStep.isPending}
+                          title="Trao đổi trong terminal bên dưới bao lâu tuỳ bạn — bấm đây khi đã ưng"
+                          onClick={() => continueStep.mutate(step.key)}
+                        >
+                          Tiếp tục
+                        </Button>
+                      )}
                     <Button
                       size="icon"
                       variant="ghost"

@@ -40,6 +40,7 @@ import {
   getRun,
   listRuns,
   reportTerminalProgress,
+  continueStep,
   restartRun,
   retryStep,
   skipStep,
@@ -290,6 +291,15 @@ export function workflowRoutes(app: FastifyInstance): void {
     async (req) => {
       const { id, key } = z.object({ id: z.string(), key: z.string() }).parse(req.params);
       return retryStep(id, key);
+    },
+  );
+
+  /** "Reviewed it in the terminal — carry on." The confirm gate's other half. */
+  app.post<{ Params: { id: string; key: string } }>(
+    "/api/workflow-runs/:id/steps/:key/continue",
+    async (req) => {
+      const { id, key } = z.object({ id: z.string(), key: z.string() }).parse(req.params);
+      return continueStep(id, key);
     },
   );
 
