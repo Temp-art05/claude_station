@@ -17,7 +17,7 @@ steps:
   - key: read-req
     type: agent
     title: Đọc requirement, soát chỗ thiếu
-    agentName: docs-planner
+    agentName: spec-reader
     permissionMode: default
     instruction: >-
       Goal của run này CHÍNH LÀ nội dung issue GitHub. Đọc nó, rồi đối chiếu với docs/spec trong

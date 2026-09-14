@@ -15,7 +15,7 @@ steps:
   - key: plan
     type: agent
     title: Plan chung cho cả ba repo
-    agentName: docs-planner
+    agentName: spec-reader
     permissionMode: default
     instruction: >-
       Đọc goal và docs liên quan. Chia việc theo từng repo (FE / BE / iOS): repo nào đổi gì,

@@ -17,6 +17,7 @@ import { DATA_DIR } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
 import { dependentsOf as dependentsOfKey, readySteps as readyStepsOf } from "../lib/workflow-graph";
+import { agentDefinition } from "./agents";
 import { interrupt, isRunning, sendUserMessage } from "./claude-session";
 import { startRun as startCommandRun } from "./commands";
 import { normalizeMentions, resolveMentions } from "./mentions";
@@ -362,6 +363,25 @@ export function createRun(
   const workflow = getWorkflow(input.workflowId);
   if (!workflow) throw badRequest("Workflow not found");
   if (workflow.steps.length === 0) throw badRequest("This workflow has no steps");
+
+  // Every agent a step names has to exist before anything starts. Checked here
+  // rather than at import, because importing a workflow before its agent is a
+  // normal order to do things in — but discovering the gap at step four, after
+  // three steps have already edited files, is not.
+  const missing = [
+    ...new Set(
+      workflow.steps
+        .filter((s) => s.type === "agent" && s.agentName)
+        .map((s) => s.agentName!)
+        .filter((name) => agentDefinition(name) === null),
+    ),
+  ];
+  if (missing.length > 0) {
+    throw badRequest(
+      `This workflow needs ${missing.length > 1 ? "agents" : "an agent"} that isn't installed: ` +
+        `${missing.join(", ")}. Import ${missing.length > 1 ? "them" : "it"} on the Agents page first.`,
+    );
+  }
 
   const paths = db
     .select()

@@ -15,7 +15,7 @@ steps:
   - key: route
     type: agent
     title: Việc này là hotfix hay feature?
-    agentName: docs-planner
+    agentName: spec-reader
     permissionMode: default
     instruction: >-
       Đọc goal của run, đọc sơ code/spec liên quan, rồi gọi workflow_ask đúng MỘT câu:
@@ -26,7 +26,7 @@ steps:
   - key: plan
     type: agent
     title: Plan (chỉ khi là feature)
-    agentName: docs-planner
+    agentName: spec-reader
     dependsOn: [route]
     condition: answers.scope == "feature"
     permissionMode: default

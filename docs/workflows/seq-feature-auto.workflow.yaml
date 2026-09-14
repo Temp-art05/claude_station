@@ -15,7 +15,7 @@ steps:
   - key: plan
     type: agent
     title: Đọc yêu cầu và lên plan
-    agentName: docs-planner
+    agentName: spec-reader
     permissionMode: default
     instruction: >-
       Đọc goal của run này cùng docs/spec liên quan trong Knowledge (dùng knowledge_search,

@@ -87,6 +87,31 @@ describe("shipped workflow library", () => {
     for (const r of reviewers) expect(r.isolate).toBe(true);
   });
 
+  it("only ever names agents that ship alongside these workflows", () => {
+    // A step naming an agent nobody has is a run that dies at that step. The
+    // trap is that `docs-planner` is a Claude Code subagent, not one of this
+    // app's — it reads as installed right up until a run starts.
+    const shipped = new Set(
+      readdirSync(join(import.meta.dirname, "../../../../docs/agents"))
+        .filter((f) => f.endsWith(".agent.md"))
+        .map((f) => f.replace(/\.agent\.md$/, "")),
+    );
+    // The two the team already had, which live in the app's DB rather than here.
+    shipped.add("fe-dev");
+    shipped.add("ios-dev");
+
+    for (const file of files) {
+      const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      for (const step of parsed.steps) {
+        if (step.type !== "agent") continue;
+        expect({ file, agent: step.agentName }).toEqual({
+          file,
+          agent: shipped.has(step.agentName ?? "") ? step.agentName : `MISSING:${step.agentName}`,
+        });
+      }
+    }
+  });
+
   it("takes only the branch the answer chose", () => {
     const parsed = workflowInputSchema.parse(
       yaml.load(readFileSync(join(DIR, "branch-by-answer.workflow.yaml"), "utf8")),
