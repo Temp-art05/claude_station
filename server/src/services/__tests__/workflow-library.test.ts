@@ -59,6 +59,24 @@ describe("shipped workflow library", () => {
     });
   }
 
+  it("runs every agent step at a permission mode that does not stop for a shell command", () => {
+    // `acceptEdits` auto-accepts *edits* only: the first `git status` still opens
+    // a dialog, and a step running with nobody watching parks there until its
+    // budget runs out. The trade is deliberate — a step may run any command
+    // without asking — and it is bounded by the step working in its own worktree
+    // and by merge staying a person's.
+    for (const file of files) {
+      const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      for (const step of parsed.steps.filter((s) => s.type === "agent")) {
+        expect({ file, key: step.key, mode: step.permissionMode }).toEqual({
+          file,
+          key: step.key,
+          mode: "bypassPermissions",
+        });
+      }
+    }
+  });
+
   it("runs the two sides of a fe-be feature side by side", () => {
     const parsed = workflowInputSchema.parse(
       yaml.load(readFileSync(join(DIR, "fe-be-spec-to-pr.workflow.yaml"), "utf8")),

@@ -49,12 +49,12 @@ steps:
 
       KHÔNG impl code ở step này.
     requiresConfirm: true
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
   - key: jira-tasks
     type: agent
     title: Chia plan thành task trên Jira
     agentName: jira-pm
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
     instruction: >-
       Đọc plan ở artifact của step trước.
 
@@ -94,7 +94,7 @@ steps:
 
       KHÔNG impl code FE ở step này.
     requiresConfirm: true
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
   - key: impl
     type: agent
     title: Impl vào FE source
@@ -115,7 +115,7 @@ steps:
       4. KHÔNG commit/push ở step này (step "pr" sẽ làm). workflow_note tóm tắt diff (file nào, thay
       đổi gì).
     requiresConfirm: true
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
   - key: test
     type: agent
     title: Auto test & fix loop
@@ -134,13 +134,13 @@ steps:
       3. Xanh hết → workflow_emit_artifact "test-report" (lệnh đã chạy + kết quả từng lệnh) +
       workflow_note kết luận.
     requiresConfirm: true
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
     maxRetries: 1
   - key: review
     type: agent
     title: Review diff (agent khác đọc lại)
     agentName: spec-reader
-    permissionMode: default
+    permissionMode: bypassPermissions
     instruction: >-
       Đọc diff của branch hiện tại so với base. Soát ba nhóm, mỗi phát hiện kèm file:line và một
       kịch bản cụ thể khiến nó hỏng: (1) lỗi đúng/sai — logic, điều kiện biên, null/undefined, lỗi
@@ -154,7 +154,7 @@ steps:
     type: agent
     title: Sửa theo review
     agentName: fe-dev
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
     instruction: >-
       Đọc danh sách ở artifact của step review. Không có gì phải sửa thì nói rõ và kết thúc.
 
@@ -188,12 +188,12 @@ steps:
       docs ở step update-docs đã ghi (hoặc phát sinh quyết định mới chưa có trong docs) → update lại
       PR docs đó (push thêm commit vào branch docs, giữ nguyên PR) trước khi kết thúc step. Không có
       gì lệch → note rõ "spec-sync: không có thay đổi".
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
   - key: jira-report
     type: agent
     title: Báo kết quả ngược lại Jira
     agentName: jira-pm
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
     instruction: >-
       NẾU run này không gắn Jira (xem step jira-tasks) → nói rõ và kết thúc, đừng làm gì.
 

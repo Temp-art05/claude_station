@@ -28,46 +28,43 @@ inputs:
   - key: sprint
     label: Sprint
     type: jira-sprint
-    help: Chọn sprint đang mở, hoặc gõ tên mới để tạo. Bỏ trống thì ticket nằm ở backlog.
+    help: 'Chọn sprint đang mở, hoặc gõ tên mới để tạo. Bỏ trống thì ticket nằm ở backlog.'
   - key: parentTicket
     label: Ticket cha (tuỳ chọn)
     type: jira-ticket
     help: Có ticket cha thì task tạo ra là subtask dưới nó.
-
 steps:
   - key: read-specs
     type: agent
-    title: Đọc spec, ra plan chia task
+    title: 'Đọc spec, ra plan chia task'
     agentName: spec-reader
-    permissionMode: default
+    permissionMode: bypassPermissions
     instruction: >-
-      Toàn bộ spec ở {{specs}} đã nằm sẵn trong phần "Tagged sources" — đọc ngay ở đó, đừng đi tìm lại.
-      Có nhiều spec thì đọc hết rồi nói rõ chỗ nào chồng lấn hoặc mâu thuẫn giữa chúng; đây là thứ
-      dễ sót nhất khi chia task từ nhiều tài liệu.
-      Soát đủ bốn mục (tiêu chí nghiệm thu kiểm được · bốn trạng thái loading/rỗng/lỗi/mất mạng ·
-      dùng API nào · lần này không làm gì), đối chiếu code hiện tại.
-      Ra danh sách task: mỗi task xong-là-kiểm-được, một người làm trong một lần ngồi, nói rõ chờ
-      task nào, và ghi rõ phần KHÔNG làm. Thiếu tiêu chí nghiệm thu thì nói ra chứ đừng tự đặt hộ PO.
-      Lưu plan bằng workflow_emit_artifact.
-
+      Toàn bộ spec ở {{specs}} đã nằm sẵn trong phần "Tagged sources" — đọc ngay ở đó, đừng đi tìm
+      lại. Có nhiều spec thì đọc hết rồi nói rõ chỗ nào chồng lấn hoặc mâu thuẫn giữa chúng; đây là
+      thứ dễ sót nhất khi chia task từ nhiều tài liệu. Soát đủ bốn mục (tiêu chí nghiệm thu kiểm
+      được · bốn trạng thái loading/rỗng/lỗi/mất mạng · dùng API nào · lần này không làm gì), đối
+      chiếu code hiện tại. Ra danh sách task: mỗi task xong-là-kiểm-được, một người làm trong một
+      lần ngồi, nói rõ chờ task nào, và ghi rõ phần KHÔNG làm. Thiếu tiêu chí nghiệm thu thì nói ra
+      chứ đừng tự đặt hộ PO. Lưu plan bằng workflow_emit_artifact.
   - key: create-tickets
     type: agent
     title: Tạo ticket vào sprint (bỏ qua cái đã có)
     agentName: jira-pm
-    dependsOn: [read-specs]
-    permissionMode: acceptEdits
+    dependsOn:
+      - read-specs
+    permissionMode: bypassPermissions
     instruction: >-
-      Đọc plan ở artifact. TRƯỚC KHI TẠO: jira_search ticket đang mở trong {{jiraProject}}
-      (và dưới {{parentTicket}} nếu có) — task nào đã có rồi thì dùng lại, không tạo lại.
-      Tạo phần còn lại trong project {{jiraProject}} (subtask dưới {{parentTicket}} nếu có).
-      Sprint "{{sprint}}": jira_ensure_sprint rồi jira_add_to_sprint cho cả ticket mới lẫn ticket cũ
-      thuộc đợt này. Sprint để trống thì ticket nằm backlog — nói rõ ra.
-      Kết thúc: báo bằng số (tạo mới mấy, dùng lại mấy, vào sprint nào) và lưu bảng
-      khoá ticket → tiêu đề → phụ thuộc bằng workflow_emit_artifact.
-
+      Đọc plan ở artifact. TRƯỚC KHI TẠO: jira_search ticket đang mở trong {{jiraProject}} (và dưới
+      {{parentTicket}} nếu có) — task nào đã có rồi thì dùng lại, không tạo lại. Tạo phần còn lại
+      trong project {{jiraProject}} (subtask dưới {{parentTicket}} nếu có). Sprint "{{sprint}}":
+      jira_ensure_sprint rồi jira_add_to_sprint cho cả ticket mới lẫn ticket cũ thuộc đợt này.
+      Sprint để trống thì ticket nằm backlog — nói rõ ra. Kết thúc: báo bằng số (tạo mới mấy, dùng
+      lại mấy, vào sprint nào) và lưu bảng khoá ticket → tiêu đề → phụ thuộc bằng
+      workflow_emit_artifact.
   - key: review-board
     type: manual
     title: Xem lại board
-    dependsOn: [create-tickets]
-    instruction: >-
-      Mở board và đọc lại. Ổn thì chạy workflow nhóm fe / ios / fe-be / ios-be cho từng ticket.
+    dependsOn:
+      - create-tickets
+    instruction: Mở board và đọc lại. Ổn thì chạy workflow nhóm fe / ios / fe-be / ios-be cho từng ticket.

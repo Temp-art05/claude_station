@@ -62,3 +62,19 @@ Trong ô Goal và ô instruction, gõ `@` để tag: `@jira:KEY`, `@ticket:KEY-1
 - Project command: các step `gate` gọi command theo tên — `Test` (fe, be, fixbug, other) và `Build`
   (ios). Chưa khai trong tab Commands thì run **dừng ngay tại gate** với đúng lý do đó, không loop
   ba vòng rồi mới báo.
+
+## Quyền của step: `bypassPermissions`
+
+Mọi step agent chạy ở `bypassPermissions`. Lý do đơn giản: `acceptEdits` chỉ tự duyệt **sửa file**,
+nên `git status` ở step đầu đã dừng hỏi — một run không người canh sẽ đứng ở đó tới hết giờ.
+
+Đây là đánh đổi có thật, nói thẳng: **step chạy được mọi lệnh mà không hỏi**. Ba thứ giữ nó lại:
+
+- Step làm trong **worktree riêng** khi workflow khai `isolate`, hoặc trong repo của run — không phải
+  thư mục bạn đang gõ.
+- **Merge vẫn là người bấm**, và đẩy store cũng vậy. Đó là ranh giới duy nhất không được nới.
+- Cổng confirm: step nào khai `requiresConfirm` thì dừng lại cho bạn đọc và trao đổi trong terminal
+  của chính nó trước khi đi tiếp.
+
+Muốn chặt hơn cho một step cụ thể thì đổi `permissionMode` của step đó về `acceptEdits` — và chấp
+nhận nó sẽ dừng hỏi ở lệnh shell đầu tiên.

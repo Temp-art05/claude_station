@@ -12,7 +12,7 @@ description: >-
 folder: ios-be
 inputs:
   - key: docs
-    label: Spec (link GitHub, tuỳ chọn)
+    label: 'Spec (link GitHub, tuỳ chọn)'
     type: docs
   - key: jiraTicket
     label: Ticket (tuỳ chọn)
@@ -31,111 +31,110 @@ inputs:
     label: Repo BE (label path)
     type: path
     defaultValue: BE
-
 steps:
   - key: plan
     type: agent
-    title: Plan chung, chốt contract iOS ⨯ BE
+    title: 'Plan chung, chốt contract iOS ⨯ BE'
     agentName: spec-reader
     requiresConfirm: true
-    permissionMode: default
+    permissionMode: bypassPermissions
     instruction: >-
-      Spec và ticket đã nằm trong "Tagged sources". Không có cả hai → workflow_ask.
-      Đọc cả hai repo. Plan tách rõ: phần iOS (tầng nào, màn nào), phần BE, và **contract giữa hai
-      bên** (endpoint, field, kiểu, nullable, mã lỗi). Chốt sai chỗ này thì cả hai nhánh cùng sai.
-      Soát đủ tiêu chí nghiệm thu · bốn trạng thái · API nào · lần này không làm gì.
-      Ghi plan và workflow_emit_artifact.
-
+      Spec và ticket đã nằm trong "Tagged sources". Không có cả hai → workflow_ask. Đọc cả hai repo.
+      Plan tách rõ: phần iOS (tầng nào, màn nào), phần BE, và **contract giữa hai bên** (endpoint,
+      field, kiểu, nullable, mã lỗi). Chốt sai chỗ này thì cả hai nhánh cùng sai. Soát đủ tiêu chí
+      nghiệm thu · bốn trạng thái · API nào · lần này không làm gì. Ghi plan và
+      workflow_emit_artifact.
   - key: jira-tasks
     type: agent
     title: Chia task lên Jira (bỏ qua cái đã có)
     agentName: jira-pm
-    dependsOn: [plan]
-    permissionMode: acceptEdits
+    dependsOn:
+      - plan
+    permissionMode: bypassPermissions
     instruction: >-
-      Cả {{jiraProject}} lẫn {{jiraTicket}} đều trống → nói rõ "không gắn Jira" rồi kết thúc.
-      Ngược lại: tra ticket đang mở TRƯỚC, dùng lại cái đã có; tạo phần còn thiếu, ghi rõ task nào
-      thuộc iOS task nào thuộc BE. Đẩy vào sprint "{{sprint}}" nếu có nêu.
-
+      Cả {{jiraProject}} lẫn {{jiraTicket}} đều trống → nói rõ "không gắn Jira" rồi kết thúc. Ngược
+      lại: tra ticket đang mở TRƯỚC, dùng lại cái đã có; tạo phần còn thiếu, ghi rõ task nào thuộc
+      iOS task nào thuộc BE. Đẩy vào sprint "{{sprint}}" nếu có nêu.
   - key: impl-ios
     type: agent
     title: iOS
     agentName: ios-dev
-    cwdLabel: "{{iosLabel}}"
-    dependsOn: [jira-tasks]
-    permissionMode: acceptEdits
+    cwdLabel: '{{iosLabel}}'
+    dependsOn:
+      - jira-tasks
+    permissionMode: bypassPermissions
     instruction: >-
-      Làm phần iOS trong plan. CHỈ chạm repo iOS — repo BE đang được sửa song song.
-      Clean Architecture + MVVM, Factory DI, DesignSystem tokens, Accessibility Identifiers.
-      Theo đúng contract đã chốt; thấy contract sai thì workflow_ask, đừng tự lách phía mình.
-
+      Làm phần iOS trong plan. CHỈ chạm repo iOS — repo BE đang được sửa song song. Clean
+      Architecture + MVVM, Factory DI, DesignSystem tokens, Accessibility Identifiers. Theo đúng
+      contract đã chốt; thấy contract sai thì workflow_ask, đừng tự lách phía mình.
   - key: impl-be
     type: agent
     title: BE
     agentName: fe-dev
-    cwdLabel: "{{beLabel}}"
-    dependsOn: [jira-tasks]
-    permissionMode: acceptEdits
+    cwdLabel: '{{beLabel}}'
+    dependsOn:
+      - jira-tasks
+    permissionMode: bypassPermissions
     instruction: >-
-      Làm phần BE trong plan. CHỈ chạm repo BE.
-      **Không đổi API contract để app dễ hơn** — bản app cũ đang nằm trên máy người dùng vẫn phải
-      chạy được, và đó là lý do đổi contract không bao giờ là việc làm một mình.
-
+      Làm phần BE trong plan. CHỈ chạm repo BE. **Không đổi API contract để app dễ hơn** — bản app
+      cũ đang nằm trên máy người dùng vẫn phải chạy được, và đó là lý do đổi contract không bao giờ
+      là việc làm một mình.
   - key: verify-ios
     type: gate
     title: iOS build
     commandName: Build
-    cwdLabel: "{{iosLabel}}"
-    dependsOn: [impl-ios]
+    cwdLabel: '{{iosLabel}}'
+    dependsOn:
+      - impl-ios
     onFail: impl-ios
     maxLoops: 2
-
   - key: verify-be
     type: gate
     title: BE test
     commandName: Test
-    cwdLabel: "{{beLabel}}"
-    dependsOn: [impl-be]
+    cwdLabel: '{{beLabel}}'
+    dependsOn:
+      - impl-be
     onFail: impl-be
     maxLoops: 2
-
   - key: review
     type: agent
-    title: Review cả hai phía, soi chỗ giao
+    title: 'Review cả hai phía, soi chỗ giao'
     agentName: spec-reader
-    dependsOn: [verify-ios, verify-be]
-    permissionMode: default
+    dependsOn:
+      - verify-ios
+      - verify-be
+    permissionMode: bypassPermissions
     instruction: >-
       Đọc diff cả hai repo. Ngoài ba nhóm thường lệ (lỗi đúng/sai · hiệu năng · chuẩn repo), soi kỹ
       **chỗ giao**: tên field, kiểu, nullable, mã lỗi, thứ tự gọi — và đặc biệt là app phiên bản cũ
-      còn chạy được với BE mới không.
-      Ghi danh sách phải sửa ra artifact, nói rõ mỗi mục thuộc repo nào. Không sửa code.
-
+      còn chạy được với BE mới không. Ghi danh sách phải sửa ra artifact, nói rõ mỗi mục thuộc repo
+      nào. Không sửa code.
   - key: fix-review
     type: agent
     title: Sửa theo review
     agentName: ios-dev
-    dependsOn: [review]
-    permissionMode: acceptEdits
-    instruction: >-
-      Sửa các mục trong artifact review, đúng repo của từng mục. Không có gì thì nói rõ và kết thúc.
-
+    dependsOn:
+      - review
+    permissionMode: bypassPermissions
+    instruction: 'Sửa các mục trong artifact review, đúng repo của từng mục. Không có gì thì nói rõ và kết thúc.'
   - key: pr
     type: agent
     title: Mở PR cho từng repo
     agentName: ios-dev
-    dependsOn: [fix-review]
-    permissionMode: acceptEdits
+    dependsOn:
+      - fix-review
+    permissionMode: bypassPermissions
     instruction: >-
-      Commit dưới tên tôi, mở PR **riêng cho từng repo có thay đổi**, mô tả tiếng Việt, nói rõ PR này
-      đi kèm PR nào bên repo kia và thứ tự merge an toàn (thường là BE trước). KHÔNG merge.
-
+      Commit dưới tên tôi, mở PR **riêng cho từng repo có thay đổi**, mô tả tiếng Việt, nói rõ PR
+      này đi kèm PR nào bên repo kia và thứ tự merge an toàn (thường là BE trước). KHÔNG merge.
   - key: jira-report
     type: agent
     title: Báo lại Jira
     agentName: jira-pm
-    dependsOn: [pr]
-    permissionMode: acceptEdits
+    dependsOn:
+      - pr
+    permissionMode: bypassPermissions
     instruction: >-
       Không gắn Jira thì kết thúc. Ngược lại: kéo task đã xong sang trạng thái review, comment kèm
       cả hai link PR và thứ tự merge. KHÔNG tự Done.
