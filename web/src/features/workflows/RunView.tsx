@@ -56,11 +56,30 @@ export function RunView({
   // Bumped on restart: TerminalPane stops reconnecting once the PTY dies, so a
   // fresh mount is the only way to re-attach.
   const [terminalEpoch, setTerminalEpoch] = useState(0);
+  // Set when the runbook is (re)sent by hand — the pane types whatever lands here.
+  const [resent, setResent] = useState<string | null>(null);
   const restartTerminal = useRestartTerminal(projectId);
 
   const { data: run } = useQuery({
     queryKey: ["workflow-run", runId],
     queryFn: () => api.get<WorkflowRun>(`/api/workflow-runs/${runId}`),
+  });
+
+  /**
+   * The runbook, fetched rather than remembered.
+   *
+   * A terminal-mode run is driven by the text typed into its CLI, and that text
+   * used to live only in the tab that started the run. Reload, and the run sat
+   * there with every step pending next to an empty prompt. Asked for again here
+   * whenever the run hasn't started a single step, so a reopened run seeds itself.
+   */
+  const untouched =
+    run?.mode === "terminal" && run.runSteps.every((s) => s.status === "pending") && !seed;
+  const { data: runbook } = useQuery({
+    queryKey: ["workflow-runbook", runId],
+    queryFn: () => api.get<{ seed: string }>(`/api/workflow-runs/${runId}/runbook`),
+    enabled: untouched === true,
+    staleTime: Infinity,
   });
 
   // Any WS event just invalidates: one source of truth (the GET), no local merge.
@@ -300,12 +319,27 @@ export function RunView({
             >
               <RotateCw size={16} /> Restart
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Gõ lại runbook vào terminal — dùng khi terminal trống hoặc bạn đã xoá nó đi"
+              onClick={async () => {
+                const { seed: text } = await api.get<{ seed: string }>(
+                  `/api/workflow-runs/${runId}/runbook`,
+                );
+                // New identity each time, so the pane treats it as a fresh seed.
+                setResent(`${text}\n`);
+                setTerminalEpoch((e) => e + 1);
+              }}
+            >
+              Gửi lại runbook
+            </Button>
           </div>
           <div className="h-[46vh] min-h-[300px] overflow-hidden rounded-lg border border-edge">
             <TerminalPane
               key={terminalEpoch}
               terminalId={run.terminalId}
-              seedText={seed}
+              seedText={seed ?? resent ?? (untouched ? runbook?.seed : undefined)}
               onSeedSent={onSeedSent}
             />
           </div>

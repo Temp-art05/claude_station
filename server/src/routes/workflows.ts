@@ -186,7 +186,9 @@ export function workflowRoutes(app: FastifyInstance): void {
   app.post<{ Params: { id: string; workflowId: string } }>(
     "/api/projects/:id/workflows/:workflowId/terminal-run",
     async (req, reply) => {
-      const { id, workflowId } = z.object({ id: z.string(), workflowId: z.string() }).parse(req.params);
+      const { id, workflowId } = z
+        .object({ id: z.string(), workflowId: z.string() })
+        .parse(req.params);
       const { goal, cwdPathId, envSetId, useWorktree } = z
         .object({
           goal: z.string().max(4000).optional(),
@@ -225,20 +227,17 @@ export function workflowRoutes(app: FastifyInstance): void {
   );
 
   /** Terminal-mode runs report step transitions here (curl from the PTY). */
-  app.post<{ Params: { id: string } }>(
-    "/api/workflow-runs/:id/terminal-progress",
-    async (req) => {
-      const { id } = idParam.parse(req.params);
-      const input = z
-        .object({
-          step: z.string().min(1),
-          status: z.enum(["running", "done", "failed", "skipped"]),
-          note: z.string().optional(),
-        })
-        .parse(req.body);
-      return reportTerminalProgress(id, input);
-    },
-  );
+  app.post<{ Params: { id: string } }>("/api/workflow-runs/:id/terminal-progress", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const input = z
+      .object({
+        step: z.string().min(1),
+        status: z.enum(["running", "done", "failed", "skipped"]),
+        note: z.string().optional(),
+      })
+      .parse(req.body);
+    return reportTerminalProgress(id, input);
+  });
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/workflow-runs", async (req, reply) => {
     const { id } = idParam.parse(req.params);
@@ -255,6 +254,23 @@ export function workflowRoutes(app: FastifyInstance): void {
     const run = getRun(id);
     if (!run) return reply.code(404).send({ error: "Run not found" });
     return run;
+  });
+
+  /**
+   * The runbook for a terminal-mode run, re-derivable at any time.
+   *
+   * It used to exist only in the browser tab that started the run, typed into the
+   * CLI once. Reload the page and it was gone — leaving a run whose steps sit
+   * pending for ever next to an empty terminal, which reads exactly like "I
+   * pressed Run and nothing happened".
+   */
+  app.get<{ Params: { id: string } }>("/api/workflow-runs/:id/runbook", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const run = getRun(id);
+    if (!run) return reply.code(404).send({ error: "Run not found" });
+    const workflow = getWorkflow(run.workflowId);
+    if (!workflow) return reply.code(404).send({ error: "Workflow not found" });
+    return { seed: renderWorkflowRunbook(workflow, run.goal ?? undefined, { runId: run.id }) };
   });
 
   app.post<{ Params: { id: string } }>("/api/workflow-runs/:id/answer", async (req) => {
