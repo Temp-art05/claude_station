@@ -2,7 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type {
-  PermissionMode,
+  Workflow,
   WorkflowArtifact,
   WorkflowQuestion,
   WorkflowRun,
@@ -11,14 +11,18 @@ import type {
   WorkflowStep,
 } from "@claude-station/shared";
 import { db, schema } from "../db";
+import { setting } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
-import { interrupt, isRunning, sendUserMessage } from "./claude-session";
+import { dependentsOf as dependentsOfKey, readySteps as readyStepsOf } from "../lib/workflow-graph";
+import { agentDefinition } from "./agents";
+import { interrupt, isRunning } from "./claude-session";
+import { runTurnInTerminal, terminalForStep } from "./workflow-step-terminal";
 import { startRun as startCommandRun } from "./commands";
+import { normalizeMentions, resolveMentions } from "./mentions";
 import { evaluateCondition, ConditionError } from "./workflow-condition";
 import { getWorkflow } from "./workflows";
-import { createChatSession } from "./sessions";
 import { notify } from "./notify";
 
 export type RunEvent =
@@ -74,7 +78,9 @@ function toRunStep(row: typeof schema.workflowRunSteps.$inferSelect): WorkflowRu
     stepKey: row.stepKey,
     status: row.status as WorkflowRunStepStatus,
     attempt: row.attempt,
+    loops: row.loops,
     sessionId: row.sessionId,
+    terminalId: row.terminalId,
     commandRunId: row.commandRunId,
     note: row.note,
     error: row.error,
@@ -128,6 +134,9 @@ export function getRun(runId: string): WorkflowRun | null {
     cwd: row.cwd,
     envSetId: row.envSetId,
     useWorktree: row.useWorktree,
+    autoMode: row.autoMode,
+    askPolicy: row.askPolicy === "assume" ? "assume" : "stop",
+    inputs: parseInputs(row.inputs),
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     steps,
@@ -161,6 +170,77 @@ export function getRun(runId: string): WorkflowRun | null {
       })),
     definitionStale,
   };
+}
+
+function parseInputs(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Check what was filled in, and turn the typed values into tags the run's goal
+ * carries.
+ *
+ * Making the inputs part of the goal rather than a private side-channel does
+ * three things at once: every step sees them, the run view shows what this run
+ * was actually pointed at, and a `docs` link goes down exactly the same path as
+ * a link somebody tagged by hand — so there is one way documents get read, not two.
+ */
+function prepareInputs(
+  workflow: Workflow,
+  given: Record<string, string>,
+  userGoal?: string,
+): { values: Record<string, string>; goal: string | null } {
+  const values: Record<string, string> = {};
+  const lines: string[] = [];
+
+  for (const def of workflow.inputs) {
+    const value = (given[def.key] ?? def.defaultValue ?? "").trim();
+    if (!value) {
+      if (def.required) throw badRequest(`"${def.label}" is required to start this workflow`);
+      continue;
+    }
+    if (def.type === "choice" && def.options.length > 0 && !def.options.includes(value)) {
+      throw badRequest(`"${def.label}" must be one of: ${def.options.join(", ")}`);
+    }
+    values[def.key] = value;
+
+    switch (def.type) {
+      case "docs":
+        lines.push(`- ${def.label}: ${normalizeMentions(value)}`);
+        break;
+      case "jira-ticket":
+        lines.push(`- ${def.label}: @ticket:${value.toUpperCase()}`);
+        break;
+      case "jira-project":
+        lines.push(`- ${def.label}: @jira:${value.toUpperCase()}`);
+        break;
+      case "jira-sprint":
+        // Deliberately not a tag: the sprint may not exist yet, and the agent is
+        // the one that decides between reusing a name and creating it.
+        lines.push(`- ${def.label}: sprint "${value}" (dùng lại nếu đã có, chưa có thì tạo)`);
+        break;
+      case "repo":
+        lines.push(`- ${def.label}: @repo:${value}`);
+        break;
+      default:
+        lines.push(`- ${def.label}: ${value}`);
+    }
+  }
+
+  const goalText = (userGoal ?? "").trim();
+  const parts = [goalText, lines.length > 0 ? ["## Inputs for this run", ...lines].join("\n") : ""]
+    .filter(Boolean)
+    .join("\n\n");
+  return { values, goal: parts || null };
 }
 
 /** Comparing snapshots ignores row ids, which differ after any step rewrite. */
@@ -200,7 +280,11 @@ export function listRuns(projectId: string, limit = 50) {
 
 // ── Writes ────────────────────────────────────────────────────────────────────
 
-function setRunStatus(runId: string, status: WorkflowRun["status"], currentStepKey?: string | null) {
+function setRunStatus(
+  runId: string,
+  status: WorkflowRun["status"],
+  currentStepKey?: string | null,
+) {
   db.update(schema.workflowRuns)
     .set({
       status,
@@ -275,11 +359,34 @@ export function createRun(
     useWorktree?: boolean;
     mode?: "engine" | "terminal";
     terminalId?: string;
+    autoMode?: boolean;
+    askPolicy?: "stop" | "assume";
+    triggerId?: string | null;
+    inputs?: Record<string, string>;
   },
 ): WorkflowRun {
   const workflow = getWorkflow(input.workflowId);
   if (!workflow) throw badRequest("Workflow not found");
   if (workflow.steps.length === 0) throw badRequest("This workflow has no steps");
+
+  // Every agent a step names has to exist before anything starts. Checked here
+  // rather than at import, because importing a workflow before its agent is a
+  // normal order to do things in — but discovering the gap at step four, after
+  // three steps have already edited files, is not.
+  const missing = [
+    ...new Set(
+      workflow.steps
+        .filter((s) => s.type === "agent" && s.agentName)
+        .map((s) => s.agentName!)
+        .filter((name) => agentDefinition(name) === null),
+    ),
+  ];
+  if (missing.length > 0) {
+    throw badRequest(
+      `This workflow needs ${missing.length > 1 ? "agents" : "an agent"} that isn't installed: ` +
+        `${missing.join(", ")}. Import ${missing.length > 1 ? "them" : "it"} on the Agents page first.`,
+    );
+  }
 
   const paths = db
     .select()
@@ -293,6 +400,8 @@ export function createRun(
     : (paths.find((p) => p.isDefault) ?? paths[0]);
   if (!chosen) throw badRequest("cwdPathId not found in this project");
 
+  const { values, goal } = prepareInputs(workflow, input.inputs ?? {}, input.goal);
+
   const id = newId();
   const now = nowIso();
   db.insert(schema.workflowRuns)
@@ -301,7 +410,7 @@ export function createRun(
       projectId,
       workflowId: workflow.id,
       title: input.title ?? `${workflow.name} · ${new Date().toLocaleString()}`,
-      goal: input.goal?.trim() || null,
+      goal,
       mode: input.mode ?? "engine",
       terminalId: input.terminalId ?? null,
       // Snapshot: later edits to the workflow must not rewrite this run.
@@ -312,6 +421,16 @@ export function createRun(
       cwd: chosen.path,
       envSetId: input.envSetId ?? null,
       useWorktree: input.useWorktree ?? false,
+      autoMode: input.autoMode ?? false,
+      askPolicy: input.askPolicy ?? "stop",
+      // Only an unattended run gets a clock: a run somebody is watching ends when
+      // they say so, and killing it on a timer would be the surprise.
+      deadlineAt: input.autoMode
+        ? new Date(Date.now() + setting("workflows.runBudgetMinutes") * 60_000).toISOString()
+        : null,
+      assumptions: null,
+      inputs: Object.keys(values).length > 0 ? JSON.stringify(values) : null,
+      triggerId: input.triggerId ?? null,
       startedAt: now,
       finishedAt: null,
     })
@@ -346,7 +465,9 @@ export function reportTerminalProgress(
   if (run.mode !== "terminal") throw badRequest("Not a terminal-mode run");
   if (run.status === "cancelled") throw badRequest("Run was cancelled");
   if (!run.steps.some((s) => s.key === input.step)) {
-    throw badRequest(`Unknown step "${input.step}" — keys: ${run.steps.map((s) => s.key).join(", ")}`);
+    throw badRequest(
+      `Unknown step "${input.step}" — keys: ${run.steps.map((s) => s.key).join(", ")}`,
+    );
   }
 
   const now = nowIso();
@@ -378,14 +499,31 @@ function conditionContext(run: WorkflowRun) {
  * artifacts are, and what the user answered. Paths, not contents — pasting every
  * previous step's output would exhaust the context window by step four.
  */
-function stepContext(run: WorkflowRun, step: WorkflowStep, index: number): string {
+/**
+ * Fill `{{key}}` from what was entered at Start.
+ *
+ * An unknown key is left standing rather than blanked: a step told to read
+ * "{{docs}}" and handed an empty string would go looking for something else,
+ * while the literal braces say plainly that nothing was supplied.
+ */
+export function interpolate(text: string, values: Record<string, string>): string {
+  return text.replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g, (whole, key: string) => {
+    const value = values[key];
+    return value === undefined || value === "" ? whole : value;
+  });
+}
+
+async function stepContext(run: WorkflowRun, step: WorkflowStep, index: number): Promise<string> {
   const lines: string[] = [
     `## Workflow: ${run.title}`,
     `Step ${index + 1}/${run.steps.length} — ${step.title} (key: ${step.key})`,
   ];
 
+  const goal = run.goal ? interpolate(run.goal, run.inputs) : "";
+  const instruction = step.instruction ? interpolate(step.instruction, run.inputs) : "";
+
   // The user's own words for what this run is about — every step sees them.
-  if (run.goal) lines.push("", "## Goal of this run (from the user)", run.goal);
+  if (goal) lines.push("", "## Goal of this run (from the user)", goal);
 
   const finished = run.runSteps.filter((s) => s.status === "done" || s.status === "skipped");
   if (finished.length > 0) {
@@ -425,7 +563,22 @@ function stepContext(run: WorkflowRun, step: WorkflowStep, index: number): strin
     );
   }
 
-  if (step.instruction) lines.push("", "## Your task for this step", step.instruction);
+  if (instruction) lines.push("", "## Your task for this step", instruction);
+
+  // Anything tagged with @ is read here, not by the agent: a step that has to go
+  // and fetch its own spec spends a turn doing it, and a run's turns are the one
+  // thing it has a budget of.
+  const { blocks, problems } = await resolveMentions(`${goal}\n${instruction}`);
+  if (blocks.length > 0) {
+    lines.push("", "## Tagged sources — already fetched for you", ...blocks);
+  }
+  if (problems.length > 0) {
+    lines.push(
+      "",
+      "## Tagged sources that could NOT be read — do not guess at what they said",
+      ...problems.map((p) => `- ${p}`),
+    );
+  }
   return lines.join("\n");
 }
 
@@ -463,7 +616,12 @@ export function emitArtifactRecord(
 export function recordQuestions(
   runId: string,
   runStepId: string,
-  questions: { key: string; question: string; kind: WorkflowQuestion["kind"]; options?: string[] }[],
+  questions: {
+    key: string;
+    question: string;
+    kind: WorkflowQuestion["kind"];
+    options?: string[];
+  }[],
 ): WorkflowQuestion[] {
   const now = nowIso();
   for (const q of questions) {
@@ -501,6 +659,91 @@ export function markAwaitingInput(runId: string): void {
   setRunStatus(runId, "awaiting_input");
 }
 
+/**
+ * Answer an unattended run's own questions, when it was started with
+ * `askPolicy: "assume"`.
+ *
+ * Returns null for every other run, which is what makes `stop` the honest
+ * default: a question then really does stop the run, and nothing here has
+ * quietly decided on the user's behalf.
+ *
+ * The answer is deliberately not a decision — it tells the agent to choose and
+ * to write down what it chose. A machine-invented "yes" to "should I change the
+ * API contract?" would be far worse than a wait.
+ */
+export function assumeAnswers(
+  runId: string,
+  questions: { key: string; question: string }[],
+): Record<string, string> | null {
+  const run = getRun(runId);
+  if (!run || !run.autoMode || run.askPolicy !== "assume") return null;
+
+  const instruction =
+    "Nobody is watching this run. Choose the most reasonable option, keep the change " +
+    "reversible, and write the assumption into your summary so it reaches the PR. " +
+    "If the question is about money, auth, user data, permissions, deleting data, a " +
+    "schema or an API contract, do NOT choose — stop and say you need a person.";
+
+  const answers: Record<string, string> = {};
+  for (const q of questions) answers[q.key] = instruction;
+
+  const now = nowIso();
+  for (const q of getRun(runId)!.questions) {
+    if (q.answer === null && q.key in answers) {
+      db.update(schema.workflowQuestions)
+        .set({ answer: answers[q.key]!, answeredAt: now })
+        .where(eq(schema.workflowQuestions.id, q.id))
+        .run();
+    }
+  }
+
+  const row = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).get();
+  const log = [
+    row?.assumptions ?? "",
+    ...questions.map((q) => `- ${now} · ${q.key}: ${q.question}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  db.update(schema.workflowRuns)
+    .set({ assumptions: log })
+    .where(eq(schema.workflowRuns.id, runId))
+    .run();
+
+  return answers;
+}
+
+/**
+ * Where a step runs. A step may name a project path by label, which is how one
+ * branch of a run works on the iOS app while another works on the backend —
+ * without it every step inherits the run's single cwd and "parallel" would mean
+ * two agents in one working tree.
+ */
+function resolveStepPath(
+  run: WorkflowRun,
+  step: WorkflowStep,
+): { id: string | null; path: string } {
+  // Interpolated: a workflow can take "which repo" as an input instead of
+  // hardcoding one label and being useless in the next project. A placeholder
+  // nobody filled in falls back to the run's own directory.
+  const label = step.cwdLabel ? interpolate(step.cwdLabel, run.inputs).trim() : "";
+  if (!label || label.includes("{{")) return { id: null, path: run.cwd };
+  const match = db
+    .select()
+    .from(schema.projectPaths)
+    .where(eq(schema.projectPaths.projectId, run.projectId))
+    .all()
+    .find((p) => p.label.toLowerCase() === label.toLowerCase());
+  return match ? { id: match.id, path: match.path } : { id: null, path: run.cwd };
+}
+
+/**
+ * One agent step, in a real terminal.
+ *
+ * The step's turn is typed into a `claude` PTY and the engine waits for the
+ * ledger to say that turn closed. Everything the engine does around it —
+ * scheduling, gates, retries, questions — is unchanged; what changed is that the
+ * work is visible while it happens instead of afterwards.
+ */
 async function runAgentStep(
   run: WorkflowRun,
   step: WorkflowStep,
@@ -508,63 +751,58 @@ async function runAgentStep(
   attempt: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const existing = run.runSteps.find((s) => s.stepKey === step.key);
-  let sessionId = existing?.sessionId ?? null;
+  const target = resolveStepPath(run, step);
 
-  // Retries reuse the same session so the agent keeps its context.
-  if (!sessionId) {
-    const session = createChatSession(run.projectId, {
-      title: `${run.title} · ${step.title}`,
-      cwdPathId: undefined,
-      permissionMode: (step.permissionMode ?? "default") as PermissionMode,
-      origin: `workflow:${run.id}`,
-      envSetId: run.envSetId,
-      useWorktree: run.useWorktree,
-      agentName: step.agentName,
-      kind: "workflow",
-      workflowRunStepId: existing?.id ?? null,
-    });
-    sessionId = session.id;
+  let terminalId: string;
+  let claudeSessionId: string;
+  try {
+    ({ terminalId, claudeSessionId } = terminalForStep(run, step, target.id));
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
   upsertRunStep(run.id, step.key, {
     status: "running",
     attempt,
-    sessionId,
+    terminalId,
     startedAt: existing?.startedAt ?? nowIso(),
     error: null,
   });
 
   const prompt =
     attempt > 1
-      ? `${stepContext(run, step, index)}\n\n[Retry ${attempt}: the previous attempt failed. Fix the cause and finish the step.]`
-      : stepContext(run, step, index);
+      ? `${await stepContext(run, step, index)}\n\n[Retry ${attempt}: the previous attempt failed. Fix the cause and finish the step.]`
+      : await stepContext(run, step, index);
 
-  try {
-    await sendUserMessage(sessionId, prompt);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  const session = db
-    .select()
-    .from(schema.chatSessions)
-    .where(eq(schema.chatSessions.id, sessionId))
-    .get();
-  if (session?.status === "error") return { ok: false, error: "The agent turn ended in an error" };
-  return { ok: true };
+  const row = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, run.id)).get();
+  return runTurnInTerminal({
+    terminalId,
+    claudeSessionId,
+    prompt,
+    deadlineAt: row?.deadlineAt ? Date.parse(row.deadlineAt) : undefined,
+  });
 }
 
 async function runCommandStep(
   run: WorkflowRun,
   step: WorkflowStep,
   attempt: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; tail?: string }> {
   // Commands are resolved by name against this project's configured commands.
-  const paths = db
+  // A step naming a path label looks there first: two repos may both have a
+  // command called `test`, and running the wrong one passes for the wrong reason.
+  const allPaths = db
     .select()
     .from(schema.projectPaths)
     .where(eq(schema.projectPaths.projectId, run.projectId))
     .all();
+  const preferredId = resolveStepPath(run, step).id;
+  const paths = preferredId
+    ? [
+        ...allPaths.filter((p) => p.id === preferredId),
+        ...allPaths.filter((p) => p.id !== preferredId),
+      ]
+    : allPaths;
   let commandId: string | null = null;
   for (const path of paths) {
     const match = db
@@ -599,9 +837,38 @@ async function runCommandStep(
     error: null,
   });
 
-  const { exitCode } = await done;
-  if (exitCode === 0) return { ok: true };
-  return { ok: false, error: `Command exited ${exitCode ?? "by signal"}` };
+  const { exitCode, tail } = await done;
+  if (exitCode === 0) return { ok: true, tail };
+  return { ok: false, error: `Command exited ${exitCode ?? "by signal"}`, tail };
+}
+
+// ── Scheduling ────────────────────────────────────────────────────────────────
+
+function statusOf(run: WorkflowRun, key: string): WorkflowRunStepStatus {
+  return run.runSteps.find((r) => r.stepKey === key)?.status ?? "pending";
+}
+
+function readySteps(run: WorkflowRun): WorkflowStep[] {
+  return readyStepsOf(run.steps, (key) => statusOf(run, key));
+}
+
+function dependentsOf(run: WorkflowRun, key: string): string[] {
+  return dependentsOfKey(run.steps, key);
+}
+
+/**
+ * What a step holds while it runs. Two steps of one run never claim the same
+ * working tree at the same moment: the repo lock would refuse the second, and a
+ * refusal surfaces as a failed step instead of as a scheduling decision.
+ */
+function claimOf(run: WorkflowRun, step: WorkflowStep): string {
+  return step.isolate ? `worktree:${step.key}` : resolveStepPath(run, step).path;
+}
+
+function isExpired(run: WorkflowRun): boolean {
+  const row = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, run.id)).get();
+  if (!row?.deadlineAt) return false;
+  return Date.parse(row.deadlineAt) < Date.now();
 }
 
 /**
@@ -617,166 +884,322 @@ export async function advanceRun(runId: string): Promise<WorkflowRun> {
       if (!run) throw badRequest("Run not found");
       // Terminal-mode runs are driven by their claude PTY, never by the engine.
       if (run.mode === "terminal") return run;
-      if (run.status === "cancelled" || run.status === "done" || run.status === "failed") return run;
+      if (run.status === "cancelled" || run.status === "done" || run.status === "failed")
+        return run;
 
-      const index = run.steps.findIndex((step) => {
-        const rs = run.runSteps.find((r) => r.stepKey === step.key);
-        // `interrupted` counts as unfinished: a restart-killed step needs an
-        // explicit Retry, and must never be silently stepped over.
-        return (
-          !rs ||
-          rs.status === "pending" ||
-          rs.status === "awaiting_input" ||
-          rs.status === "interrupted"
-        );
-      });
-      if (index === -1) {
-        setRunStatus(runId, "done", null);
-        notify("Workflow finished", run.title);
-        db.insert(schema.workHistory)
-          .values({
-            id: newId(),
-            projectId: run.projectId,
-            kind: "workflow_finished",
-            refId: runId,
-            summary: `Workflow ${run.title} finished`,
-            createdAt: nowIso(),
-          })
-          .run();
+      // An unattended run has nobody to notice it hanging, so it carries a clock.
+      if (isExpired(run)) {
+        for (const rs of run.runSteps) {
+          if (rs.status === "running") {
+            if (rs.sessionId && isRunning(rs.sessionId)) await interrupt(rs.sessionId);
+            upsertRunStep(runId, rs.stepKey, {
+              status: "interrupted",
+              note: "run out of time",
+              finishedAt: nowIso(),
+            });
+          }
+        }
+        setRunStatus(runId, "failed", run.currentStepKey);
+        notify("Workflow out of time", `${run.title} hit its budget and stopped`);
         return getRun(runId)!;
       }
 
-      const step = run.steps[index]!;
-      const runStep = run.runSteps.find((r) => r.stepKey === step.key);
-
-      // A confirm/manual step that's already waiting stays waiting; an
-      // interrupted one waits for the user to retry or skip it.
-      if (runStep?.status === "awaiting_input" || runStep?.status === "interrupted") {
-        setRunStatus(runId, "awaiting_input", step.key);
+      // A step waiting on a person keeps the whole run waiting: a parallel branch
+      // may still be running, but nothing new is dispatched under an open question.
+      const parked = run.runSteps.find(
+        (r) => r.status === "awaiting_input" || r.status === "interrupted",
+      );
+      if (parked) {
+        setRunStatus(runId, "awaiting_input", parked.stepKey);
         return getRun(runId)!;
       }
-
-      // Unanswered questions block everything, whoever raised them.
       if (run.questions.some((q) => q.answer === null)) {
-        setRunStatus(runId, "awaiting_input", step.key);
+        setRunStatus(runId, "awaiting_input", run.currentStepKey);
         return getRun(runId)!;
       }
 
-      let shouldRun: boolean;
-      try {
-        shouldRun = evaluateCondition(step.condition, conditionContext(run));
-      } catch (err) {
-        const message = err instanceof ConditionError ? err.message : String(err);
-        upsertRunStep(runId, step.key, { status: "failed", error: message, finishedAt: nowIso() });
-        setRunStatus(runId, "failed", step.key);
-        emit(runId, { t: "error", message });
+      const ready = readySteps(run);
+      if (ready.length === 0) {
+        const stuck = run.steps.filter((s) => statusOf(run, s.key) === "pending");
+        if (stuck.length === 0) {
+          setRunStatus(runId, "done", null);
+          notify("Workflow finished", run.title);
+          db.insert(schema.workHistory)
+            .values({
+              id: newId(),
+              projectId: run.projectId,
+              kind: "workflow_finished",
+              refId: runId,
+              summary: `Workflow ${run.title} finished`,
+              createdAt: nowIso(),
+            })
+            .run();
+          return getRun(runId)!;
+        }
+        // Nothing can run and something is still pending: every remaining step is
+        // behind a dependency that failed. Say that, rather than sit there.
+        const blocked = stuck.map((s) => s.key).join(", ");
+        setRunStatus(runId, "failed", stuck[0]!.key);
+        emit(runId, { t: "error", message: `Blocked by a failed dependency: ${blocked}` });
+        notify("Workflow blocked", `${run.title}: ${blocked}`);
         return getRun(runId)!;
       }
 
-      if (!shouldRun) {
-        upsertRunStep(runId, step.key, {
-          status: "skipped",
-          note: `condition not met: ${step.condition}`,
-          finishedAt: nowIso(),
-        });
-        continue;
+      // Conditions are evaluated before anything is dispatched, because a skip
+      // changes what else becomes ready.
+      let skipped = false;
+      for (const step of ready) {
+        let shouldRun: boolean;
+        try {
+          shouldRun = evaluateCondition(step.condition, conditionContext(run));
+        } catch (err) {
+          const message = err instanceof ConditionError ? err.message : String(err);
+          upsertRunStep(runId, step.key, {
+            status: "failed",
+            error: message,
+            finishedAt: nowIso(),
+          });
+          setRunStatus(runId, "failed", step.key);
+          emit(runId, { t: "error", message });
+          return getRun(runId)!;
+        }
+        if (!shouldRun) {
+          upsertRunStep(runId, step.key, {
+            status: "skipped",
+            note: `condition not met: ${step.condition}`,
+            finishedAt: nowIso(),
+          });
+          skipped = true;
+        }
       }
+      if (skipped) continue;
 
-      setRunStatus(runId, "running", step.key);
-      const attempt = (runStep?.attempt ?? 1) === 1 ? 1 : runStep!.attempt;
-
-      if (step.type === "confirm" || step.type === "manual") {
-        // Nothing to execute: the step exists to make the human act.
-        const stepRow = upsertRunStep(runId, step.key, {
+      // Steps that exist to make a human act. In an unattended run a `confirm`
+      // is the gate being removed — but `manual` still stops, because it is work
+      // only a person can do and walking past it would be a lie.
+      const human = ready.find((s) => s.type === "confirm" || s.type === "manual");
+      if (human) {
+        if (run.autoMode && human.type === "confirm") {
+          upsertRunStep(runId, human.key, {
+            status: "done",
+            note: "auto-approved (unattended run)",
+            startedAt: nowIso(),
+            finishedAt: nowIso(),
+          });
+          continue;
+        }
+        const stepRow = upsertRunStep(runId, human.key, {
           status: "awaiting_input",
           startedAt: nowIso(),
         });
-        if (step.type === "confirm" && run.questions.length === 0) {
+        if (human.type === "confirm" && run.questions.length === 0) {
           recordQuestions(runId, stepRow.id, [
             {
-              key: `${step.key}-ok`,
-              question: step.instruction ?? "Reviewed and good to continue?",
+              key: `${human.key}-ok`,
+              question: human.instruction ?? "Reviewed and good to continue?",
               kind: "bool",
             },
           ]);
         }
-        setRunStatus(runId, "awaiting_input", step.key);
+        setRunStatus(runId, "awaiting_input", human.key);
         return getRun(runId)!;
       }
 
-      const result =
-        step.type === "agent"
-          ? await runAgentStep(run, step, index, attempt)
-          : await runCommandStep(run, step, attempt);
+      // What can actually run now. Two steps never claim the same working tree:
+      // the repo lock would refuse the second one, and a refusal looks like a
+      // failed step rather than a scheduling decision.
+      const limit = Math.max(1, setting("workflows.maxParallel"));
+      const batch: WorkflowStep[] = [];
+      const claimed = new Set<string>();
+      for (const step of ready) {
+        if (batch.length >= limit) break;
+        const claim = claimOf(run, step);
+        if (claimed.has(claim)) continue;
+        claimed.add(claim);
+        batch.push(step);
+      }
 
-      // The agent may have parked on a workflow_ask during the turn.
+      setRunStatus(runId, "running", batch[0]!.key);
+      const outcomes = await Promise.all(
+        batch.map(async (step) => {
+          const rs = run.runSteps.find((r) => r.stepKey === step.key);
+          const attempt = rs?.attempt ?? 1;
+          const index = run.steps.findIndex((s) => s.key === step.key);
+          const result =
+            step.type === "agent"
+              ? await runAgentStep(run, step, index, attempt)
+              : await runCommandStep(run, step, attempt);
+          return { step, attempt, result };
+        }),
+      );
+
       const after = getRun(runId)!;
       if (after.status === "cancelled") return after;
-      if (after.questions.some((q) => q.answer === null)) {
-        upsertRunStep(runId, step.key, { status: "awaiting_input" });
-        setRunStatus(runId, "awaiting_input", step.key);
-        return getRun(runId)!;
-      }
 
-      if (result.ok) {
-        upsertRunStep(runId, step.key, { status: "done", finishedAt: nowIso(), error: null });
-        // A step that asked for confirmation but never called workflow_ask still
-        // needs a human gate, so synthesise one instead of sailing past it.
-        if (step.requiresConfirm && after.questions.every((q) => q.answer !== null)) {
-          const stepRow = db
-            .select()
-            .from(schema.workflowRunSteps)
-            .where(
-              and(
-                eq(schema.workflowRunSteps.runId, runId),
-                eq(schema.workflowRunSteps.stepKey, step.key),
-              ),
-            )
-            .get()!;
-          const asked = after.questions.some((q) => q.runStepId === stepRow.id);
-          if (!asked) {
-            recordQuestions(runId, stepRow.id, [
-              {
-                key: `${step.key}-confirm`,
-                question: `"${step.title}" finished. Review it and confirm, or say what to change.`,
-                kind: "text",
-              },
-            ]);
-            setRunStatus(runId, "awaiting_input", step.key);
-            return getRun(runId)!;
-          }
-        }
-        continue;
+      let stop = false;
+      for (const { step, attempt, result } of outcomes) {
+        if (settleStep(after, step, attempt, result)) stop = true;
       }
-
-      if (attempt <= step.maxRetries) {
-        upsertRunStep(runId, step.key, {
-          status: "pending",
-          attempt: attempt + 1,
-          error: result.error ?? null,
-        });
-        continue;
-      }
-
-      upsertRunStep(runId, step.key, {
-        status: "failed",
-        error: result.error ?? "Step failed",
-        finishedAt: nowIso(),
-      });
-      // A failed step doesn't necessarily kill the run: a later step may be
-      // conditioned on this failure (test → fix-tests), so keep going.
-      const hasRecovery = run.steps
-        .slice(index + 1)
-        .some((s) => s.condition?.includes(`steps.${step.key}.failed`));
-      if (!hasRecovery) {
-        setRunStatus(runId, "failed", step.key);
-        notify("Workflow failed", `${run.title}: ${step.title}`);
-        return getRun(runId)!;
-      }
+      if (stop) return getRun(runId)!;
     }
   } finally {
     advancing.delete(runId);
   }
+}
+
+/**
+ * Book one finished step and say whether the run must stop here.
+ *
+ * Split out of the loop because with a parallel batch every outcome has to be
+ * recorded — returning at the first one that needs a human would leave its
+ * siblings marked `running` for ever.
+ */
+function settleStep(
+  run: WorkflowRun,
+  step: WorkflowStep,
+  attempt: number,
+  result: { ok: boolean; error?: string; tail?: string },
+): boolean {
+  const runId = run.id;
+  const stepRow = db
+    .select()
+    .from(schema.workflowRunSteps)
+    .where(
+      and(eq(schema.workflowRunSteps.runId, runId), eq(schema.workflowRunSteps.stepKey, step.key)),
+    )
+    .get()!;
+
+  // The agent may have parked on a workflow_ask during its turn.
+  const openQuestion = run.questions.some((q) => q.answer === null && q.runStepId === stepRow.id);
+  if (openQuestion) {
+    upsertRunStep(runId, step.key, { status: "awaiting_input" });
+    setRunStatus(runId, "awaiting_input", step.key);
+    if (run.autoMode) {
+      notify("Workflow needs an answer", `${run.title}: ${step.title}`);
+    }
+    return true;
+  }
+
+  if (step.type === "gate") return settleGate(run, step, stepRow, result);
+
+  if (result.ok) {
+    upsertRunStep(runId, step.key, { status: "done", finishedAt: nowIso(), error: null });
+    // A step that asked for confirmation but never called workflow_ask still needs
+    // a human gate — unless this run was started with nobody watching.
+    if (step.requiresConfirm && !run.autoMode) {
+      const asked = run.questions.some((q) => q.runStepId === stepRow.id);
+      if (!asked) {
+        recordQuestions(runId, stepRow.id, [
+          {
+            key: `${step.key}-confirm`,
+            question: `"${step.title}" finished. Review it and confirm, or say what to change.`,
+            kind: "text",
+          },
+        ]);
+        setRunStatus(runId, "awaiting_input", step.key);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (attempt <= step.maxRetries) {
+    upsertRunStep(runId, step.key, {
+      status: "pending",
+      attempt: attempt + 1,
+      error: result.error ?? null,
+    });
+    return false;
+  }
+
+  upsertRunStep(runId, step.key, {
+    status: "failed",
+    error: result.error ?? "Step failed",
+    finishedAt: nowIso(),
+  });
+  // A failed step doesn't necessarily kill the run: another step may be
+  // conditioned on this failure (test → fix-tests), so let the scheduler decide.
+  const hasRecovery = run.steps.some(
+    (s) => s.key !== step.key && s.condition?.includes(`steps.${step.key}.failed`),
+  );
+  if (!hasRecovery) {
+    setRunStatus(runId, "failed", step.key);
+    notify("Workflow failed", `${run.title}: ${step.title}`);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * A gate is the only step whose failure is a decision rather than an accident:
+ * it sends the run back to the step that has to fix the problem and lets it try
+ * again, which is the implement → test → fix loop people actually run by hand.
+ *
+ * Two brakes, both from the team's own rule: at most three rounds, and stop the
+ * moment two rounds produce identical output — at that point it is not making
+ * progress, it is turning on the spot.
+ */
+function settleGate(
+  run: WorkflowRun,
+  step: WorkflowStep,
+  stepRow: typeof schema.workflowRunSteps.$inferSelect,
+  result: { ok: boolean; error?: string; tail?: string },
+): boolean {
+  const runId = run.id;
+  if (result.ok) {
+    upsertRunStep(runId, step.key, {
+      status: "done",
+      finishedAt: nowIso(),
+      error: null,
+      note: `check passed${stepRow.loops > 0 ? ` after ${stepRow.loops} loop(s)` : ""}`,
+    });
+    return false;
+  }
+
+  const target = step.onFail ?? step.key;
+  const cap = step.maxLoops || 3;
+  const loops = stepRow.loops + 1;
+  const fingerprint = (result.tail ?? "").trim().slice(-2000);
+  const repeated = fingerprint.length > 0 && fingerprint === stepRow.note;
+  // A command this project never declared is not a failing check — it is a gate
+  // pointed at nothing, and sending the run back to "fix it" three times fixes
+  // nothing while burning three agent turns.
+  const noSuchCommand = (result.error ?? "").startsWith("No command named");
+
+  const giveUp = noSuchCommand || loops > cap || repeated || target === step.key;
+  if (giveUp) {
+    upsertRunStep(runId, step.key, {
+      status: "failed",
+      loops,
+      error: noSuchCommand
+        ? result.error
+        : repeated
+          ? `${result.error} — and the same output twice in a row, so it is not getting anywhere`
+          : `${result.error} after ${loops - 1} loop(s) back to "${target}"`,
+      finishedAt: nowIso(),
+    });
+    setRunStatus(runId, "failed", step.key);
+    notify("Workflow gate failed", `${run.title}: ${step.title}`);
+    return true;
+  }
+
+  // Back to the step that has to fix it, and everything downstream of that one,
+  // this gate included. The fixing step keeps its session, so it starts the next
+  // attempt knowing what it already tried.
+  const chain = new Set([target, ...dependentsOf(run, target)]);
+  for (const key of chain) {
+    if (key === step.key) continue;
+    upsertRunStep(runId, key, { status: "pending", finishedAt: null, error: null });
+  }
+  upsertRunStep(runId, step.key, {
+    status: "pending",
+    loops,
+    // The fingerprint of this round, so the next one can tell it apart.
+    note: fingerprint,
+    error: result.error ?? null,
+    finishedAt: null,
+  });
+  return false;
 }
 
 export function answerQuestions(runId: string, answers: Record<string, string>): WorkflowRun {
@@ -860,12 +1283,13 @@ export function retryStep(runId: string, stepKey: string): WorkflowRun {
     finishedAt: null,
     ...(startFresh ? { sessionId: null } : {}),
   });
-  // Later steps must re-run too, or the run would resume past the retried step.
-  const index = run.steps.findIndex((s) => s.key === stepKey);
-  for (const later of run.steps.slice(index + 1)) {
-    const laterRs = run.runSteps.find((s) => s.stepKey === later.key);
+  // Everything downstream must re-run too, or the run would resume past the
+  // retried step with results computed from what it used to produce. Only
+  // downstream: a branch that ran beside this one is untouched by the retry.
+  for (const later of dependentsOf(run, stepKey)) {
+    const laterRs = run.runSteps.find((s) => s.stepKey === later);
     if (laterRs && laterRs.status !== "pending") {
-      upsertRunStep(runId, later.key, { status: "pending", finishedAt: null, error: null });
+      upsertRunStep(runId, later, { status: "pending", finishedAt: null, error: null });
     }
   }
   setRunStatus(runId, "running", stepKey);

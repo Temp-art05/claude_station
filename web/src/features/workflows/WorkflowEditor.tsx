@@ -4,11 +4,13 @@ import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "@/components
 import {
   KNOWLEDGE_FOLDER_SUGGESTIONS,
   PERMISSION_MODE_CHOICES,
+  workflowInputTypeSchema,
   workflowStepTypeSchema,
   type Agent,
   type PermissionMode,
   type Workflow,
   type WorkflowInput,
+  type WorkflowInputDef,
   type WorkflowStepInput,
   type WorkflowStepType,
 } from "@claude-station/shared";
@@ -16,19 +18,22 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
-import { Input, Label, Textarea } from "@/components/ui/input";
+import { Input, Label } from "@/components/ui/input";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { DraftNotice } from "@/components/DraftNotice";
 import { api } from "@/lib/api";
 import { globalKey, useRestorableDraft } from "@/lib/uiStore";
 import { useSaveWorkflow } from "./hooks";
 
 const STEP_TYPES = workflowStepTypeSchema.options;
+const INPUT_TYPES = workflowInputTypeSchema.options;
 
 const TYPE_HINT: Record<WorkflowStepType, string> = {
   agent: "Runs an agent in its own session — you can open it and watch.",
   command: "Runs one of the project's build/test commands by name.",
   confirm: "Stops for you to answer the questions raised so far.",
   manual: "Stops for you to do something outside the app, then tick it off.",
+  gate: "Runs a command and lets the exit code decide: pass, or go back and fix it.",
 };
 
 function blankStep(index: number): WorkflowStepInput {
@@ -43,6 +48,11 @@ function blankStep(index: number): WorkflowStepInput {
     permissionMode: null,
     maxRetries: 0,
     condition: null,
+    dependsOn: [],
+    onFail: null,
+    maxLoops: 0,
+    cwdLabel: null,
+    isolate: false,
   };
 }
 
@@ -51,6 +61,7 @@ function toInput(workflow: Workflow): WorkflowInput {
     name: workflow.name,
     description: workflow.description,
     folder: workflow.folder,
+    inputs: workflow.inputs,
     steps: workflow.steps.map((s) => ({
       key: s.key,
       type: s.type,
@@ -62,6 +73,11 @@ function toInput(workflow: Workflow): WorkflowInput {
       permissionMode: s.permissionMode,
       maxRetries: s.maxRetries,
       condition: s.condition,
+      dependsOn: s.dependsOn,
+      onFail: s.onFail,
+      maxLoops: s.maxLoops,
+      cwdLabel: s.cwdLabel,
+      isolate: s.isolate,
     })),
   };
 }
@@ -85,7 +101,7 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
     globalKey("workflowEditor", workflow?.id ?? "new"),
     workflow
       ? toInput(workflow)
-      : (preset ?? { name: "", description: "", folder: "", steps: [blankStep(0)] }),
+      : (preset ?? { name: "", description: "", folder: "", steps: [blankStep(0)], inputs: [] }),
   );
   const [openStep, setOpenStep] = useState<number | null>(0);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +111,12 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
     queryKey: ["agents", "library"],
     queryFn: () => api.get<Agent[]>("/api/agents"),
   });
+
+  const patchInput = (i: number, next: Partial<WorkflowInputDef>) =>
+    setDraft((prev) => ({
+      ...prev,
+      inputs: prev.inputs.map((inp, j) => (j === i ? { ...inp, ...next } : inp)),
+    }));
 
   const patchStep = (i: number, next: Partial<WorkflowStepInput>) =>
     setDraft((prev) => ({
@@ -152,6 +174,91 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
               ...KNOWLEDGE_FOLDER_SUGGESTIONS.map((f) => ({ value: f, label: f })),
             ]}
           />
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <Label className="mb-0">Inputs ({draft.inputs.length})</Label>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                setDraft((prev) => ({
+                  ...prev,
+                  inputs: [
+                    ...prev.inputs,
+                    {
+                      key: `input-${prev.inputs.length + 1}`,
+                      label: "",
+                      type: "text",
+                      required: false,
+                      defaultValue: "",
+                      help: "",
+                      options: [],
+                    },
+                  ],
+                }))
+              }
+            >
+              <Plus size={16} /> Add input
+            </Button>
+          </div>
+          <p className="mb-1.5 m3-label-sm text-ink-faint">
+            What this workflow asks for before it starts. Reach a value from any step with{" "}
+            <span className="font-mono">{"{{key}}"}</span>; a{" "}
+            <span className="font-mono">docs</span> link and a{" "}
+            <span className="font-mono">jira-ticket</span> are fetched and handed to the first step,
+            so it doesn't spend a turn going to look.
+          </p>
+          <div className="space-y-1.5">
+            {draft.inputs.map((def, i) => (
+              <div
+                key={i}
+                className="grid grid-cols-[9rem_1fr_9rem_auto] gap-2 rounded-md border border-hairline bg-white/4 p-2"
+              >
+                <Input
+                  className="font-mono text-xs"
+                  value={def.key}
+                  placeholder="key"
+                  onChange={(e) => patchInput(i, { key: e.target.value })}
+                />
+                <Input
+                  value={def.label}
+                  placeholder="What to call it on the Start screen"
+                  onChange={(e) => patchInput(i, { label: e.target.value })}
+                />
+                <Select
+                  className="w-full"
+                  value={def.type}
+                  onChange={(v) => patchInput(i, { type: v as WorkflowInputDef["type"] })}
+                  options={INPUT_TYPES.map((t) => ({ value: t, label: t }))}
+                />
+                <div className="flex items-center gap-1">
+                  <label className="flex cursor-pointer items-center gap-1 text-xs text-ink-muted">
+                    <input
+                      type="checkbox"
+                      checked={def.required}
+                      onChange={(e) => patchInput(i, { required: e.target.checked })}
+                    />
+                    req
+                  </label>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label="Remove input"
+                    onClick={() =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        inputs: prev.inputs.filter((_, j) => j !== i),
+                      }))
+                    }
+                  >
+                    <Trash2 size={16} />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div>
@@ -284,32 +391,68 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                       </div>
                     )}
 
-                    {step.type === "command" && (
-                      <div className="w-56">
-                        <Label>Command name</Label>
-                        <Input
-                          className="font-mono text-xs"
-                          value={step.commandName ?? ""}
-                          onChange={(e) => patchStep(i, { commandName: e.target.value || null })}
-                          placeholder="Test"
-                        />
-                        <p className="mt-1 m3-label-sm text-ink-faint">
-                          Matched by name against the project's Commands at run time.
-                        </p>
+                    {(step.type === "command" || step.type === "gate") && (
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label>Command name</Label>
+                          <Input
+                            className="font-mono text-xs"
+                            value={step.commandName ?? ""}
+                            onChange={(e) => patchStep(i, { commandName: e.target.value || null })}
+                            placeholder="Test"
+                          />
+                          <p className="mt-1 m3-label-sm text-ink-faint">
+                            Matched by name against the project's Commands at run time.
+                          </p>
+                        </div>
+                        {step.type === "gate" && (
+                          <>
+                            <div>
+                              <Label>On fail, go back to</Label>
+                              <Select
+                                className="w-full"
+                                value={step.onFail ?? ""}
+                                onChange={(v) => patchStep(i, { onFail: v || null })}
+                                options={[
+                                  { value: "", label: "nothing — just fail" },
+                                  ...draft.steps
+                                    .filter((s) => s.key !== step.key)
+                                    .map((s) => ({ value: s.key, label: s.key })),
+                                ]}
+                              />
+                            </div>
+                            <div>
+                              <Label>Max loops</Label>
+                              <Input
+                                type="number"
+                                value={step.maxLoops}
+                                onChange={(e) =>
+                                  patchStep(i, {
+                                    maxLoops: Math.min(3, Math.max(0, Number(e.target.value) || 0)),
+                                  })
+                                }
+                              />
+                              <p className="mt-1 m3-label-sm text-ink-faint">
+                                3 is the ceiling, and two identical rounds stop it sooner.
+                              </p>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
 
                     <div>
                       <Label>Instruction</Label>
-                      <Textarea
+                      <MentionTextarea
                         value={step.instruction ?? ""}
-                        onChange={(e) => patchStep(i, { instruction: e.target.value || null })}
+                        onChange={(v) => patchStep(i, { instruction: v || null })}
                         placeholder={
                           step.type === "manual"
                             ? "What you need to do before continuing"
-                            : "What this step should accomplish"
+                            : "What this step should accomplish — {{inputKey}} and @tags are filled in for you"
                         }
-                        className="min-h-[70px] text-xs"
+                        rows={4}
+                        className="text-xs"
                       />
                     </div>
 
@@ -335,15 +478,60 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                       </div>
                     </div>
 
-                    {step.type === "agent" && (
-                      <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
-                        <input
-                          type="checkbox"
-                          checked={step.requiresConfirm}
-                          onChange={(e) => patchStep(i, { requiresConfirm: e.target.checked })}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label>Runs after</Label>
+                        <Input
+                          className="font-mono text-xs"
+                          value={step.dependsOn.join(", ")}
+                          onChange={(e) =>
+                            patchStep(i, {
+                              dependsOn: e.target.value
+                                .split(",")
+                                .map((k) => k.trim())
+                                .filter(Boolean),
+                            })
+                          }
+                          placeholder="the step above"
                         />
-                        Stop for my confirmation after this step
-                      </label>
+                        <p className="mt-1 m3-label-sm text-ink-faint">
+                          Name two or more keys and this step waits for all of them — which is also
+                          how two steps naming the same one end up running side by side.
+                        </p>
+                      </div>
+                      <div>
+                        <Label>Path label</Label>
+                        <Input
+                          value={step.cwdLabel ?? ""}
+                          onChange={(e) => patchStep(i, { cwdLabel: e.target.value || null })}
+                          placeholder="the run's own directory"
+                        />
+                        <p className="mt-1 m3-label-sm text-ink-faint">
+                          Which repo of the project this step works in.
+                        </p>
+                      </div>
+                    </div>
+
+                    {step.type === "agent" && (
+                      <div className="space-y-1.5">
+                        <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                          <input
+                            type="checkbox"
+                            checked={step.requiresConfirm}
+                            onChange={(e) => patchStep(i, { requiresConfirm: e.target.checked })}
+                          />
+                          Stop for my confirmation after this step
+                        </label>
+                        <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                          <input
+                            type="checkbox"
+                            checked={step.isolate}
+                            onChange={(e) => patchStep(i, { isolate: e.target.checked })}
+                          />
+                          Own git worktree — needed for steps that run beside one another in the
+                          same repo
+                        </label>
+                      </div>
                     )}
                   </div>
                 )}

@@ -6,6 +6,7 @@ import {
   knowledgeFolderSchema,
   workflowInputSchema,
   workflowRunInputSchema,
+  workflowTriggerInputSchema,
   type FolderImportResult,
 } from "@claude-station/shared";
 import { TOKEN } from "../lib/auth";
@@ -42,6 +43,13 @@ import {
   retryStep,
   skipStep,
 } from "../services/workflow-runner";
+import {
+  createTrigger,
+  deleteTrigger,
+  listTriggers,
+  pollTrigger,
+  updateTrigger,
+} from "../services/workflow-triggers";
 
 const idParam = z.object({ id: z.string() });
 
@@ -178,7 +186,9 @@ export function workflowRoutes(app: FastifyInstance): void {
   app.post<{ Params: { id: string; workflowId: string } }>(
     "/api/projects/:id/workflows/:workflowId/terminal-run",
     async (req, reply) => {
-      const { id, workflowId } = z.object({ id: z.string(), workflowId: z.string() }).parse(req.params);
+      const { id, workflowId } = z
+        .object({ id: z.string(), workflowId: z.string() })
+        .parse(req.params);
       const { goal, cwdPathId, envSetId, useWorktree } = z
         .object({
           goal: z.string().max(4000).optional(),
@@ -217,20 +227,17 @@ export function workflowRoutes(app: FastifyInstance): void {
   );
 
   /** Terminal-mode runs report step transitions here (curl from the PTY). */
-  app.post<{ Params: { id: string } }>(
-    "/api/workflow-runs/:id/terminal-progress",
-    async (req) => {
-      const { id } = idParam.parse(req.params);
-      const input = z
-        .object({
-          step: z.string().min(1),
-          status: z.enum(["running", "done", "failed", "skipped"]),
-          note: z.string().optional(),
-        })
-        .parse(req.body);
-      return reportTerminalProgress(id, input);
-    },
-  );
+  app.post<{ Params: { id: string } }>("/api/workflow-runs/:id/terminal-progress", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const input = z
+      .object({
+        step: z.string().min(1),
+        status: z.enum(["running", "done", "failed", "skipped"]),
+        note: z.string().optional(),
+      })
+      .parse(req.body);
+    return reportTerminalProgress(id, input);
+  });
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/workflow-runs", async (req, reply) => {
     const { id } = idParam.parse(req.params);
@@ -247,6 +254,23 @@ export function workflowRoutes(app: FastifyInstance): void {
     const run = getRun(id);
     if (!run) return reply.code(404).send({ error: "Run not found" });
     return run;
+  });
+
+  /**
+   * The runbook for a terminal-mode run, re-derivable at any time.
+   *
+   * It used to exist only in the browser tab that started the run, typed into the
+   * CLI once. Reload the page and it was gone — leaving a run whose steps sit
+   * pending for ever next to an empty terminal, which reads exactly like "I
+   * pressed Run and nothing happened".
+   */
+  app.get<{ Params: { id: string } }>("/api/workflow-runs/:id/runbook", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const run = getRun(id);
+    if (!run) return reply.code(404).send({ error: "Run not found" });
+    const workflow = getWorkflow(run.workflowId);
+    if (!workflow) return reply.code(404).send({ error: "Workflow not found" });
+    return { seed: renderWorkflowRunbook(workflow, run.goal ?? undefined, { runId: run.id }) };
   });
 
   app.post<{ Params: { id: string } }>("/api/workflow-runs/:id/answer", async (req) => {
@@ -285,6 +309,40 @@ export function workflowRoutes(app: FastifyInstance): void {
     const { id } = idParam.parse(req.params);
     deleteRun(id);
     reply.code(204);
+  });
+
+  // ── Triggers ──────────────────────────────────────────────────────────────
+
+  app.get<{ Params: { id: string } }>("/api/projects/:id/workflow-triggers", async (req) => {
+    const { id } = idParam.parse(req.params);
+    return listTriggers(id);
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/workflow-triggers",
+    async (req, reply) => {
+      const { id } = idParam.parse(req.params);
+      const input = workflowTriggerInputSchema.parse(req.body);
+      reply.code(201);
+      return createTrigger(id, input);
+    },
+  );
+
+  app.put<{ Params: { id: string } }>("/api/workflow-triggers/:id", async (req) => {
+    const { id } = idParam.parse(req.params);
+    return updateTrigger(id, workflowTriggerInputSchema.parse(req.body));
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/workflow-triggers/:id", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    deleteTrigger(id);
+    reply.code(204);
+  });
+
+  /** Check now, rather than waiting out the interval to learn a query matches nothing. */
+  app.post<{ Params: { id: string } }>("/api/workflow-triggers/:id/poll", async (req) => {
+    const { id } = idParam.parse(req.params);
+    return pollTrigger(id);
   });
 
   /** Download an artifact produced during a run. */

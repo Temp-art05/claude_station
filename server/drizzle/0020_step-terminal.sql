@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_run_steps` ADD `terminal_id` text;

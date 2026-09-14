@@ -208,6 +208,43 @@ function preview(prompt: string): string {
   return prompt.replace(/\s+/g, " ").trim().slice(0, PREVIEW_CHARS);
 }
 
+/**
+ * Who is waiting for a turn to finish, keyed by the CLI conversation.
+ *
+ * The workflow engine drives steps by typing into a real `claude` terminal, so it
+ * needs to know when a turn ended — and the transcript follower already knows,
+ * because closing the turn is what it does. Handing that fact over here costs
+ * nothing and saves the engine from polling a table.
+ */
+const turnWaiters = new Map<string, Set<(turnId: string, status: TurnStatus) => void>>();
+
+/** Call back once the next turn of this CLI conversation closes. Returns an unsubscribe. */
+export function onTurnClosed(
+  claudeSessionId: string,
+  listener: (turnId: string, status: TurnStatus) => void,
+): () => void {
+  const set = turnWaiters.get(claudeSessionId) ?? new Set();
+  set.add(listener);
+  turnWaiters.set(claudeSessionId, set);
+  return () => {
+    set.delete(listener);
+    if (set.size === 0) turnWaiters.delete(claudeSessionId);
+  };
+}
+
+function announceClosed(turnId: string, status: TurnStatus): void {
+  const row = db.select().from(schema.sessionTurns).where(eq(schema.sessionTurns.id, turnId)).get();
+  const key = row?.claudeSessionId;
+  if (!key) return;
+  for (const listener of turnWaiters.get(key) ?? []) {
+    try {
+      listener(turnId, status);
+    } catch {
+      /* a waiter that throws must not break capture */
+    }
+  }
+}
+
 export function closeTurn(turnId: string | null, input: CloseTurnInput = {}): void {
   if (!turnId) return;
   try {
@@ -227,6 +264,7 @@ export function closeTurn(turnId: string | null, input: CloseTurnInput = {}): vo
       })
       .where(eq(schema.sessionTurns.id, turnId))
       .run();
+    announceClosed(turnId, input.status ?? "done");
   } catch {
     /* capture is best effort - see the header */
   }

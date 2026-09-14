@@ -46,7 +46,15 @@ export function removeTerminalContext(terminalId: string): void {
  */
 export function claudeCommand(
   restart: boolean,
-  opts?: { projectId: string; terminalId: string; cwd: string; sessionId?: string | null },
+  opts?: {
+    projectId: string;
+    terminalId: string;
+    cwd: string;
+    sessionId?: string | null;
+    /** Set for a workflow step: the station's tools, and the step's own mode. */
+    mcpConfigFile?: string;
+    permissionMode?: string;
+  },
 ): string {
   if (!opts) return buildClaudeCommand(restart);
 
@@ -61,6 +69,8 @@ export function claudeCommand(
 
   return buildClaudeCommand(restart, {
     sessionId: opts.sessionId ?? undefined,
+    mcpConfigFile: opts.mcpConfigFile,
+    permissionMode: opts.permissionMode,
     contextFile: writeTerminalContext(opts.projectId, opts.terminalId) || undefined,
     extraDirs: [
       ...paths.map((p) => p.path).filter((p) => p !== opts.cwd),
@@ -100,6 +110,9 @@ export function createTerminal(
      * that ran outside the app becomes a session of the app.
      */
     resumeSessionId?: string;
+    /** Workflow steps only: the bridge config and the step's permission mode. */
+    mcpConfigFile?: string;
+    permissionMode?: string;
   },
 ) {
   const kind: TerminalKind = input.kind ?? "shell";
@@ -124,6 +137,8 @@ export function createTerminal(
             terminalId: id,
             cwd,
             sessionId: claudeSessionId,
+            mcpConfigFile: input.mcpConfigFile,
+            permissionMode: input.permissionMode,
           })
         : undefined),
   });

@@ -122,6 +122,54 @@ which you can talk to mid-run to skip, confirm or redirect a step. An agent paus
 reports) are downloadable per step. A restart marks the in-flight step interrupted rather than
 re-running it blind.
 
+**Shapes other than a straight line.** A step can declare `dependsOn`, and every step whose
+dependencies are settled starts together — so a plan can fan out to FE, BE and iOS at once and a
+later step can wait for all three. Two steps never share a working tree: one claims the repo and the
+other waits for the next round, unless a step names another repo with `cwdLabel` or takes its own
+worktree with `isolate`. `workflows.maxParallel` caps the fan-out (2 by default). A step with no
+`dependsOn` still means "after the one above", so workflows written before any of this keep their
+exact order.
+
+**A `gate` step is the one that can say no.** It runs a project command and lets the exit code
+decide: pass, or send the run back to the step named in `onFail` with the failing log as context.
+That is the implement → test → fix loop, run by the scheduler rather than by an agent's own account
+of how it went. Two brakes: three rounds at most, and it stops early if two rounds produce identical
+output, because at that point it is turning on the spot.
+
+**Unattended runs.** Tick *Run unattended* when you start one and it stops asking you to confirm its
+own work. It still stops at a `manual` step, at a real question from the agent (with a notification,
+so it isn't waiting silently), and at merge — that stays yours, as does pushing to a store. An
+unattended run also carries a clock (`workflows.runBudgetMinutes`) so a hung step can't hold a repo
+lock all night. Set the question policy to *assume* and it answers its own questions instead, writing
+each assumption into the run for the PR description — except about money, auth, user data,
+permissions, deleting data, schemas or API contracts, where it stops regardless.
+
+**Triggers** turn a workflow you run into one that runs. A trigger watches a GitHub label or a Jira
+JQL search and starts a run — unattended — when matching work appears, with the issue's own text as
+the run's goal. Work already taken is never taken again (an agent commenting on a ticket would
+otherwise look like a fresh update, for ever), and one trigger runs one thing at a time. They are
+created disarmed, and `workflows.triggersEnabled` is the master switch, off until you turn it on.
+
+**Inputs, so a workflow is an asset rather than a draft.** A workflow can declare what it needs —
+a spec document, a Jira project, a ticket, a repo — and the Start screen asks for exactly that; any
+step reaches a value with `{{key}}`. Two of the types are read *for* you before the first step runs:
+a `docs` input takes a GitHub file link and the file's text arrives in the step's context (private
+repos included, through your `gh` login — no clone of the spec repo), and a `jira-ticket` input brings
+the issue itself. Pointing the same workflow at a different spec is then filling in a different box,
+not editing the workflow.
+
+The same thing happens to anything tagged with **`@`** in the goal or in a step's instruction:
+`@doc:owner/repo:path`, `@ticket:ABC-123`, `@jira:ABC`, `@repo:owner/name` — typing `@` offers what
+this workspace already knows, and a pasted GitHub link is accepted as-is. Pin the Jira projects you
+work in under **Settings → Integrations** to turn the project box into a picker.
+
+Fourteen workflows in `docs/workflows/` show the shapes — sequential-unattended, fan-out across repos,
+branching on an answer, the gate loop, a review swarm, three independent votes on the same question,
+an orchestrator that splits work it can't count in advance, a critique-and-revise loop for prose, and
+spec document → Jira subtasks → PR. Its [README](docs/workflows/README.md) is a table of *which shape
+for which kind of work*, which is the part that actually costs you when it's wrong. Import the folder
+with **Import folder** on the Workflows page; the two agents they use live in `docs/agents/`.
+
 ### Agents
 
 ![Agents](docs/images/agents.png)
@@ -203,7 +251,7 @@ station to another machine.
 
 |                              |                                                                                                                                                                                                                                                                    |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Claude's own tools** (MCP) | `jira_*`, `excel_*`, `knowledge_search`, `list_project_commands`, `run_project_command`, `read_command_log`, `memory_*`. Every mutating call goes through the approval modal, except memory writes — those are this app's own notes, reviewable in the Memory tab. |
+| **Claude's own tools** (MCP) | `jira_*` (search, read, comment, transition, worklog, and create/update — `jira_create_issue` with a `parentKey` makes a subtask, which is how a requirement broken into tasks reaches the board), `excel_*`, `knowledge_search`, `list_project_commands`, `run_project_command`, `read_command_log`, `memory_*`. Every mutating call goes through the approval modal, except memory writes — those are this app's own notes, reviewable in the Memory tab. |
 | **Search**                   | SQLite FTS5 across chat history and imported knowledge.                                                                                                                                                                                                            |
 | **History**                  | Audit feed of everything the app and Claude did, per project.                                                                                                                                                                                                      |
 

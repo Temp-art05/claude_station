@@ -88,7 +88,9 @@ export function useRuns(projectId: string) {
     queryFn: () => api.get<RunSummary[]>(`/api/projects/${projectId}/workflow-runs`),
     // Runs advance server-side; poll while any is live.
     refetchInterval: (query) =>
-      query.state.data?.some((r) => r.status === "running" || r.status === "pending") ? 3000 : false,
+      query.state.data?.some((r) => r.status === "running" || r.status === "pending")
+        ? 3000
+        : false,
   });
 }
 
@@ -109,6 +111,9 @@ export function useStartRun(projectId: string) {
       cwdPathId?: string;
       envSetId?: string | null;
       useWorktree?: boolean;
+      autoMode?: boolean;
+      askPolicy?: "stop" | "assume";
+      inputs?: Record<string, string>;
     }) => api.post<WorkflowRun>(`/api/projects/${projectId}/workflow-runs`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["workflow-runs", projectId] }),
   });

@@ -1,0 +1,240 @@
+# Bản đang dùng thật của workflow `impl-ios-workflow`, có thêm hai step Jira.
+#
+# Hai step jira-* tự bỏ qua khi run không điền Jira project/ticket, nên workflow này vẫn chạy y
+# như cũ cho những lần không cần đụng tới board.
+#
+# Bước test vẫn là agent chứ không đổi thành `gate`: gate cần một project command có thật, và đổi
+# khi project chưa khai command đó thì run hỏng ngay ở giữa. Muốn dùng gate thì xem
+# `gate-loop-impl-test.workflow.yaml`.
+name: impl-ios-workflow
+description: >-
+  Impl iOS feature (ReelMe IIP555): plan từ Document Source (/using-superpowers + skill iOS, hỏi để
+  chốt) → chốt confirm & finalize plan (KHÔNG update docs — chỉ PO có quyền) → impl đúng Clean
+  Architecture + MVVM + Factory DI → build + chạy simulator, fix loop → review cuối, commit dưới tên
+  user & PR tiếng Việt. Mỗi step dừng chờ duyệt. Gắn Jira: chia task, kéo trạng thái, báo ngược lại.
+folder: ios
+steps:
+  - key: plan
+    type: agent
+    title: Plan từ Document Source (iOS)
+    agentName: ios-dev
+    instruction: >-
+      0. TRƯỚC KHI LÀM GÌ KHÁC — update các source: git fetch + pull base branch mới nhất của iOS
+      repo VÀ docs repo (Document Source) để plan/impl luôn dựa trên bản mới nhất. Nếu working tree
+      có thay đổi dở dang → hỏi tôi trước khi pull.
+
+
+      Lên plan impl cho MỘT feature iOS.
+
+
+      1. Feature cần impl = mục "## Goal of this run" ở đầu context (tôi nhập khi bấm Run). Nếu goal
+      TRỐNG hoặc chưa đủ rõ (không biết feature nào / spec nào) → hỏi tôi qua workflow_ask trước khi
+      làm gì khác.
+
+      2. Dùng skill /using-superpowers để dẫn quy trình (brainstorming → writing-plans).
+
+      3. Đọc kỹ phần liên quan feature này trong Document Source
+      (~/Docs/reelme-business-analyst-agent: specs/, docs/, confluence/), rồi đối chiếu với iOS
+      source hiện tại. Đọc `README.md` ở root iOS repo (tài liệu kiến trúc chính) + README của
+      module sẽ chạm trước khi thiết kế.
+
+      4. Dùng skill iOS phù hợp với feature để plan cho đúng: /swift-concurrency (async/await,
+      actor, Sendable, cancellation), /swiftui-liquid-glass (UI iOS 26+), /swiftui-performance-audit
+      (màn hình list/scroll nặng). Nêu rõ trong plan skill nào áp dụng và vì sao.
+
+      5. Plan PHẢI bám kiến trúc sẵn có, chia rõ theo layer — mục nào không đụng thì ghi "không
+      đổi":
+         - **Domain**: model / repository protocol / use case mới, slot Factory cần khai (`Container+RepositorySlots.swift`, `Container+UseCases.swift`).
+         - **Data**: DTO, Mapper, RepositoryImpl, DataSource, đăng ký trong `DataAssembly`.
+         - **Storage / Networking**: entity SwiftData, endpoint mới.
+         - **Feature package (Presentation)**: View, ViewModel (@MainActor, @Injected, không import SwiftUI trong VM), component DesignSystem tái dùng được.
+         - **Navigation**: `Route` case mới ở Core + mapping trong `RouteDestination` bằng callback closure.
+         - **DesignSystem / Analytics**: token, component, event cần thêm.
+         - **App target**: assembly / khởi tạo runtime nếu cần.
+      6. Trong lúc phân tích, MỌI điểm spec thiếu / mơ hồ / mâu thuẫn docs⨯code → gom thành câu hỏi
+      cụ thể, hỏi tôi qua workflow_ask ngay trong step này để chốt.
+
+      7. Ghi plan vào CHÍNH iOS source: `plans/<ten-feature>.md` (thư mục `plans/` đã có sẵn ở root
+      repo). Plan gồm: mục tiêu, phạm vi, bản đồ thay đổi theo layer ở mục 5, các bước impl theo thứ
+      tự, file dự kiến chạm, edge case (lỗi mạng, hết credit, cancel, offline, permission…), và 2
+      mục cuối:
+         - "## Câu hỏi cần confirm" — những gì vẫn chưa chốt được, kèm đề xuất của bạn.
+         - "## Docs gaps (gửi PO)" — chỗ Document Source sai/thiếu/mâu thuẫn. CHỈ liệt kê để tôi báo PO; TUYỆT ĐỐI không sửa/push docs repo (tôi không có quyền update docs).
+      8. workflow_emit_artifact file plan; workflow_note tóm tắt plan + số câu hỏi còn treo + số
+      docs gap phát hiện.
+
+
+      KHÔNG impl code ở step này.
+    requiresConfirm: true
+    permissionMode: acceptEdits
+  - key: jira-tasks
+    type: agent
+    title: Chia plan thành task trên Jira
+    agentName: jira-pm
+    permissionMode: acceptEdits
+    instruction: >-
+      Đọc plan ở artifact của step trước.
+
+      NẾU cả {{jiraProject}} lẫn {{jiraTicket}} đều trống (placeholder còn nguyên dấu ngoặc) → nói
+      rõ 'run này không gắn Jira' rồi kết thúc step, đừng tạo gì cả.
+
+      TRƯỚC KHI TẠO BẤT KỲ TICKET NÀO: jira_search ticket đang mở trong {{jiraProject}} (và dưới
+      {{jiraTicket}} nếu có ticket cha). Task nào đã có rồi — tiêu đề nói cùng một việc, không cần
+      giống từng chữ — thì DÙNG LẠI, ghi 'đã có: KEY' vào bảng task, không tạo lại. Chạy lại
+      workflow trên cùng một spec mà không kiểm thì board đầy ticket trùng và phải dọn tay.
+
+      Tạo phần còn thiếu trong {{jiraProject}} (subtask dưới {{jiraTicket}} nếu có ticket cha).
+      Sprint "{{sprint}}" có nêu thì jira_ensure_sprint rồi jira_add_to_sprint cho cả ticket mới lẫn
+      ticket cũ thuộc đợt này; để trống thì ticket nằm backlog — nói rõ ra.
+
+      Kéo ticket cha sang In Progress — list transitions trước, đừng đoán tên trạng thái.
+
+      Kết thúc: báo bằng số (tạo mới mấy, dùng lại mấy) và lưu bảng khoá task → tiêu đề → phụ thuộc
+      → mới hay đã có, bằng workflow_emit_artifact.
+  - key: confirm-plan
+    type: agent
+    title: Chốt confirm & finalize plan
+    agentName: ios-dev
+    instruction: >-
+      Tôi vừa duyệt plan ở step trước (đọc câu trả lời workflow_ask + ghi chú khi tôi confirm).
+
+
+      1. Cập nhật file plan `plans/<ten-feature>.md` trong iOS source: chuyển mục "Câu hỏi cần
+      confirm" thành các quyết định ĐÃ CHỐT theo câu trả lời của tôi; câu nào tôi chưa trả lời rõ →
+      hỏi lại qua workflow_ask. Không tự đoán.
+
+      2. Rà lại bản đồ thay đổi theo layer sau khi chốt: quyết định mới có làm phát sinh/bỏ bớt
+      file, slot DI, Route, event Analytics không → sửa plan cho khớp. Plan là source of truth cho
+      step impl.
+
+      3. Chốt mục "## Docs gaps (gửi PO)": giữ nguyên danh sách chỗ docs sai/thiếu để tôi tự báo PO.
+      KHÔNG tạo branch docs, KHÔNG sửa file trong docs repo, KHÔNG tạo PR docs — chỉ PO mới có quyền
+      update Document Source. Nếu không có gap thì ghi rõ "Không có docs gap".
+
+      4. workflow_emit_artifact bản plan đã chốt + workflow_note tóm tắt các quyết định đã chốt và
+      danh sách docs gaps.
+
+
+      KHÔNG impl code iOS ở step này.
+    requiresConfirm: true
+    permissionMode: acceptEdits
+  - key: impl
+    type: agent
+    title: Impl vào iOS source
+    agentName: ios-dev
+    instruction: >-
+      Impl feature theo plan ĐÃ CHỐT (`plans/<ten-feature>.md` trong iOS source).
+
+
+      1. Tạo branch mới theo convention repo `<user>/feat/<ten-feature>` (xem `git log` / branch
+      hiện tại; user hiện tại là `thedn` → `thedn/feat/<ten-feature>`) từ base branch `develop`
+      trước khi sửa code.
+
+      2. Impl lần lượt theo từng bước trong plan, đúng phạm vi. Dùng skill iOS liên quan trong lúc
+      viết code: /swift-concurrency cho async/await + actor + Sendable + cancellation,
+      /swiftui-liquid-glass nếu UI nhắm iOS 26+, /swiftui-performance-audit nếu màn hình có
+      list/scroll nặng.
+
+      3. ARCHITECTURE CHECKLIST — bắt buộc tự soát trước khi kết thúc step (đối chiếu `README.md`
+      của repo):
+         - Domain không import gì ngoài Core; Feature package KHÔNG import Data/Networking/Storage.
+         - Dependency mới đi đúng chuỗi Factory: slot ở `Container+RepositorySlots.swift` → use case ở `Container+UseCases.swift` → override trong `DataAssembly`/assembly tương ứng. Không khởi tạo trực tiếp trong ViewModel.
+         - ViewModel: `@MainActor` + `ObservableObject`, `@Published` cho state, `@Injected` cho dependency, KHÔNG import SwiftUI, KHÔNG biết gì về navigation, không gọi thẳng Repository/DataSource.
+         - Navigation: `Route` case ở Core + map trong `RouteDestination` bằng callback closure.
+         - View thuần UI; style bằng token DesignSystem, không hardcode màu/font/spacing; text người dùng thấy dùng chuỗi đã localize.
+         - Naming đúng convention (`XRepository`/`XRepositoryImpl`, `XResponseDTO`, `XEntity`, `XMapper`, `XViewModel`, `XView`).
+         - Không force-try / force-unwrap trong code production.
+         Vi phạm điểm nào → sửa ngay; nếu tin rằng cần lệch kiến trúc → hỏi tôi qua workflow_ask, đừng tự quyết.
+      4. DOUBLE-CHECK bắt buộc sau khi xong: chạy `git diff`, đối chiếu TỪNG hạng mục trong plan —
+      mục nào thiếu/lệch thì quay lại sửa cho đủ. Nếu thực tế buộc phải lệch plan → sửa PLAN trước
+      (plan là source of truth) rồi mới sửa code, và note rõ.
+
+      5. KHÔNG commit/push ở step này (step "pr" sẽ làm). workflow_note tóm tắt diff theo layer
+      (file nào, thay đổi gì).
+    requiresConfirm: true
+    permissionMode: acceptEdits
+  - key: test
+    type: agent
+    title: Build + chạy simulator & fix loop
+    agentName: ios-dev
+    instruction: >-
+      Verify phần impl của step trước trên iOS.
+
+
+      1. BUILD: ưu tiên command đã khai của project (list_project_commands → run_project_command);
+      nếu chưa khai thì tự chạy:
+         - `xcodebuild build -project ReelMe.xcodeproj -scheme ReelMe -destination 'platform=iOS Simulator,name=<simulator đang có>' -configuration Debug` (dùng `xcrun simctl list devices available` để chọn máy hợp lệ).
+         - Build riêng các SPM scheme bị chạm (Domain, Data, Core, DesignSystem, Feature<X>…) để bắt lỗi module sớm.
+         - Có SwiftLint/format trong repo thì chạy luôn.
+      2. CHẠY THẬT TRÊN SIMULATOR bằng skill /ios-debugger-agent (XcodeBuildMCP): build & install &
+      launch app trên simulator đang boot, điều hướng tới màn hình vừa impl, chụp screenshot, đọc
+      log runtime/console để bắt crash, warning, layout hỏng, state sai. Không tự nhận "chạy được"
+      khi chưa thực sự nhìn thấy màn hình.
+
+      3. Vòng lặp fix: fail (build lỗi / crash / hành vi sai) → đọc lỗi → sửa → chạy lại. Tối đa 3
+      vòng; nếu vẫn đỏ → workflow_ask hỏi tôi hướng xử lý (kèm log lỗi chính + screenshot).
+
+      4. Xanh hết → workflow_emit_artifact "test-report": lệnh đã chạy + kết quả từng lệnh,
+      simulator/OS đã dùng, các màn hình đã kiểm tra kèm đường dẫn screenshot, những gì CHƯA verify
+      được (và lý do). workflow_note kết luận ngắn.
+    requiresConfirm: true
+    permissionMode: acceptEdits
+    maxRetries: 1
+  - key: review
+    type: agent
+    title: Review diff (agent khác đọc lại)
+    agentName: spec-reader
+    permissionMode: default
+    instruction: >-
+      Đọc diff của branch hiện tại so với base. Soát ba nhóm, mỗi phát hiện kèm file:line và một
+      kịch bản cụ thể khiến nó hỏng: (1) lỗi đúng/sai — logic, optional, retain cycle, việc nặng
+      trên main thread; (2) hiệu năng; (3) chuẩn repo — đặt tên, đúng tầng chưa, có lặp lại thứ đã
+      có sẵn không.
+
+      Đối chiếu lại tiêu chí nghiệm thu trong plan: cái nào chưa đạt thì nói thẳng.
+
+      Ghi danh sách phải sửa ra artifact. KHÔNG sửa code — bạn là người chấm, không phải người sửa.
+  - key: fix-review
+    type: agent
+    title: Sửa theo review
+    agentName: ios-dev
+    permissionMode: acceptEdits
+    instruction: >-
+      Đọc danh sách ở artifact của step review. Không có gì phải sửa thì nói rõ và kết thúc.
+
+      Có thì sửa đúng những chỗ đó — đừng nhân tiện refactor. Chỗ nào bạn cho là nhận xét sai thì
+      ghi một dòng lý do thay vì im lặng bỏ qua.
+  - key: pr
+    type: agent
+    title: 'Review cuối, commit dưới tên tôi & tạo PR (tiếng Việt)'
+    agentName: ios-dev
+    instruction: "Chốt và mở PR cho feature.\n\n1. DOUBLE-CHECK cuối: `git diff` toàn bộ so với base branch `develop`, tự review như một reviewer khó tính — đối chiếu plan lần cuối, chạy lại ARCHITECTURE CHECKLIST ở step impl, soát bug/edge case/convention/memory leak/retain cycle/force-unwrap. Phát hiện vấn đề → sửa và chạy lại build (+ simulator nếu ảnh hưởng UI) trước khi đi tiếp.\n\n2. AUDIT SPEC-SYNC (bắt buộc): sau 4 step đầu thường có những thay đổi nhỏ do tôi đề xuất giữa chừng. Đối chiếu diff cuối cùng với spec trong Document Source và với plan đã chốt. Có điểm lệch → KHÔNG sửa docs repo (chỉ PO có quyền), mà: (a) cập nhật `plans/<ten-feature>.md` cho khớp thực tế, (b) ghi những điểm lệch đó vào mục \"Sai lệch so với spec\" trong PR body, (c) workflow_note lại để tôi báo PO. Không lệch → note rõ \"spec-sync: không có thay đổi\".\n\n3. COMMIT — code phải mang tên TÔI, không có dấu vết Claude:\n   - Dùng đúng identity sẵn có của repo (`git config user.name` / `user.email`, hiện là `thedn <thedn@apero.vn>`). KHÔNG dùng `--author` khác, KHÔNG sửa git config.\n   - TUYỆT ĐỐI KHÔNG thêm trailer `Co-Authored-By: Claude ...`, KHÔNG dòng `\U0001F916 Generated with Claude Code`, KHÔNG nhắc Claude / AI / agent / \"generated by\" ở commit message, PR title hay PR body.\n   - Commit message theo convention repo (xem `git log`): `[IIP555] ...` hoặc `[IIP555][Module]: ...`.\n   - Sau khi commit, tự kiểm chứng: `git log --format='%an <%ae>%n%B' origin/develop..HEAD` — thấy bất kỳ dấu vết nào ở trên → `git commit --amend` / `git rebase` gỡ sạch rồi mới push.\n\n4. Hỏi tôi qua workflow_ask xác nhận lần cuối trước khi push + tạo PR (nêu rõ: branch, base, tóm tắt diff, author của các commit).\n\n5. Push branch, tạo PR bằng `gh` về base branch `develop`. PR title theo convention repo. PR BODY VIẾT HOÀN TOÀN BẰNG TIẾNG VIỆT, đủ để người khác hiểu PR mà không cần hỏi lại, theo đúng các mục sau:\n   - `## Mục đích` — feature này giải quyết vấn đề gì, link spec/ticket nếu có.\n   - `## Phạm vi thay đổi` — liệt kê theo layer (Domain / Data / Storage / Networking / Feature / DesignSystem / Analytics / App target), mỗi mục nói rõ thêm–sửa–xoá cái gì.\n   - `## Cách hoạt động` — luồng chính từ View → ViewModel → UseCase → Repository, các quyết định thiết kế đáng chú ý và lý do.\n   - `## Đã kiểm thử` — lệnh build đã chạy + kết quả, simulator/OS, màn hình đã chạy thật, screenshot nếu có.\n   - `## Khuyết điểm / hạn chế đã biết` — BẮT BUỘC, không được bỏ trống: phần nào làm tạm/hardcode/mock, edge case chưa xử lý, chỗ chưa verify được và vì sao, nợ kỹ thuật để lại. Nếu thật sự không có thì ghi rõ \"Không có\" kèm lý do.\n   - `## Rủi ro & ảnh hưởng` — module/màn hình khác có thể bị ảnh hưởng, rủi ro regression, cần chú ý gì khi release.\n   - `## Điểm cần reviewer chú ý` — chỗ muốn reviewer soi kỹ, và câu hỏi mở nếu có.\n   - `## Sai lệch so với spec / Docs gaps` — kết quả audit ở bước 2 và danh sách docs gap từ plan (ghi rõ đây là phần cần PO update docs).\n   - `## Kế hoạch` — link tới `plans/<ten-feature>.md`.\n\n6. Trả link PR qua workflow_note + workflow_emit_artifact. Note thêm danh sách \"cần báo PO\" (docs gaps + sai lệch spec) để tôi gửi PO."
+    permissionMode: acceptEdits
+  - key: jira-report
+    type: agent
+    title: Báo kết quả ngược lại Jira
+    agentName: jira-pm
+    permissionMode: acceptEdits
+    instruction: >-
+      NẾU run này không gắn Jira (xem step jira-tasks) → nói rõ và kết thúc, đừng làm gì.
+
+      Ngược lại: kéo các task đã xong sang trạng thái review của project (list transitions trước).
+      Comment lên ticket cha: đã làm gì · link PR · phần chưa làm và vì sao · giả định đã dùng.
+      KHÔNG tự chuyển sang Done — Done đi theo PR được merge, mà merge là việc của người.
+inputs:
+  - key: jiraProject
+    label: Jira project (tuỳ chọn)
+    type: jira-project
+    help: Có project thì plan được chia thành task trên Jira. Bỏ trống thì bỏ qua phần Jira.
+  - key: jiraTicket
+    label: Ticket cha (tuỳ chọn)
+    type: jira-ticket
+    help: Có ticket cha thì task tạo ra là subtask dưới nó.
+  - key: docs
+    label: 'Tài liệu spec (link GitHub, tuỳ chọn)'
+    type: docs
+    help: 'Dán link thì nội dung được đọc sẵn cho step plan, khỏi phải đi tìm.'
+  - key: sprint
+    label: Sprint (tuỳ chọn)
+    type: jira-sprint
+    help: Chọn sprint đang mở hoặc gõ tên mới. Bỏ trống thì ticket nằm ở backlog.

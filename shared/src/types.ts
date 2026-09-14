@@ -658,7 +658,12 @@ export const knowledgeFolderSchema = z
 
 // ── Workflows ─────────────────────────────────────────────────────────────────
 
-export const workflowStepTypeSchema = z.enum(["agent", "command", "confirm", "manual"]);
+/**
+ * `gate` is the one that isn't an action: it runs a command and lets the exit
+ * code decide whether the run moves on or goes back — the difference between a
+ * step that finished and a step that worked.
+ */
+export const workflowStepTypeSchema = z.enum(["agent", "command", "confirm", "manual", "gate"]);
 export type WorkflowStepType = z.infer<typeof workflowStepTypeSchema>;
 
 export const workflowStepSchema = z.object({
@@ -675,8 +680,59 @@ export const workflowStepSchema = z.object({
   permissionMode: permissionModeSchema.nullable(),
   maxRetries: z.number().int(),
   condition: z.string().nullable(),
+  /** Keys this step waits for. Empty = wait for the step before it, as before. */
+  dependsOn: z.array(z.string()).default([]),
+  /** gate only: which step to go back to when the check fails. */
+  onFail: z.string().nullable().default(null),
+  /** gate only: how many times that loop may repeat before the run gives up. */
+  maxLoops: z.number().int().min(0).max(3).default(0),
+  /** Project path label to run in — lets two branches work on two repos at once. */
+  cwdLabel: z.string().nullable().default(null),
+  /** Give this step its own git worktree, so a sibling branch can touch the same repo. */
+  isolate: z.boolean().default(false),
 });
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
+
+/**
+ * What a workflow asks for before it starts.
+ *
+ * Without these a workflow is a draft you rewrite per run: pointing it at a
+ * different spec meant editing the step's own instruction. The types are not
+ * decoration — `jira-project` renders the pinned list, `docs` takes a GitHub link
+ * whose contents the server reads and hands to the first step, so the agent
+ * doesn't spend a turn going to look for it.
+ */
+export const workflowInputTypeSchema = z.enum([
+  "text",
+  "choice",
+  "docs",
+  "jira-project",
+  "jira-sprint",
+  "jira-ticket",
+  "repo",
+  "path",
+]);
+export type WorkflowInputType = z.infer<typeof workflowInputTypeSchema>;
+
+export const workflowInputDefSchema = z.object({
+  /**
+   * Referenced as {{key}} in any step's instruction, and in the run's goal.
+   * camelCase is allowed because that is what people type in a template.
+   */
+  key: z
+    .string()
+    .min(1)
+    .max(40)
+    .regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, "Start with a letter; letters, numbers, - and _"),
+  label: z.string().min(1).max(120),
+  type: workflowInputTypeSchema.default("text"),
+  required: z.boolean().default(false),
+  defaultValue: z.string().default(""),
+  help: z.string().max(300).default(""),
+  /** choice only. */
+  options: z.array(z.string()).default([]),
+});
+export type WorkflowInputDef = z.infer<typeof workflowInputDefSchema>;
 
 export const workflowStepInputSchema = z.object({
   /** Stable handle used by conditions (`steps.test.failed`) and run bookkeeping. */
@@ -696,6 +752,20 @@ export const workflowStepInputSchema = z.object({
   maxRetries: z.number().int().min(0).max(3).default(0),
   /** `answers.<key> == "x"` · `answers.<key> == true` · `steps.<key>.failed` */
   condition: z.string().nullable().default(null),
+  /**
+   * Keys this step waits for. Left empty it means "the step before me", which is
+   * what every workflow written before this field meant — so old definitions keep
+   * running exactly as they did.
+   */
+  dependsOn: z.array(z.string().min(1).max(40)).max(10).default([]),
+  /** gate only: the step to go back to when the check fails (default: itself). */
+  onFail: z.string().nullable().default(null),
+  /** gate only: cap on that loop. 3 is the ceiling, per the team's own rule. */
+  maxLoops: z.number().int().min(0).max(3).default(0),
+  /** Run this step in the project path with this label, instead of the run's cwd. */
+  cwdLabel: z.string().max(60).nullable().default(null),
+  /** Own git worktree — needed when two parallel steps touch the same repo. */
+  isolate: z.boolean().default(false),
 });
 export type WorkflowStepInput = z.infer<typeof workflowStepInputSchema>;
 
@@ -708,6 +778,8 @@ export const workflowSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   steps: z.array(workflowStepSchema).default([]),
+  /** What it asks for before it starts — the same workflow, a different spec. */
+  inputs: z.array(workflowInputDefSchema).default([]),
   /** Set on the per-project listing. */
   imported: z.boolean().optional(),
 });
@@ -722,6 +794,7 @@ export const workflowInputSchema = z.object({
   description: z.string().default(""),
   folder: knowledgeFolderSchema.default(""),
   steps: z.array(workflowStepInputSchema).min(1, "A workflow needs at least one step"),
+  inputs: z.array(workflowInputDefSchema).max(10).default([]),
 });
 export type WorkflowInput = z.infer<typeof workflowInputSchema>;
 
@@ -776,7 +849,11 @@ export const workflowRunStepSchema = z.object({
   stepKey: z.string(),
   status: workflowRunStepStatusSchema,
   attempt: z.number().int(),
+  /** gate only: how many times this check has sent the run back already. */
+  loops: z.number().int().default(0),
   sessionId: z.string().nullable(),
+  /** The `claude` terminal this step runs in — what the run view shows live. */
+  terminalId: z.string().nullable().default(null),
   commandRunId: z.string().nullable(),
   note: z.string().nullable(),
   error: z.string().nullable(),
@@ -801,6 +878,16 @@ export const workflowRunSchema = z.object({
   cwd: z.string(),
   envSetId: z.string().nullable(),
   useWorktree: z.boolean(),
+  /**
+   * Unattended: the run doesn't stop to have its own work confirmed. It still
+   * stops at a `manual` step and at a real question from the agent — what goes
+   * away is the gate that only existed to make a human press Continue.
+   */
+  autoMode: z.boolean().default(false),
+  /** What an unattended run does when the agent genuinely asks something. */
+  askPolicy: z.enum(["stop", "assume"]).default("stop"),
+  /** What was filled in at Start — snapshotted like the steps are. */
+  inputs: z.record(z.string(), z.string()).default({}),
   startedAt: z.string(),
   finishedAt: z.string().nullable(),
   /** Snapshot taken at start — the run never follows later edits. */
@@ -821,11 +908,72 @@ export const workflowRunInputSchema = z.object({
   cwdPathId: z.string().optional(),
   envSetId: z.string().nullable().optional(),
   useWorktree: z.boolean().optional(),
+  /** Run it unattended — see `autoMode` on the run. */
+  autoMode: z.boolean().optional(),
+  askPolicy: z.enum(["stop", "assume"]).optional(),
+  /** Values for the workflow's declared inputs, keyed by their `key`. */
+  inputs: z.record(z.string(), z.string()).optional(),
 });
 export type WorkflowRunInput = z.infer<typeof workflowRunInputSchema>;
 
+// ── Workflow triggers ─────────────────────────────────────────────────────────
+
+/**
+ * A standing order: when work of this shape shows up, start this workflow.
+ *
+ * This is the piece that separates "a workflow someone runs" from "a workflow
+ * that runs" — and the reason it is a row per project rather than a global
+ * setting is that the label that means *do this automatically* is never the same
+ * twice across repos.
+ */
+export const workflowTriggerSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  workflowId: z.string(),
+  /** github = an issue carrying `query` as a label · jira = a JQL search. */
+  source: z.enum(["github", "jira"]),
+  /** Label for github, JQL for jira. Kept broad on purpose: too narrow never fires. */
+  query: z.string(),
+  /** github only: owner/repo. Empty = every repo configured in Integrations. */
+  repo: z.string().nullable().default(null),
+  enabled: z.boolean().default(false),
+  autoMode: z.boolean().default(true),
+  askPolicy: z.enum(["stop", "assume"]).default("stop"),
+  pollSeconds: z.number().int().min(30).max(3600).default(120),
+  cwdPathId: z.string().nullable().default(null),
+  envSetId: z.string().nullable().default(null),
+  /** Values for the workflow's inputs, so a picked-up run starts complete. */
+  inputs: z.record(z.string(), z.string()).default({}),
+  lastPolledAt: z.string().nullable().default(null),
+  lastSeenKey: z.string().nullable().default(null),
+  status: z.string().default("idle"),
+  detail: z.string().nullable().default(null),
+  createdAt: z.string(),
+});
+export type WorkflowTrigger = z.infer<typeof workflowTriggerSchema>;
+
+export const workflowTriggerInputSchema = z.object({
+  workflowId: z.string(),
+  source: z.enum(["github", "jira"]),
+  query: z.string().min(1).max(500),
+  repo: z.string().max(200).nullable().default(null),
+  enabled: z.boolean().default(false),
+  autoMode: z.boolean().default(true),
+  askPolicy: z.enum(["stop", "assume"]).default("stop"),
+  pollSeconds: z.number().int().min(30).max(3600).default(120),
+  cwdPathId: z.string().nullable().default(null),
+  envSetId: z.string().nullable().default(null),
+  inputs: z.record(z.string(), z.string()).default({}),
+});
+export type WorkflowTriggerInput = z.infer<typeof workflowTriggerInputSchema>;
+
 /** Starting points offered in the workflow library. */
-export const WORKFLOW_PRESETS: (WorkflowInput & { label: string })[] = [
+/**
+ * Written without the fields that have defaults — a preset should read as the
+ * workflow someone would type, not as a filled-in row. `WORKFLOW_PRESETS` below
+ * runs them through the schema so consumers still get complete steps.
+ */
+const PRESET_SOURCE: (z.input<typeof workflowInputSchema> & { label: string })[] = [
   {
     label: "iOS / mobile feature",
     name: "ios-feature",
@@ -1112,6 +1260,11 @@ export const WORKFLOW_PRESETS: (WorkflowInput & { label: string })[] = [
   },
 ];
 
+export const WORKFLOW_PRESETS: (WorkflowInput & { label: string })[] = PRESET_SOURCE.map((p) => ({
+  ...workflowInputSchema.parse(p),
+  label: p.label,
+}));
+
 // ── Project memory ────────────────────────────────────────────────────────────
 
 export const projectMemorySchema = z.object({
@@ -1164,6 +1317,16 @@ export const appSettingsSchema = z.object({
   "ledger.treeSnapshot": z.boolean().default(true),
   /** How far back to look for the turn that produced a commit. */
   "ledger.windowHours": z.number().int().min(1).max(720).default(24),
+  /**
+   * How many workflow steps may run at once. Two branches of the same run never
+   * share a repo — one claims it, the other waits for the next round — so this
+   * is a ceiling on the fan-out, not a licence to write to one tree twice.
+   */
+  "workflows.maxParallel": z.number().int().min(1).max(4).default(2),
+  /** Unattended runs still have a clock: the whole run gives up after this. */
+  "workflows.runBudgetMinutes": z.number().int().min(5).max(1440).default(180),
+  /** Master switch for every workflow trigger. Off means nothing fires by itself. */
+  "workflows.triggersEnabled": z.boolean().default(false),
   "theme.mode": z.enum(["dark", "light"]).default("dark"),
   "theme.accent": z.enum(["teal", "amber", "violet", "emerald"]).default("teal"),
 });
@@ -1204,6 +1367,12 @@ export const jiraConfigSchema = z
     deployment: z.enum(["cloud", "server"]).default("cloud"),
     email: z.string().email().optional().or(z.literal("")),
     apiToken: z.string().min(1),
+    /**
+     * Project keys pinned for the pickers. A Jira instance can hold hundreds of
+     * projects and two of them are yours, so the list you choose from is the
+     * short one — the full list stays a click away for when it isn't.
+     */
+    projects: z.array(z.string()).default([]),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.deployment === "cloud" && !cfg.email) {

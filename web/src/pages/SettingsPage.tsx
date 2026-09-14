@@ -370,7 +370,89 @@ function JiraForm({ status }: { status: JiraStatus }) {
           Save Jira config
         </Button>
       </div>
+      {status.configured && <JiraProjects />}
     </Card>
+  );
+}
+
+interface JiraProject {
+  key: string;
+  name: string;
+  pinned: boolean;
+}
+
+/**
+ * Which projects the pickers offer.
+ *
+ * An instance can hold hundreds and two of them are yours, so the list a
+ * workflow chooses from is the short one you pin here — and pinning is what
+ * turns "type the project key and hope" into a dropdown.
+ */
+function JiraProjects() {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const {
+    data: projects = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["jira-projects"],
+    queryFn: () => api.get<JiraProject[]>("/api/jira/projects"),
+    enabled: open,
+  });
+  const pin = useMutation({
+    mutationFn: (keys: string[]) => api.put("/api/jira/projects/pinned", { projects: keys }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["jira-projects"] });
+      void qc.invalidateQueries({ queryKey: ["jira-projects-pinned"] });
+    },
+  });
+
+  const pinned = projects.filter((p) => p.pinned).map((p) => p.key);
+
+  if (!open) {
+    return (
+      <div className="border-t border-hairline pt-3">
+        <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+          Pin the projects you work in →
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 border-t border-hairline pt-3">
+      <p className="text-xs text-ink-muted">
+        Pinned projects are what workflows and <span className="font-mono">@</span> offer you.
+      </p>
+      {isLoading && <p className="text-xs text-ink-muted">Asking Jira…</p>}
+      {error && (
+        <p className="text-xs text-err">
+          {error instanceof Error ? error.message : "Could not list projects"}
+        </p>
+      )}
+      <div className="max-h-56 space-y-0.5 overflow-y-auto">
+        {projects.map((p) => (
+          <label
+            key={p.key}
+            className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-white/5"
+          >
+            <input
+              type="checkbox"
+              checked={p.pinned}
+              disabled={pin.isPending}
+              onChange={(e) =>
+                pin.mutate(
+                  e.target.checked ? [...pinned, p.key] : pinned.filter((k) => k !== p.key),
+                )
+              }
+            />
+            <span className="font-mono text-xs">{p.key}</span>
+            <span className="min-w-0 flex-1 truncate text-ink-muted">{p.name}</span>
+          </label>
+        ))}
+      </div>
+    </div>
   );
 }
 

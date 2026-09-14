@@ -375,9 +375,52 @@ export const workflowSteps = sqliteTable(
     permissionMode: text("permission_mode"),
     maxRetries: integer("max_retries").notNull().default(0),
     condition: text("condition"),
+    /**
+     * JSON string[] of step keys this one waits for. NULL or empty keeps the old
+     * meaning — "the step before me" — so every workflow written before the
+     * scheduler understood graphs still runs in exactly the same order.
+     */
+    dependsOn: text("depends_on"),
+    /** gate: which step the run goes back to when the check fails. */
+    onFail: text("on_fail"),
+    /** gate: how many times it may send the run back before giving up. */
+    maxLoops: integer("max_loops").notNull().default(0),
+    /** Project path label to run in — how two branches reach two repos at once. */
+    cwdLabel: text("cwd_label"),
+    /** Own worktree, so a sibling branch may touch the same repo. */
+    isolate: integer("isolate", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("idx_workflow_steps_workflow").on(t.workflowId, t.sortOrder)],
+);
+
+/**
+ * What a workflow asks for before it runs.
+ *
+ * The difference between an asset and a draft: without these, pointing the same
+ * workflow at a different spec meant editing a step's instruction, so nobody
+ * reused one — they copied it.
+ */
+export const workflowInputs = sqliteTable(
+  "workflow_inputs",
+  {
+    id: text("id").primaryKey(),
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflows.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    /** Referenced as {{key}} in step instructions and in the run's goal. */
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    /** text|choice|docs|jira-project|jira-ticket|repo|path — decides the widget
+     * and, for `docs`/`jira-ticket`, what the server fetches before step one. */
+    type: text("type").notNull().default("text"),
+    required: integer("required", { mode: "boolean" }).notNull().default(false),
+    defaultValue: text("default_value").notNull().default(""),
+    help: text("help").notNull().default(""),
+    options: text("options"), // JSON string[] for choice
+  },
+  (t) => [uniqueIndex("idx_workflow_inputs_unique").on(t.workflowId, t.key)],
 );
 
 /** Workflows imported into a project — shared, not copied. */
@@ -420,6 +463,21 @@ export const workflowRuns = sqliteTable(
     cwd: text("cwd").notNull(),
     envSetId: text("env_set_id"),
     useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
+    /** Unattended: no gate that exists only to make a human press Continue. */
+    autoMode: integer("auto_mode", { mode: "boolean" }).notNull().default(false),
+    /** stop | assume — what an unattended run does with a real question. */
+    askPolicy: text("ask_policy").notNull().default("stop"),
+    /**
+     * When an unattended run must give up. A run with nobody watching needs a
+     * clock, or a step that hangs holds a repo lock until someone notices.
+     */
+    deadlineAt: text("deadline_at"),
+    /** Assumptions an `assume` run made, so the PR can carry them. */
+    assumptions: text("assumptions"),
+    /** JSON: what the declared inputs were filled with, snapshotted at start. */
+    inputs: text("inputs"),
+    /** What started it: manual, or the trigger row that picked the work up. */
+    triggerId: text("trigger_id"),
     startedAt: text("started_at").notNull(),
     finishedAt: text("finished_at"),
   },
@@ -436,7 +494,15 @@ export const workflowRunSteps = sqliteTable(
     stepKey: text("step_key").notNull(),
     status: text("status").notNull().default("pending"),
     attempt: integer("attempt").notNull().default(1),
+    /** gate: times this check sent the run back. Separate from `attempt`, which
+     * counts re-runs of the step itself — the two caps must not multiply. */
+    loops: integer("loops").notNull().default(0),
     sessionId: text("session_id"),
+    /**
+     * The `claude` terminal this step ran in. Steps run in a real PTY so the work
+     * can be watched as it happens, and the run view needs the id to show it.
+     */
+    terminalId: text("terminal_id"),
     commandRunId: text("command_run_id"),
     note: text("note"),
     error: text("error"),
@@ -480,6 +546,69 @@ export const workflowArtifacts = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("idx_workflow_artifacts_run").on(t.runId)],
+);
+
+/**
+ * A standing order: work of this shape shows up, this workflow starts.
+ *
+ * The difference between a workflow someone runs and a workflow that runs. It is
+ * a row per project rather than one global setting because the label that means
+ * "do this one automatically" is never the same twice across repos.
+ *
+ * `lastSeenKey` and the `workflow_trigger_seen` table below are what stop the
+ * same ticket from being picked up twice — the failure mode every polling
+ * integration hits, and the one that costs a duplicate PR when it does.
+ */
+export const workflowTriggers = sqliteTable(
+  "workflow_triggers",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    workflowId: text("workflow_id").notNull(),
+    source: text("source").notNull(), // github|jira
+    /** A label for github, a JQL for jira. */
+    query: text("query").notNull(),
+    /** github only: owner/repo, or NULL for every repo in Integrations. */
+    repo: text("repo"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+    autoMode: integer("auto_mode", { mode: "boolean" }).notNull().default(true),
+    askPolicy: text("ask_policy").notNull().default("stop"),
+    pollSeconds: integer("poll_seconds").notNull().default(120),
+    cwdPathId: text("cwd_path_id"),
+    envSetId: text("env_set_id"),
+    /** JSON: input values a picked-up run starts with. */
+    inputs: text("inputs"),
+    lastPolledAt: text("last_polled_at"),
+    lastSeenKey: text("last_seen_key"),
+    status: text("status").notNull().default("idle"), // idle|ok|error|disabled
+    detail: text("detail"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_workflow_triggers_project").on(t.projectId)],
+);
+
+/**
+ * One row per piece of work a trigger has already taken. Keyed by the item *and*
+ * its last update, so a ticket edited after its run finished can legitimately
+ * come round again while an edit mid-run cannot start a second one.
+ */
+export const workflowTriggerSeen = sqliteTable(
+  "workflow_trigger_seen",
+  {
+    id: text("id").primaryKey(),
+    triggerId: text("trigger_id")
+      .notNull()
+      .references(() => workflowTriggers.id, { onDelete: "cascade" }),
+    /** `<source>:<repo|project>:<id>` — stable across polls. */
+    itemKey: text("item_key").notNull(),
+    /** The item's own updated-at when it was taken. */
+    itemUpdatedAt: text("item_updated_at"),
+    runId: text("run_id"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("idx_workflow_trigger_seen_unique").on(t.triggerId, t.itemKey)],
 );
 
 /** Per-project opt-in for agents that aren't globally enabled. */

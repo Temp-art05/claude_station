@@ -11,6 +11,8 @@ import {
   getTransitions,
   issueContext,
   jiraConfig,
+  listProjects,
+  listSprints,
   searchIssues,
   transitionIssue,
 } from "../services/jira";
@@ -97,6 +99,46 @@ export function integrationRoutes(app: FastifyInstance): void {
   });
 
   // ── Jira ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Every project the account can see, pinned ones first. Asked live rather than
+   * cached: a project added this morning has to be pickable this morning.
+   */
+  app.get("/api/jira/projects", async () => listProjects());
+
+  /**
+   * The short list — what the pickers offer without a round trip to Jira.
+   * Empty rather than an error when Jira isn't set up: the `@` picker asks for
+   * this on every keystroke, and someone who doesn't use Jira should see the
+   * other suggestions rather than a failed request.
+   */
+  app.get("/api/jira/projects/pinned", async () => {
+    try {
+      return jiraConfig().projects ?? [];
+    } catch {
+      return [];
+    }
+  });
+
+  /**
+   * Pin the projects you actually use. Its own route rather than part of the
+   * config PUT, which would make you retype the API token to tick a checkbox.
+   */
+  app.put("/api/jira/projects/pinned", async (req) => {
+    const { projects } = z
+      .object({ projects: z.array(z.string().min(1).max(40)).max(50) })
+      .parse(req.body);
+    const current = jiraConfig();
+    saveIntegration("jira", { ...current, projects: projects.map((p) => p.toUpperCase()) });
+    return { projects };
+  });
+
+  /** Open sprints for a project — what the sprint picker offers. */
+  app.get("/api/jira/sprints", async (req) => {
+    const { projectKey } = z.object({ projectKey: z.string().min(1) }).parse(req.query ?? {});
+    return listSprints(projectKey);
+  });
+
   app.get("/api/jira/issues", async (req) => {
     const { jql, limit } = z
       .object({ jql: z.string().optional(), limit: z.coerce.number().int().max(100).default(50) })
@@ -177,7 +219,12 @@ export function integrationRoutes(app: FastifyInstance): void {
   app.get("/api/jira/status", async () => {
     try {
       const cfg = jiraConfig();
-      return { configured: true, baseUrl: cfg.baseUrl, email: cfg.email, deployment: cfg.deployment };
+      return {
+        configured: true,
+        baseUrl: cfg.baseUrl,
+        email: cfg.email,
+        deployment: cfg.deployment,
+      };
     } catch {
       return { configured: false };
     }

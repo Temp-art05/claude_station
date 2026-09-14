@@ -316,6 +316,20 @@ function repaintWhenResized(id: string, cols: number, rows: number): void {
   settling.set(id, t);
 }
 
+/**
+ * The tail of what this terminal has printed.
+ *
+ * The workflow engine reads it to find out whether the CLI is at its composer
+ * before typing a prompt into it. Typing blind is how a run once answered the
+ * CLI's "do you trust this folder?" dialog with its default — which is *No, exit*.
+ */
+export function recentOutput(id: string, bytes = 4000): string {
+  const m = sessions.get(id);
+  if (!m) return "";
+  const joined = Buffer.concat(m.scrollback);
+  return joined.subarray(Math.max(0, joined.length - bytes)).toString("utf8");
+}
+
 export function write(id: string, data: string): boolean {
   const m = sessions.get(id);
   if (!m || m.exited) return false;

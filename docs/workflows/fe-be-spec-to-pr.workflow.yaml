@@ -1,0 +1,145 @@
+# Nhóm `fe-be` — một spec chạm cả FE và BE, hai bên làm SONG SONG.
+#
+# Khác `fe-spec-to-pr` đúng một chỗ có ý nghĩa: hai step impl khai cùng
+# `dependsOn: [jira-tasks]` nên chúng sẵn sàng cùng lúc, và mỗi step trỏ vào một
+# repo khác qua `cwdLabel`. Hai repo khác nhau nghĩa là hai working tree khác
+# nhau — điều kiện để scheduler thật sự chạy chúng cùng lúc.
+#
+# Sửa `cwdLabel` cho khớp label path trong project của bạn (mặc định "FE" và "BE").
+#
+# Contract giữa hai bên là chỗ hỏng kinh điển: step plan phải chốt nó trước, và
+# step BE bị cấm đổi contract cho FE dễ — app cũ trên máy người dùng vẫn phải chạy.
+name: fe-be-spec-to-pr
+description: >-
+  FE + BE: một spec → chia task Jira → FE và BE impl song song (mỗi bên một repo) → test hai bên →
+  kiểm chỗ giao → review → PR riêng từng repo → cập nhật Jira.
+folder: fe-be
+inputs:
+  - key: docs
+    label: Spec (link GitHub, tuỳ chọn)
+    type: docs
+  - key: jiraTicket
+    label: Ticket (tuỳ chọn)
+    type: jira-ticket
+  - key: jiraProject
+    label: Jira project (tuỳ chọn)
+    type: jira-project
+  - key: sprint
+    label: Sprint (tuỳ chọn)
+    type: jira-sprint
+  - key: feLabel
+    label: Repo FE (label path)
+    type: path
+    defaultValue: FE
+  - key: beLabel
+    label: Repo BE (label path)
+    type: path
+    defaultValue: BE
+
+steps:
+  - key: plan
+    type: agent
+    title: Plan chung, chốt contract FE ⨯ BE
+    agentName: spec-reader
+    requiresConfirm: true
+    permissionMode: default
+    instruction: >-
+      Spec và ticket đã nằm trong "Tagged sources". Không có cả hai → workflow_ask.
+      Đọc cả hai repo hiện tại. Plan phải tách rõ: phần FE làm gì, phần BE làm gì, và **contract giữa
+      hai bên** (endpoint, field, kiểu, mã lỗi) — đây là chỗ hai nhánh song song gặp nhau, chốt sai
+      thì cả hai cùng sai.
+      Soát đủ tiêu chí nghiệm thu · bốn trạng thái · API nào · lần này không làm gì.
+      Ghi plan và workflow_emit_artifact.
+
+  - key: jira-tasks
+    type: agent
+    title: Chia task lên Jira (bỏ qua cái đã có)
+    agentName: jira-pm
+    dependsOn: [plan]
+    permissionMode: acceptEdits
+    instruction: >-
+      Cả {{jiraProject}} lẫn {{jiraTicket}} đều trống → nói rõ "không gắn Jira" rồi kết thúc.
+      Ngược lại: tra ticket đang mở TRƯỚC, dùng lại cái đã có; tạo phần còn thiếu, ghi rõ task nào
+      thuộc FE task nào thuộc BE. Đẩy vào sprint "{{sprint}}" nếu có nêu.
+
+  - key: impl-fe
+    type: agent
+    title: FE
+    agentName: fe-dev
+    cwdLabel: "{{feLabel}}"
+    dependsOn: [jira-tasks]
+    permissionMode: acceptEdits
+    instruction: >-
+      Làm phần FE trong plan. CHỈ chạm repo FE — repo BE đang được sửa song song.
+      Theo đúng contract đã chốt; contract có vẻ sai thì workflow_ask, đừng tự đổi phía mình cho khớp.
+
+  - key: impl-be
+    type: agent
+    title: BE
+    agentName: fe-dev
+    cwdLabel: "{{beLabel}}"
+    dependsOn: [jira-tasks]
+    permissionMode: acceptEdits
+    instruction: >-
+      Làm phần BE trong plan. CHỈ chạm repo BE.
+      **Không đổi API contract để FE dễ hơn** — bản app cũ đang nằm trên máy người dùng vẫn phải chạy
+      được. Cần đổi thật thì workflow_ask.
+
+  - key: verify-fe
+    type: gate
+    title: FE test
+    commandName: Test
+    cwdLabel: "{{feLabel}}"
+    dependsOn: [impl-fe]
+    onFail: impl-fe
+    maxLoops: 2
+
+  - key: verify-be
+    type: gate
+    title: BE test
+    commandName: Test
+    cwdLabel: "{{beLabel}}"
+    dependsOn: [impl-be]
+    onFail: impl-be
+    maxLoops: 2
+
+  - key: review
+    type: agent
+    title: Review cả hai phía, soi chỗ giao
+    agentName: spec-reader
+    dependsOn: [verify-fe, verify-be]
+    permissionMode: default
+    instruction: >-
+      Đọc diff của cả hai repo. Ngoài ba nhóm thường lệ (lỗi đúng/sai · hiệu năng · chuẩn repo),
+      soi kỹ **chỗ giao**: tên field, kiểu dữ liệu, nullable, mã lỗi, thứ tự gọi — hai bên có khớp
+      contract đã chốt không. Đây là thứ mà mỗi bên nhìn riêng đều thấy đúng.
+      Ghi danh sách phải sửa ra artifact, nói rõ mỗi mục thuộc repo nào. Không sửa code.
+
+  - key: fix-review
+    type: agent
+    title: Sửa theo review
+    agentName: fe-dev
+    dependsOn: [review]
+    permissionMode: acceptEdits
+    instruction: >-
+      Sửa các mục trong artifact review, đúng repo của từng mục. Không có gì thì nói rõ và kết thúc.
+
+  - key: pr
+    type: agent
+    title: Mở PR cho từng repo
+    agentName: fe-dev
+    dependsOn: [fix-review]
+    permissionMode: acceptEdits
+    instruction: >-
+      Commit và mở PR **riêng cho từng repo có thay đổi**, mô tả mỗi PR nói rõ nó đi kèm PR nào bên
+      repo kia và thứ tự merge nào an toàn (thường là BE trước). KHÔNG merge.
+
+  - key: jira-report
+    type: agent
+    title: Báo lại Jira
+    agentName: jira-pm
+    dependsOn: [pr]
+    permissionMode: acceptEdits
+    instruction: >-
+      Không gắn Jira thì kết thúc. Ngược lại: kéo task đã xong sang trạng thái review, comment lên
+      ticket kèm cả hai link PR và thứ tự merge. KHÔNG tự Done.
