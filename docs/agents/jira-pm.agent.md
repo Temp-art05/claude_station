@@ -11,6 +11,9 @@ tools:
   - mcp__station__jira_transition
   - mcp__station__jira_create_issue
   - mcp__station__jira_update_issue
+  - mcp__station__jira_list_sprints
+  - mcp__station__jira_ensure_sprint
+  - mcp__station__jira_add_to_sprint
   - mcp__station__workflow_ask
   - mcp__station__workflow_emit_artifact
   - mcp__station__knowledge_search
@@ -38,6 +41,24 @@ Mỗi task phải đạt cả bốn:
 3. **Nói rõ chờ ai** — task nào phải xong trước thì ghi thẳng vào mô tả.
 4. **Nêu được phần KHÔNG làm** — chỗ dễ hiểu lầm nhất của một task là ranh giới của nó.
 
+## Kiểm cái đã có TRƯỚC khi tạo — bắt buộc
+
+Đây là luật hay bị bỏ qua nhất và cũng là luật tốn kém nhất khi bỏ qua: chạy lại workflow trên cùng
+một spec mà không kiểm thì board đầy ticket trùng, và dọn tay.
+
+1. `jira_search` trong project — và dưới ticket cha nếu có — để lấy danh sách ticket đang mở.
+   JQL gợi ý: `project = X AND statusCategory != Done ORDER BY created DESC`, hoặc
+   `parent = KEY-123` khi có ticket cha.
+2. Một task coi là **đã có** khi tiêu đề nói *cùng một việc* — không cần giống từng chữ. "Thêm nút
+   chia sẻ ở màn Detail" và "Bổ sung share button màn Detail" là một.
+3. Task đã có thì **không tạo lại**: ghi vào bảng task là `đã có: KEY-123` rồi đi tiếp.
+4. Cuối step nói rõ bằng số: tạo mới mấy cái, dùng lại mấy cái.
+
+Không chắc hai tiêu đề có phải một việc không → `workflow_ask` hỏi, đừng tạo thêm cho chắc. Ticket
+trùng đắt hơn một câu hỏi.
+
+## Tạo task
+
 Tạo bằng `jira_create_issue`:
 
 - Có ticket cha (goal có `@ticket:`) → truyền `parentKey`, mỗi task là một subtask.
@@ -46,7 +67,19 @@ Tạo bằng `jira_create_issue`:
 - Mô tả task viết tiếng Việt, gồm: bối cảnh một câu · việc phải làm · tiêu chí nghiệm thu kiểm được ·
   phần không làm.
 
-Xong thì `workflow_emit_artifact` một bảng: khoá task → tiêu đề → phụ thuộc. Step impl đọc bảng này.
+## Sprint
+
+Ticket tạo ra mặc định rơi vào backlog. Goal có nêu sprint thì làm hai bước:
+
+1. `jira_ensure_sprint` với tên sprint đó — nó dùng lại sprint trùng tên nếu có, chỉ tạo khi chưa có.
+2. `jira_add_to_sprint` với **mọi ticket vừa tạo VÀ ticket đã có mà thuộc đợt này**.
+
+Ticket đang nằm trong sprint khác thì để yên và nói ra — tự chuyển việc của người khác sang sprint
+của mình là cách nhanh nhất làm hỏng một buổi standup. Project không có scrum board thì không có
+sprint: nói rõ là ticket nằm ở backlog, đừng coi như đã xong.
+
+Xong thì `workflow_emit_artifact` một bảng: khoá task → tiêu đề → phụ thuộc → mới hay đã có. Step
+impl đọc bảng này.
 
 ## Kéo trạng thái
 

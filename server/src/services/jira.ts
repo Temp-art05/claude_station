@@ -23,13 +23,17 @@ function apiPath(cfg: JiraConfig, path: string): string {
   return `/rest/api/${isServer(cfg) ? "2" : "3"}${path}`;
 }
 
-async function jiraFetch<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
-  const cfg = jiraConfig();
-  // Cloud authenticates with Basic email:apiToken; Server/DC uses a Personal
-  // Access Token as a Bearer header (Basic+PAT just returns an HTML 401 page).
-  const auth = isServer(cfg)
+/** Cloud authenticates with Basic email:apiToken; Server/DC uses a Personal
+ *  Access Token as a Bearer header (Basic+PAT just returns an HTML 401 page). */
+function authHeader(cfg: JiraConfig): string {
+  return isServer(cfg)
     ? `Bearer ${cfg.apiToken}`
     : `Basic ${Buffer.from(`${cfg.email}:${cfg.apiToken}`).toString("base64")}`;
+}
+
+async function jiraFetch<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
+  const cfg = jiraConfig();
+  const auth = authHeader(cfg);
   const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}${apiPath(cfg, path)}`, {
     method: init?.method ?? "GET",
     headers: {
@@ -42,6 +46,42 @@ async function jiraFetch<T>(path: string, init?: { method?: string; body?: unkno
   if (!res.ok) {
     const text = await res.text();
     throw Object.assign(new Error(`Jira ${res.status}: ${text.slice(0, 300)}`), {
+      statusCode: res.status === 401 || res.status === 403 ? 400 : 502,
+    });
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+/**
+ * Sprints live on a different API from everything else: `/rest/agile/1.0`, the
+ * same path on Cloud and on Server/DC. It can also be switched off entirely on a
+ * self-hosted instance, which is why a 404 here is reported as "this Jira has no
+ * Agile API" rather than being left to read as "there are no sprints".
+ */
+async function jiraAgileFetch<T>(
+  path: string,
+  init?: { method?: string; body?: unknown },
+): Promise<T> {
+  const cfg = jiraConfig();
+  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/rest/agile/1.0${path}`, {
+    method: init?.method ?? "GET",
+    headers: {
+      Authorization: authHeader(cfg),
+      Accept: "application/json",
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: init?.body ? JSON.stringify(init.body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 404 && path.startsWith("/board")) {
+      throw Object.assign(
+        new Error("This Jira has no Agile API (boards and sprints) at /rest/agile/1.0"),
+        { statusCode: 400 },
+      );
+    }
+    throw Object.assign(new Error(`Jira agile ${res.status}: ${text.slice(0, 300)}`), {
       statusCode: res.status === 401 || res.status === 403 ? 400 : 502,
     });
   }
@@ -434,6 +474,115 @@ export async function updateIssue(key: string, input: UpdateIssueInput): Promise
   }
   if (Object.keys(fields).length === 0) throw badRequest("Nothing to update");
   await jiraFetch(`/issue/${encodeURIComponent(key)}`, { method: "PUT", body: { fields } });
+}
+
+// ── Sprints ───────────────────────────────────────────────────────────────────
+
+export interface JiraBoard {
+  id: number;
+  name: string;
+  type: string;
+}
+
+export interface JiraSprint {
+  id: number;
+  name: string;
+  state: string;
+  boardId: number;
+}
+
+/**
+ * Boards for a project. Sprints hang off a board, not off a project, which is
+ * the detail that makes "create the ticket in this sprint" a two-step lookup
+ * rather than one field.
+ */
+export async function listBoards(projectKey: string): Promise<JiraBoard[]> {
+  const data = await jiraAgileFetch<{ values?: { id: number; name?: string; type?: string }[] }>(
+    `/board?projectKeyOrId=${encodeURIComponent(projectKey)}`,
+  );
+  return (data.values ?? []).map((b) => ({
+    id: b.id,
+    name: b.name ?? String(b.id),
+    type: b.type ?? "scrum",
+  }));
+}
+
+/**
+ * Open sprints for a project — active first, then future.
+ *
+ * Closed sprints are left out on purpose: they are not somewhere new work can go,
+ * and offering them turns a picker into a way to file a ticket where nobody will
+ * look at it. A project with no scrum board simply has none, which is a fact the
+ * caller has to state rather than treat as an error.
+ */
+export async function listSprints(projectKey: string): Promise<JiraSprint[]> {
+  const boards = await listBoards(projectKey);
+  const scrum = boards.filter((b) => b.type !== "kanban");
+  const out: JiraSprint[] = [];
+  for (const board of scrum) {
+    try {
+      const data = await jiraAgileFetch<{
+        values?: { id: number; name?: string; state?: string }[];
+      }>(`/board/${board.id}/sprint?state=active,future`);
+      for (const s of data.values ?? []) {
+        out.push({
+          id: s.id,
+          name: s.name ?? String(s.id),
+          state: s.state ?? "future",
+          boardId: board.id,
+        });
+      }
+    } catch {
+      // A board that refuses its sprints (kanban in disguise, or no permission)
+      // must not take the other boards down with it.
+    }
+  }
+  return out.sort((a, b) => (a.state === b.state ? a.id - b.id : a.state === "active" ? -1 : 1));
+}
+
+/**
+ * Find a sprint by name, or make one. Reusing an existing name is the default
+ * because the alternative — two sprints called "Sprint 12" — is a mess nobody
+ * notices until standup.
+ */
+export async function ensureSprint(
+  projectKey: string,
+  name: string,
+): Promise<{ sprint: JiraSprint; created: boolean }> {
+  const existing = await listSprints(projectKey);
+  const match = existing.find((s) => s.name.trim().toLowerCase() === name.trim().toLowerCase());
+  if (match) return { sprint: match, created: false };
+
+  const boards = await listBoards(projectKey);
+  const board = boards.find((b) => b.type !== "kanban");
+  if (!board) {
+    throw badRequest(
+      `${projectKey} has no scrum board, so it has no sprints — create the issues in the backlog instead`,
+    );
+  }
+  const created = await jiraAgileFetch<{ id: number; name?: string; state?: string }>("/sprint", {
+    method: "POST",
+    body: { name: name.trim(), originBoardId: board.id },
+  });
+  return {
+    sprint: {
+      id: created.id,
+      name: created.name ?? name,
+      state: created.state ?? "future",
+      boardId: board.id,
+    },
+    created: true,
+  };
+}
+
+/** Move issues into a sprint. Jira takes at most 50 per call. */
+export async function addIssuesToSprint(sprintId: number, keys: string[]): Promise<void> {
+  for (let i = 0; i < keys.length; i += 50) {
+    await jiraAgileFetch(`/sprint/${sprintId}/issue`, {
+      method: "POST",
+      body: { issues: keys.slice(i, i + 50) },
+    });
+  }
 }
 
 /** Seed text for a "Work on this with Claude" session. */

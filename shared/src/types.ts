@@ -707,6 +707,7 @@ export const workflowInputTypeSchema = z.enum([
   "choice",
   "docs",
   "jira-project",
+  "jira-sprint",
   "jira-ticket",
   "repo",
   "path",

@@ -223,6 +223,11 @@ function prepareInputs(
       case "jira-project":
         lines.push(`- ${def.label}: @jira:${value.toUpperCase()}`);
         break;
+      case "jira-sprint":
+        // Deliberately not a tag: the sprint may not exist yet, and the agent is
+        // the one that decides between reusing a name and creating it.
+        lines.push(`- ${def.label}: sprint "${value}" (dùng lại nếu đã có, chưa có thì tạo)`);
+        break;
       case "repo":
         lines.push(`- ${def.label}: @repo:${value}`);
         break;
@@ -1164,15 +1169,21 @@ function settleGate(
   const loops = stepRow.loops + 1;
   const fingerprint = (result.tail ?? "").trim().slice(-2000);
   const repeated = fingerprint.length > 0 && fingerprint === stepRow.note;
+  // A command this project never declared is not a failing check — it is a gate
+  // pointed at nothing, and sending the run back to "fix it" three times fixes
+  // nothing while burning three agent turns.
+  const noSuchCommand = (result.error ?? "").startsWith("No command named");
 
-  const giveUp = loops > cap || repeated || target === step.key;
+  const giveUp = noSuchCommand || loops > cap || repeated || target === step.key;
   if (giveUp) {
     upsertRunStep(runId, step.key, {
       status: "failed",
       loops,
-      error: repeated
-        ? `${result.error} — and the same output twice in a row, so it is not getting anywhere`
-        : `${result.error} after ${loops - 1} loop(s) back to "${target}"`,
+      error: noSuchCommand
+        ? result.error
+        : repeated
+          ? `${result.error} — and the same output twice in a row, so it is not getting anywhere`
+          : `${result.error} after ${loops - 1} loop(s) back to "${target}"`,
       finishedAt: nowIso(),
     });
     setRunStatus(runId, "failed", step.key);

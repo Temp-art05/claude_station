@@ -1,0 +1,141 @@
+# Nhóm `ios-be` — một spec chạm cả iOS và BE, hai bên làm SONG SONG.
+#
+# Bản iOS của `fe-be-spec-to-pr`. Hai step impl cùng `dependsOn: [jira-tasks]` nên
+# chạy cùng lúc, mỗi step một repo qua `cwdLabel` — hai working tree khác nhau là
+# điều kiện để scheduler thật sự chạy song song.
+#
+# Sửa `cwdLabel` cho khớp label path của project (mặc định "iOS" và "BE").
+name: ios-be-spec-to-pr
+description: >-
+  iOS + BE: một spec → chia task Jira → iOS và BE impl song song → build/test hai bên → kiểm chỗ
+  giao → review → PR riêng từng repo → cập nhật Jira.
+folder: ios-be
+inputs:
+  - key: docs
+    label: Spec (link GitHub, tuỳ chọn)
+    type: docs
+  - key: jiraTicket
+    label: Ticket (tuỳ chọn)
+    type: jira-ticket
+  - key: jiraProject
+    label: Jira project (tuỳ chọn)
+    type: jira-project
+  - key: sprint
+    label: Sprint (tuỳ chọn)
+    type: jira-sprint
+  - key: iosLabel
+    label: Repo iOS (label path)
+    type: path
+    defaultValue: iOS
+  - key: beLabel
+    label: Repo BE (label path)
+    type: path
+    defaultValue: BE
+
+steps:
+  - key: plan
+    type: agent
+    title: Plan chung, chốt contract iOS ⨯ BE
+    agentName: spec-reader
+    requiresConfirm: true
+    permissionMode: default
+    instruction: >-
+      Spec và ticket đã nằm trong "Tagged sources". Không có cả hai → workflow_ask.
+      Đọc cả hai repo. Plan tách rõ: phần iOS (tầng nào, màn nào), phần BE, và **contract giữa hai
+      bên** (endpoint, field, kiểu, nullable, mã lỗi). Chốt sai chỗ này thì cả hai nhánh cùng sai.
+      Soát đủ tiêu chí nghiệm thu · bốn trạng thái · API nào · lần này không làm gì.
+      Ghi plan và workflow_emit_artifact.
+
+  - key: jira-tasks
+    type: agent
+    title: Chia task lên Jira (bỏ qua cái đã có)
+    agentName: jira-pm
+    dependsOn: [plan]
+    permissionMode: acceptEdits
+    instruction: >-
+      Cả {{jiraProject}} lẫn {{jiraTicket}} đều trống → nói rõ "không gắn Jira" rồi kết thúc.
+      Ngược lại: tra ticket đang mở TRƯỚC, dùng lại cái đã có; tạo phần còn thiếu, ghi rõ task nào
+      thuộc iOS task nào thuộc BE. Đẩy vào sprint "{{sprint}}" nếu có nêu.
+
+  - key: impl-ios
+    type: agent
+    title: iOS
+    agentName: ios-dev
+    cwdLabel: "{{iosLabel}}"
+    dependsOn: [jira-tasks]
+    permissionMode: acceptEdits
+    instruction: >-
+      Làm phần iOS trong plan. CHỈ chạm repo iOS — repo BE đang được sửa song song.
+      Clean Architecture + MVVM, Factory DI, DesignSystem tokens, Accessibility Identifiers.
+      Theo đúng contract đã chốt; thấy contract sai thì workflow_ask, đừng tự lách phía mình.
+
+  - key: impl-be
+    type: agent
+    title: BE
+    agentName: fe-dev
+    cwdLabel: "{{beLabel}}"
+    dependsOn: [jira-tasks]
+    permissionMode: acceptEdits
+    instruction: >-
+      Làm phần BE trong plan. CHỈ chạm repo BE.
+      **Không đổi API contract để app dễ hơn** — bản app cũ đang nằm trên máy người dùng vẫn phải
+      chạy được, và đó là lý do đổi contract không bao giờ là việc làm một mình.
+
+  - key: verify-ios
+    type: gate
+    title: iOS build
+    commandName: Build
+    cwdLabel: "{{iosLabel}}"
+    dependsOn: [impl-ios]
+    onFail: impl-ios
+    maxLoops: 2
+
+  - key: verify-be
+    type: gate
+    title: BE test
+    commandName: Test
+    cwdLabel: "{{beLabel}}"
+    dependsOn: [impl-be]
+    onFail: impl-be
+    maxLoops: 2
+
+  - key: review
+    type: agent
+    title: Review cả hai phía, soi chỗ giao
+    agentName: spec-reader
+    dependsOn: [verify-ios, verify-be]
+    permissionMode: default
+    instruction: >-
+      Đọc diff cả hai repo. Ngoài ba nhóm thường lệ (lỗi đúng/sai · hiệu năng · chuẩn repo), soi kỹ
+      **chỗ giao**: tên field, kiểu, nullable, mã lỗi, thứ tự gọi — và đặc biệt là app phiên bản cũ
+      còn chạy được với BE mới không.
+      Ghi danh sách phải sửa ra artifact, nói rõ mỗi mục thuộc repo nào. Không sửa code.
+
+  - key: fix-review
+    type: agent
+    title: Sửa theo review
+    agentName: ios-dev
+    dependsOn: [review]
+    permissionMode: acceptEdits
+    instruction: >-
+      Sửa các mục trong artifact review, đúng repo của từng mục. Không có gì thì nói rõ và kết thúc.
+
+  - key: pr
+    type: agent
+    title: Mở PR cho từng repo
+    agentName: ios-dev
+    dependsOn: [fix-review]
+    permissionMode: acceptEdits
+    instruction: >-
+      Commit dưới tên tôi, mở PR **riêng cho từng repo có thay đổi**, mô tả tiếng Việt, nói rõ PR này
+      đi kèm PR nào bên repo kia và thứ tự merge an toàn (thường là BE trước). KHÔNG merge.
+
+  - key: jira-report
+    type: agent
+    title: Báo lại Jira
+    agentName: jira-pm
+    dependsOn: [pr]
+    permissionMode: acceptEdits
+    instruction: >-
+      Không gắn Jira thì kết thúc. Ngược lại: kéo task đã xong sang trạng thái review, comment kèm
+      cả hai link PR và thứ tự merge. KHÔNG tự Done.

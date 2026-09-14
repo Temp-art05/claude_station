@@ -1,55 +1,64 @@
-# Thư viện workflow — và chọn hình dạng nào
+# Thư viện workflow — bảy nhóm, mỗi nhóm một workflow
 
-Import cả thư mục này ở trang **Workflows → Import folder**, hoặc từng file một.
+Import cả thư mục ở **Workflows → Import folder**, hoặc từng file.
 
-Viết một workflow không đắt. **Chọn nhầm hình dạng cho loại việc** mới đắt — nó chạy được, ra kết quả,
-và bạn chỉ phát hiện sai sau vài lần chạy. Bảng dưới xếp theo câu hỏi "việc của tôi trông như thế nào",
-chứ không theo tên mô hình.
+Trước đây ở đây có mười bốn workflow, phần lớn khác nhau ở **hình dạng** (song song, bỏ phiếu, vòng
+lặp) chứ không ở **việc**. Mở ra phải chọn giữa ba cái đều tên là "review" thì không ai chọn được.
+Giờ chia theo việc: mỗi nhóm một workflow, và những hình dạng kia nằm bên trong nó dưới dạng step.
 
-| Việc của bạn trông như… | Dùng | Vì sao |
+| Nhóm | Workflow | Việc |
 |---|---|---|
-| Có thứ tự cứng, bước sau cần kết quả bước trước | `seq-feature-auto` | Tuần tự (prompt chaining). Đơn giản nhất, và phần lớn việc thật là loại này |
-| Một tài liệu spec → ra task, ra PR | **`spec-doc-to-delivery`** | Đầu-cuối. Dán link docs, chọn Jira project, xong |
-| Như trên nhưng muốn duyệt cách chia task trước | `spec-doc-to-tasks` | Chèn cổng người ngay trước bước tốn kém nhất |
-| Ticket đã mô tả đủ rõ | `ticket-to-pr` | Không cần docs, nội dung ticket được nạp sẵn |
-| Đầu vào có vài loại rõ rệt, mỗi loại một đường | `branch-by-answer` | Routing. Một prompt chung cho mọi loại thì loại nào cũng làm dở |
-| Chia được thành phần độc lập, biết trước có mấy phần | `parallel-multi-repo` | Fan-out tĩnh. Rút thời gian thật vì chúng không chờ nhau |
-| Nhiều việc con cùng loại, **không biết trước bao nhiêu** | `orchestrator-tasks` | Một con khảo sát rồi chia lô; ba thợ làm song song |
-| Bỏ sót đắt hơn chạy thừa | `voting-review` | Chạy ba lượt giống hệt rồi lấy đồng thuận. Một lượt có thể sót, ba lượt cùng sót thì khó hơn |
-| Cần nhiều góc nhìn khác nhau trên cùng một diff | `review-swarm` | Chia theo khía cạnh (lỗi · hiệu năng · chuẩn code), không phải chia theo số lượt |
-| Có test/lint làm trọng tài | `gate-loop-impl-test` | Evaluator–optimizer với máy chấm. Vòng sửa do scheduler giữ, không do agent tự nhận định |
-| Đầu ra là **chữ**, chất lượng đọc mới biết | `draft-critique-revise` | Con thứ hai chấm theo checklist. Bảo chính nó tự chấm thì lần nào cũng "đạt" |
-| Đang dùng sẵn workflow FE/iOS của team | `impl-fe-workflow`, `impl-ios-workflow` | Bản đang chạy thật, thêm hai step Jira tự bỏ qua khi run không điền project/ticket |
+| `jira` | `specs-to-jira` | **Một hoặc nhiều** spec GitHub → chia task → tạo ticket vào sprint. Không đụng code |
+| `fe` | `impl-fe-workflow` | Feature FE: plan → task Jira → impl → test → review → PR |
+| `fe-be` | `fe-be-spec-to-pr` | Như trên, FE và BE **chạy song song**, mỗi bên một repo |
+| `ios` | `impl-ios-workflow` | Feature iOS: như `fe` nhưng theo chuẩn Clean Architecture + MVVM |
+| `ios-be` | `ios-be-spec-to-pr` | iOS và BE song song |
+| `fixbug` | `bugfix-workflow` | Bug → **nguyên nhân gốc** → sửa + test chống tái phát → PR |
+| `other` | `bulk-change-workflow` | Nhiều việc con cùng loại, không biết trước bao nhiêu |
 
-Hai agent đi kèm nằm ở [`../agents/`](../agents/): `jira-pm` (chỉ đụng Jira, **không sửa code**) và
-`spec-reader` (đọc spec, read-only trên code). Import ở trang Agents.
+Bốn workflow nhóm feature (fe · fe-be · ios · ios-be) gần như giống nhau — cùng một việc, khác repo
+nào và có chạy song song hay không. Để riêng từng cái là cố ý: mở nhóm của mình ra là chạy được
+ngay, không phải điền "làm ở đâu" mỗi lần.
 
-## Ba thứ quyết định hình dạng
+## Review không còn là workflow riêng
 
-**1. Các phần có chờ nhau không?** Không chờ nhau thì cho chạy song song — nhưng hai step song song
-không bao giờ được ghi vào cùng một thư mục. Hoặc mỗi step một repo (`cwdLabel`), hoặc mỗi step một
-worktree (`isolate: true`). Quên cả hai thì scheduler xếp chúng chạy lần lượt và bạn không được gì.
+Nó là hai step ngay trước PR: `review` do **một agent khác** (`spec-reader`) đọc lại diff theo ba
+nhóm — lỗi đúng/sai, hiệu năng, chuẩn repo — rồi `fix-review` sửa theo danh sách đó.
 
-**2. Ai nói "xong"?** Nếu máy nói được — `gate` với một command, exit code quyết định. Nếu chỉ người
-đọc mới biết — `manual`, hoặc một con khác chấm (`draft-critique-revise`). Thứ **không** nên làm là để
-chính con vừa làm tự tuyên bố đã xong: đó là lúc "workflow chạy trót lọt" và "việc làm đúng" tách khỏi
-nhau.
+Lý do phải là agent khác: con vừa viết code chấm chính nó thì gần như lần nào cũng "đạt". Đó là cùng
+một lý do `gate` tồn tại — một cái kiểm mà người bị kiểm tự chấm thì không phải là kiểm.
 
-**3. Chỗ nào thật sự cần người?** Mỗi cổng người là một lần bạn phải quay lại bàn. Giữ cổng ở chỗ sai
-thì lùi lại tốn kém: trước khi tạo hàng loạt ticket, trước khi merge. Bỏ cổng ở chỗ rẻ: xem lại một
-bản plan có thể để tới cuối.
+## Không tạo ticket trùng
+
+Luật nằm ở agent `jira-pm`, một chỗ duy nhất, nên mọi workflow đều theo: **tra ticket đang mở trước
+khi tạo**. Task nào đã có (tiêu đề nói cùng một việc, không cần giống từng chữ) thì dùng lại và ghi
+`đã có: KEY`. Cuối step báo bằng số: tạo mới mấy cái, dùng lại mấy cái.
+
+Nghĩa là chạy lại workflow trên cùng một spec **không** làm board đầy ticket trùng — chuyện chỉ phát
+hiện ra sau khi đã phải dọn tay một lần.
+
+## Sprint
+
+Input kiểu `jira-sprint` liệt kê sprint đang mở của project đã chọn; gõ tên chưa có thì `jira-pm` tạo
+sprint mới rồi đẩy ticket vào. Sprint đã đóng không được liệt kê — đó không phải chỗ để thêm việc.
+Project không có scrum board thì ticket nằm ở backlog, và step nói rõ điều đó thay vì im lặng.
 
 ## Input và `@`
 
-Workflow khai `inputs` thì màn Start hiện ô tương ứng, và mọi step đọc được bằng `{{key}}`.
-Hai kiểu input được **server đọc hộ trước khi step đầu chạy**:
+Workflow khai `inputs` thì màn Start hiện đúng ô đó, mọi step đọc bằng `{{key}}`. Hai kiểu được
+**server đọc hộ trước khi step đầu chạy**:
 
-- `docs` — dán link file GitHub, nội dung file nằm sẵn trong ngữ cảnh step đầu (private repo vẫn đọc
-  được, dùng `gh` login; không cần clone repo spec).
+- `docs` — dán link file GitHub (nhiều link cũng được), nội dung nằm sẵn trong ngữ cảnh step đầu.
+  Private repo vẫn đọc được qua `gh` login, không cần clone repo spec.
 - `jira-ticket` — nội dung ticket, mô tả đã đổi sang markdown.
 
-Trong ô Goal và ô instruction, gõ `@` để tag: `@jira:KEY` (project), `@ticket:KEY-123`,
-`@repo:owner/name`, `@doc:owner/repo:path`. Tag được resolve cùng một đường với input — đích đến là
-agent không phải tiêu một lượt chỉ để đi lấy tài liệu.
+Trong ô Goal và ô instruction, gõ `@` để tag: `@jira:KEY`, `@ticket:KEY-123`, `@repo:owner/name`,
+`@doc:owner/repo:path`. Ghim Jira project ở **Settings → Integrations** để ô chọn project thành dropdown.
 
-Ghim Jira project ở **Settings → Integrations → Jira** để ô `jira-project` thành dropdown thay vì ô gõ tay.
+## Cần gì để chạy
+
+- Agent: `spec-reader` và `jira-pm` ở [`../agents/`](../agents/) (import ở trang Agents), cộng
+  `fe-dev` / `ios-dev` của team.
+- Project command: các step `gate` gọi command theo tên — `Test` (fe, be, fixbug, other) và `Build`
+  (ios). Chưa khai trong tab Commands thì run **dừng ngay tại gate** với đúng lý do đó, không loop
+  ba vòng rồi mới báo.

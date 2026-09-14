@@ -12,6 +12,7 @@ import {
   issueContext,
   jiraConfig,
   listProjects,
+  listSprints,
   searchIssues,
   transitionIssue,
 } from "../services/jira";
@@ -130,6 +131,12 @@ export function integrationRoutes(app: FastifyInstance): void {
     const current = jiraConfig();
     saveIntegration("jira", { ...current, projects: projects.map((p) => p.toUpperCase()) });
     return { projects };
+  });
+
+  /** Open sprints for a project — what the sprint picker offers. */
+  app.get("/api/jira/sprints", async (req) => {
+    const { projectKey } = z.object({ projectKey: z.string().min(1) }).parse(req.query ?? {});
+    return listSprints(projectKey);
   });
 
   app.get("/api/jira/issues", async (req) => {

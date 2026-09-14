@@ -34,6 +34,12 @@ import {
   useWorkflows,
 } from "./hooks";
 
+interface JiraSprint {
+  id: number;
+  name: string;
+  state: string;
+}
+
 interface Props {
   project: Project;
   envSets: EnvSet[];
@@ -378,6 +384,7 @@ function StartDialog({
                 key={def.key}
                 def={def}
                 project={project}
+                all={inputs}
                 value={inputs[def.key] ?? def.defaultValue}
                 onChange={(v) => setInputs((prev) => ({ ...prev, [def.key]: v }))}
               />
@@ -524,11 +531,14 @@ function StartDialog({
 function WorkflowInputField({
   def,
   project,
+  all,
   value,
   onChange,
 }: {
   def: WorkflowInputDef;
   project: Project;
+  /** Every value on the form — a sprint can only be listed once a project is picked. */
+  all: Record<string, string>;
   value: string;
   onChange: (value: string) => void;
 }) {
@@ -537,6 +547,16 @@ function WorkflowInputField({
     queryFn: () => api.get<string[]>("/api/jira/projects/pinned"),
     enabled: def.type === "jira-project",
     staleTime: 5 * 60_000,
+  });
+
+  // Whatever project this form picked — sprints hang off a board, which hangs
+  // off a project, so there is nothing to list until one is chosen.
+  const projectKey = Object.entries(all).find(([, v]) => /^[A-Z][A-Z0-9]+$/.test(v))?.[1] ?? "";
+  const { data: sprints = [], error: sprintError } = useQuery({
+    queryKey: ["jira-sprints", projectKey],
+    queryFn: () => api.get<JiraSprint[]>(`/api/jira/sprints?projectKey=${projectKey}`),
+    enabled: def.type === "jira-sprint" && projectKey.length > 0,
+    staleTime: 60_000,
   });
 
   const field = (() => {
@@ -559,6 +579,40 @@ function WorkflowInputField({
             onChange={(e) => onChange(e.target.value)}
             placeholder="IIP707 — pin projects in Settings → Integrations for a picker"
           />
+        );
+      case "jira-sprint":
+        return (
+          <div className="space-y-1">
+            {sprints.length > 0 && (
+              <Select
+                className="w-full"
+                value={sprints.some((sp) => sp.name === value) ? value : ""}
+                onChange={onChange}
+                options={[
+                  { value: "", label: "backlog — không đưa vào sprint nào" },
+                  ...sprints.map((sp) => ({
+                    value: sp.name,
+                    label: `${sp.name}${sp.state === "active" ? " · đang chạy" : ""}`,
+                  })),
+                ]}
+              />
+            )}
+            <Input
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={
+                sprints.length > 0 ? "…hoặc gõ tên sprint mới" : "tên sprint — chưa có thì sẽ tạo"
+              }
+            />
+            {sprintError && (
+              <p className="m3-label-sm text-warn">
+                {sprintError instanceof Error ? sprintError.message : "Không đọc được sprint"}
+              </p>
+            )}
+            {!projectKey && (
+              <p className="m3-label-sm text-ink-faint">Chọn Jira project trước để thấy sprint.</p>
+            )}
+          </div>
         );
       case "path":
         return (

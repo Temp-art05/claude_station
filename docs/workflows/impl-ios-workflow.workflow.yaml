@@ -78,10 +78,19 @@ steps:
       NẾU cả {{jiraProject}} lẫn {{jiraTicket}} đều trống (placeholder còn nguyên dấu ngoặc) → nói
       rõ 'run này không gắn Jira' rồi kết thúc step, đừng tạo gì cả.
 
-      Ngược lại: chia plan thành task xong-là-kiểm-được, nói rõ task nào chờ task nào, rồi tạo trên
-      project {{jiraProject}} (subtask dưới {{jiraTicket}} nếu có ticket cha). Kéo ticket cha sang
-      In Progress — list transitions trước, đừng đoán tên trạng thái. Lưu bảng task → phụ thuộc bằng
-      workflow_emit_artifact để step impl dùng.
+      TRƯỚC KHI TẠO BẤT KỲ TICKET NÀO: jira_search ticket đang mở trong {{jiraProject}} (và dưới
+      {{jiraTicket}} nếu có ticket cha). Task nào đã có rồi — tiêu đề nói cùng một việc, không cần
+      giống từng chữ — thì DÙNG LẠI, ghi 'đã có: KEY' vào bảng task, không tạo lại. Chạy lại
+      workflow trên cùng một spec mà không kiểm thì board đầy ticket trùng và phải dọn tay.
+
+      Tạo phần còn thiếu trong {{jiraProject}} (subtask dưới {{jiraTicket}} nếu có ticket cha).
+      Sprint "{{sprint}}" có nêu thì jira_ensure_sprint rồi jira_add_to_sprint cho cả ticket mới lẫn
+      ticket cũ thuộc đợt này; để trống thì ticket nằm backlog — nói rõ ra.
+
+      Kéo ticket cha sang In Progress — list transitions trước, đừng đoán tên trạng thái.
+
+      Kết thúc: báo bằng số (tạo mới mấy, dùng lại mấy) và lưu bảng khoá task → tiêu đề → phụ thuộc
+      → mới hay đã có, bằng workflow_emit_artifact.
   - key: confirm-plan
     type: agent
     title: Chốt confirm & finalize plan
@@ -171,6 +180,30 @@ steps:
     requiresConfirm: true
     permissionMode: acceptEdits
     maxRetries: 1
+  - key: review
+    type: agent
+    title: Review diff (agent khác đọc lại)
+    agentName: spec-reader
+    permissionMode: default
+    instruction: >-
+      Đọc diff của branch hiện tại so với base. Soát ba nhóm, mỗi phát hiện kèm file:line và một
+      kịch bản cụ thể khiến nó hỏng: (1) lỗi đúng/sai — logic, optional, retain cycle, việc nặng
+      trên main thread; (2) hiệu năng; (3) chuẩn repo — đặt tên, đúng tầng chưa, có lặp lại thứ đã
+      có sẵn không.
+
+      Đối chiếu lại tiêu chí nghiệm thu trong plan: cái nào chưa đạt thì nói thẳng.
+
+      Ghi danh sách phải sửa ra artifact. KHÔNG sửa code — bạn là người chấm, không phải người sửa.
+  - key: fix-review
+    type: agent
+    title: Sửa theo review
+    agentName: ios-dev
+    permissionMode: acceptEdits
+    instruction: >-
+      Đọc danh sách ở artifact của step review. Không có gì phải sửa thì nói rõ và kết thúc.
+
+      Có thì sửa đúng những chỗ đó — đừng nhân tiện refactor. Chỗ nào bạn cho là nhận xét sai thì
+      ghi một dòng lý do thay vì im lặng bỏ qua.
   - key: pr
     type: agent
     title: 'Review cuối, commit dưới tên tôi & tạo PR (tiếng Việt)'
@@ -201,3 +234,7 @@ inputs:
     label: 'Tài liệu spec (link GitHub, tuỳ chọn)'
     type: docs
     help: 'Dán link thì nội dung được đọc sẵn cho step plan, khỏi phải đi tìm.'
+  - key: sprint
+    label: Sprint (tuỳ chọn)
+    type: jira-sprint
+    help: Chọn sprint đang mở hoặc gõ tên mới. Bỏ trống thì ticket nằm ở backlog.

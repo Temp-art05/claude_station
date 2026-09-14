@@ -14,8 +14,11 @@ import {
   addWorklog,
   createIssue,
   getIssue,
+  addIssuesToSprint,
+  ensureSprint,
   getTransitions,
   listProjects,
+  listSprints,
   searchIssues,
   transitionIssue,
   updateIssue,
@@ -153,6 +156,42 @@ export function stationMcpServer(
           "project key and nobody gave you one — do not guess a key from a ticket you saw earlier.",
         {},
         async () => json(await listProjects()),
+      ),
+      tool(
+        "jira_list_sprints",
+        "Open sprints (active and future) for a Jira project. Closed ones are not listed — they are " +
+          "not somewhere new work can go.",
+        { projectKey: z.string() },
+        async (args) => json(await listSprints(args.projectKey)),
+      ),
+      tool(
+        "jira_ensure_sprint",
+        "Find a sprint by name in a project, or create it. Prefer this over creating blind: two " +
+          "sprints with the same name is a mess nobody notices until standup.",
+        { projectKey: z.string(), name: z.string() },
+        async (args) => {
+          const { sprint, created } = await ensureSprint(args.projectKey, args.name);
+          if (created) {
+            audit(projectId, "jira_sprint_created", `Claude created sprint ${sprint.name}`, null);
+          }
+          return json({ ...sprint, created });
+        },
+      ),
+      tool(
+        "jira_add_to_sprint",
+        "Move issues into a sprint. Issues created without a sprint land in the backlog, so this is " +
+          "the second half of putting work on a board.",
+        { sprintId: z.number().int(), keys: z.array(z.string()).min(1).max(100) },
+        async (args) => {
+          await addIssuesToSprint(args.sprintId, args.keys);
+          audit(
+            projectId,
+            "jira_sprint_filled",
+            `Claude moved ${args.keys.length} issue(s) into sprint ${args.sprintId}`,
+            null,
+          );
+          return text(`Moved ${args.keys.join(", ")} into sprint ${args.sprintId}.`);
+        },
       ),
       tool(
         "jira_create_issue",
