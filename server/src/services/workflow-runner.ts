@@ -1197,7 +1197,10 @@ async function nudgeForConfirmation(
   recordQuestions(run.id, stepRowId, [
     {
       key: confirmKey(step),
-      question: `"${step.title}" finished but never asked. Review it and confirm, or say what to change.`,
+      // No engine-speak here. "finished but never asked" describes a fallback
+      // nobody outside this file knows exists, and it reads as an accusation
+      // about something the person did not do.
+      question: `"${step.title}" xong rồi. Xem lại rồi xác nhận, hoặc nói cần sửa gì.`,
       kind: "text",
     },
   ]);
