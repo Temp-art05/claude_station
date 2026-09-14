@@ -565,6 +565,21 @@ async function stepContext(run: WorkflowRun, step: WorkflowStep, index: number):
 
   if (instruction) lines.push("", "## Your task for this step", instruction);
 
+  // The confirmation gate is asked by the step itself, in its own terminal, so it
+  // is visible where the work is visible. An engine-side question appeared only
+  // in the run view — the terminal sat silent, which is the one place somebody
+  // watching a step is actually looking.
+  if (step.requiresConfirm && !run.autoMode) {
+    lines.push(
+      "",
+      "## Before you finish this step",
+      `Call \`workflow_ask\` with key \`${confirmKey(step)}\` — one question, kind "text" — saying in ` +
+        "one or two lines what you did and what you want confirmed. The run waits there until it is " +
+        "answered, and your answer reaches every later step.",
+      "Do this as the last thing in the turn, after the work is done. Do not end the turn without it.",
+    );
+  }
+
   // Anything tagged with @ is read here, not by the agent: a step that has to go
   // and fetch its own spec spends a turn doing it, and a run's turns are the one
   // thing it has a budget of.
@@ -1037,14 +1052,32 @@ export async function advanceRun(runId: string): Promise<WorkflowRun> {
       if (after.status === "cancelled") return after;
 
       let stop = false;
+      const nudges: { step: WorkflowStep; stepRowId: string }[] = [];
       for (const { step, attempt, result } of outcomes) {
-        if (settleStep(after, step, attempt, result)) stop = true;
+        const settled = settleStep(after, step, attempt, result);
+        if (settled.stop) stop = true;
+        if (settled.nudge) nudges.push(settled.nudge);
+      }
+      for (const nudge of nudges) {
+        await nudgeForConfirmation(getRun(runId)!, nudge.step, nudge.stepRowId);
       }
       if (stop) return getRun(runId)!;
     }
   } finally {
     advancing.delete(runId);
   }
+}
+
+/** What one settled step asks the loop to do next. */
+interface Settled {
+  /** The run cannot dispatch anything more until a person acts. */
+  stop: boolean;
+  /**
+   * The step was supposed to ask for confirmation and finished without asking.
+   * The loop nudges it in its own terminal rather than inventing the question
+   * here — the point of the gate is that it is visible where the work is.
+   */
+  nudge?: { step: WorkflowStep; stepRowId: string };
 }
 
 /**
@@ -1059,7 +1092,7 @@ function settleStep(
   step: WorkflowStep,
   attempt: number,
   result: { ok: boolean; error?: string; tail?: string },
-): boolean {
+): Settled {
   const runId = run.id;
   const stepRow = db
     .select()
@@ -1077,30 +1110,18 @@ function settleStep(
     if (run.autoMode) {
       notify("Workflow needs an answer", `${run.title}: ${step.title}`);
     }
-    return true;
+    return { stop: true };
   }
 
-  if (step.type === "gate") return settleGate(run, step, stepRow, result);
+  if (step.type === "gate") return { stop: settleGate(run, step, stepRow, result) };
 
   if (result.ok) {
     upsertRunStep(runId, step.key, { status: "done", finishedAt: nowIso(), error: null });
-    // A step that asked for confirmation but never called workflow_ask still needs
-    // a human gate — unless this run was started with nobody watching.
     if (step.requiresConfirm && !run.autoMode) {
       const asked = run.questions.some((q) => q.runStepId === stepRow.id);
-      if (!asked) {
-        recordQuestions(runId, stepRow.id, [
-          {
-            key: `${step.key}-confirm`,
-            question: `"${step.title}" finished. Review it and confirm, or say what to change.`,
-            kind: "text",
-          },
-        ]);
-        setRunStatus(runId, "awaiting_input", step.key);
-        return true;
-      }
+      if (!asked) return { stop: true, nudge: { step, stepRowId: stepRow.id } };
     }
-    return false;
+    return { stop: false };
   }
 
   if (attempt <= step.maxRetries) {
@@ -1109,7 +1130,7 @@ function settleStep(
       attempt: attempt + 1,
       error: result.error ?? null,
     });
-    return false;
+    return { stop: false };
   }
 
   upsertRunStep(runId, step.key, {
@@ -1125,9 +1146,63 @@ function settleStep(
   if (!hasRecovery) {
     setRunStatus(runId, "failed", step.key);
     notify("Workflow failed", `${run.title}: ${step.title}`);
-    return true;
+    return { stop: true };
   }
-  return false;
+  return { stop: false };
+}
+
+/** The key a step's confirmation question is filed under, in one place. */
+function confirmKey(step: WorkflowStep): string {
+  return `${step.key}-confirm`;
+}
+
+/**
+ * Ask a step that forgot to ask.
+ *
+ * It is typed into the step's own terminal, so the question arrives where the
+ * work did — the same reason the instruction is in the prompt rather than in the
+ * engine. Only when a nudged step still says nothing does the engine file the
+ * question itself: a gate the workflow author asked for must never be stepped
+ * over quietly, and a question in the run view beats no question at all.
+ */
+async function nudgeForConfirmation(
+  run: WorkflowRun,
+  step: WorkflowStep,
+  stepRowId: string,
+): Promise<void> {
+  const row = db
+    .select()
+    .from(schema.workflowRunSteps)
+    .where(eq(schema.workflowRunSteps.id, stepRowId))
+    .get();
+
+  if (row?.terminalId && row.sessionId) {
+    await runTurnInTerminal({
+      terminalId: row.terminalId,
+      claudeSessionId: row.sessionId,
+      prompt:
+        `This step is marked as needing my confirmation. Call \`workflow_ask\` now with key ` +
+        `\`${confirmKey(step)}\`, kind "text", saying in one or two lines what you did and what you ` +
+        `want confirmed. Don't do any more work — just ask.`,
+    });
+    const after = getRun(run.id);
+    const asked = after?.questions.some((q) => q.runStepId === stepRowId && q.answer === null);
+    if (asked) {
+      upsertRunStep(run.id, step.key, { status: "awaiting_input" });
+      setRunStatus(run.id, "awaiting_input", step.key);
+      return;
+    }
+  }
+
+  recordQuestions(run.id, stepRowId, [
+    {
+      key: confirmKey(step),
+      question: `"${step.title}" finished but never asked. Review it and confirm, or say what to change.`,
+      kind: "text",
+    },
+  ]);
+  upsertRunStep(run.id, step.key, { status: "awaiting_input" });
+  setRunStatus(run.id, "awaiting_input", step.key);
 }
 
 /**
