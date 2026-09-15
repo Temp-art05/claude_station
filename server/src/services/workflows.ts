@@ -35,6 +35,7 @@ function toStep(row: StepRow): WorkflowStep {
     maxLoops: row.maxLoops,
     cwdLabel: row.cwdLabel,
     isolate: row.isolate,
+    readOnly: row.readOnly,
   };
 }
 
@@ -170,6 +171,7 @@ function writeSteps(workflowId: string, input: WorkflowInput): void {
         maxLoops: step.maxLoops,
         cwdLabel: step.cwdLabel,
         isolate: step.isolate,
+        readOnly: step.readOnly,
         createdAt: now,
       })
       .run();
@@ -395,6 +397,7 @@ export function exportWorkflowYaml(workflow: Workflow): string {
         ...(s.maxLoops ? { maxLoops: s.maxLoops } : {}),
         ...(s.cwdLabel ? { cwdLabel: s.cwdLabel } : {}),
         ...(s.isolate ? { isolate: true } : {}),
+        ...(s.readOnly ? { readOnly: true } : {}),
         ...(s.dependsOn.length > 0 ? { dependsOn: s.dependsOn } : {}),
         ...(s.onFail ? { onFail: s.onFail } : {}),
         ...(s.maxLoops ? { maxLoops: s.maxLoops } : {}),

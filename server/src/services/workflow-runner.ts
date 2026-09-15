@@ -18,7 +18,7 @@ import { badRequest } from "../lib/path-safety";
 import { dependentsOf as dependentsOfKey, readySteps as readyStepsOf } from "../lib/workflow-graph";
 import { agentDefinition } from "./agents";
 import { interrupt, isRunning } from "./claude-session";
-import { runTurnInTerminal, terminalForStep } from "./workflow-step-terminal";
+import { runTurnInTerminal, terminalForStep, type TurnOutcome } from "./workflow-step-terminal";
 import { startRun as startCommandRun } from "./commands";
 import { normalizeMentions, resolveMentions } from "./mentions";
 import { evaluateCondition, ConditionError } from "./workflow-condition";
@@ -491,7 +491,7 @@ function conditionContext(run: WorkflowRun) {
   for (const q of run.questions) answers[q.key] = q.answer;
   const stepStatus: Record<string, string> = {};
   for (const s of run.runSteps) stepStatus[s.stepKey] = s.status;
-  return { answers, stepStatus };
+  return { answers, stepStatus, inputs: run.inputs };
 }
 
 /**
@@ -749,7 +749,7 @@ async function runAgentStep(
   step: WorkflowStep,
   index: number,
   attempt: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<TurnOutcome> {
   const existing = run.runSteps.find((s) => s.stepKey === step.key);
   const target = resolveStepPath(run, step);
 
@@ -767,6 +767,11 @@ async function runAgentStep(
     terminalId,
     startedAt: existing?.startedAt ?? nowIso(),
     error: null,
+    // The note describes the last thing that stopped this step. Starting it again
+    // makes that description false, and a stale one is read as current — which is
+    // exactly how a step came to say it was waiting on an answer while its
+    // terminal sat empty.
+    note: null,
   });
 
   const prompt =
@@ -862,6 +867,9 @@ function dependentsOf(run: WorkflowRun, key: string): string[] {
  * refusal surfaces as a failed step instead of as a scheduling decision.
  */
 function claimOf(run: WorkflowRun, step: WorkflowStep): string {
+  // A step that writes nothing contends with nothing: a Jira update has no
+  // business waiting a whole turn for a directory it never touches.
+  if (step.readOnly) return `readonly:${step.key}`;
   return step.isolate ? `worktree:${step.key}` : resolveStepPath(run, step).path;
 }
 
@@ -1038,13 +1046,19 @@ export async function advanceRun(runId: string): Promise<WorkflowRun> {
 
       let stop = false;
       for (const { step, attempt, result } of outcomes) {
-        if (settleStep(after, step, attempt, result)) stop = true;
+        if (settleStep(after, step, attempt, result).stop) stop = true;
       }
       if (stop) return getRun(runId)!;
     }
   } finally {
     advancing.delete(runId);
   }
+}
+
+/** What one settled step asks the loop to do next. */
+interface Settled {
+  /** The run cannot dispatch anything more until a person acts. */
+  stop: boolean;
 }
 
 /**
@@ -1058,8 +1072,8 @@ function settleStep(
   run: WorkflowRun,
   step: WorkflowStep,
   attempt: number,
-  result: { ok: boolean; error?: string; tail?: string },
-): boolean {
+  result: { ok: boolean; error?: string; tail?: string; waiting?: boolean },
+): Settled {
   const runId = run.id;
   const stepRow = db
     .select()
@@ -1077,30 +1091,37 @@ function settleStep(
     if (run.autoMode) {
       notify("Workflow needs an answer", `${run.title}: ${step.title}`);
     }
-    return true;
+    return { stop: true };
   }
 
-  if (step.type === "gate") return settleGate(run, step, stepRow, result);
+  // The turn stopped in front of a person — a dialog in the step's own terminal.
+  // Not done, not failed: answer it there. Retrying would throw away the question
+  // they are halfway through, and failing says the terminal is broken when it is
+  // working exactly as intended.
+  if (result.waiting) {
+    upsertRunStep(runId, step.key, { status: "awaiting_input", note: result.error ?? null });
+    setRunStatus(runId, "awaiting_input", step.key);
+    if (run.autoMode) notify("Workflow đang chờ bạn", `${run.title}: ${step.title}`);
+    return { stop: true };
+  }
+
+  if (step.type === "gate") return { stop: settleGate(run, step, stepRow, result) };
 
   if (result.ok) {
     upsertRunStep(runId, step.key, { status: "done", finishedAt: nowIso(), error: null });
-    // A step that asked for confirmation but never called workflow_ask still needs
-    // a human gate — unless this run was started with nobody watching.
+    // The gate is a conversation, not a form. The step's terminal is right there
+    // and its turn has ended, so the way to review work is to talk to the agent
+    // that did it — ask it to change something, ask again, then let the run go on.
+    // A question in the run view instead would take one answer and close.
     if (step.requiresConfirm && !run.autoMode) {
-      const asked = run.questions.some((q) => q.runStepId === stepRow.id);
-      if (!asked) {
-        recordQuestions(runId, stepRow.id, [
-          {
-            key: `${step.key}-confirm`,
-            question: `"${step.title}" finished. Review it and confirm, or say what to change.`,
-            kind: "text",
-          },
-        ]);
-        setRunStatus(runId, "awaiting_input", step.key);
-        return true;
-      }
+      upsertRunStep(runId, step.key, {
+        status: "awaiting_input",
+        note: "Xong — xem lại và trao đổi trong terminal của step, rồi bấm Tiếp tục",
+      });
+      setRunStatus(runId, "awaiting_input", step.key);
+      return { stop: true };
     }
-    return false;
+    return { stop: false };
   }
 
   if (attempt <= step.maxRetries) {
@@ -1109,7 +1130,7 @@ function settleStep(
       attempt: attempt + 1,
       error: result.error ?? null,
     });
-    return false;
+    return { stop: false };
   }
 
   upsertRunStep(runId, step.key, {
@@ -1125,9 +1146,9 @@ function settleStep(
   if (!hasRecovery) {
     setRunStatus(runId, "failed", step.key);
     notify("Workflow failed", `${run.title}: ${step.title}`);
-    return true;
+    return { stop: true };
   }
-  return false;
+  return { stop: false };
 }
 
 /**
@@ -1292,6 +1313,133 @@ export function retryStep(runId: string, stepKey: string): WorkflowRun {
       upsertRunStep(runId, later, { status: "pending", finishedAt: null, error: null });
     }
   }
+  setRunStatus(runId, "running", stepKey);
+  void advanceRun(runId);
+  return getRun(runId)!;
+}
+
+/**
+ * Start a finished run going again.
+ *
+ * Two modes, because "chạy lại" means two different things depending on why you
+ * are pressing it:
+ *
+ *   resume — the default, and the one you want after a step failed. Steps that
+ *     already finished stay finished; only what failed, hung, or never ran goes
+ *     back to pending. Redoing a plan that was fine, or creating a second set of
+ *     tickets, is not a retry — it is damage.
+ *
+ *   fresh — everything back to step one, terminals dropped so each step starts a
+ *     clean conversation. For when the run was pointed at the wrong thing and its
+ *     earlier steps are worth nothing.
+ *
+ * Either way the step's own idempotence still matters: `jira-pm` looks up open
+ * tickets before creating any, which is what makes a resumed run safe to point at
+ * a board it already touched.
+ */
+export function restartRun(runId: string, mode: "resume" | "fresh" = "resume"): WorkflowRun {
+  const run = getRun(runId);
+  if (!run) throw badRequest("Run not found");
+  if (run.mode === "terminal") throw badRequest("A terminal-mode run is driven by its own session");
+
+  const keepDone = mode === "resume";
+  let kept = 0;
+  let reset = 0;
+
+  for (const step of run.steps) {
+    const rs = run.runSteps.find((s) => s.stepKey === step.key);
+    const settled = rs?.status === "done" || rs?.status === "skipped";
+    if (keepDone && settled) {
+      kept += 1;
+      continue;
+    }
+
+    // Questions belong to turns that are gone; left behind they block the run
+    // before it starts a single step.
+    if (rs) {
+      for (const q of run.questions) {
+        if (q.runStepId === rs.id) {
+          db.delete(schema.workflowQuestions).where(eq(schema.workflowQuestions.id, q.id)).run();
+        }
+      }
+      pendingAsks.delete(rs.id);
+    }
+
+    upsertRunStep(runId, step.key, {
+      status: "pending",
+      attempt: 1,
+      loops: 0,
+      error: null,
+      note: null,
+      startedAt: null,
+      finishedAt: null,
+      // A fresh run gets fresh terminals: keeping them would carry the old
+      // conversation into a run that exists because the old one was wrong.
+      ...(keepDone ? {} : { sessionId: null, terminalId: null, commandRunId: null }),
+    });
+    reset += 1;
+  }
+
+  // Starting over means starting over from the workflow as it is now. A run keeps
+  // a snapshot so edits can't rewrite it mid-flight; a fresh restart is exactly
+  // the moment that stops being what anybody wants — it is usually the edit that
+  // made them press it.
+  const source = keepDone ? null : getWorkflow(run.workflowId);
+
+  db.update(schema.workflowRuns)
+    .set({
+      status: "running",
+      currentStepKey: null,
+      finishedAt: null,
+      ...(source && source.steps.length > 0 ? { definition: JSON.stringify(source.steps) } : {}),
+      // An unattended run's clock starts again with it, or a run restarted after
+      // its budget ran out would expire on its first step.
+      deadlineAt: run.autoMode
+        ? new Date(Date.now() + setting("workflows.runBudgetMinutes") * 60_000).toISOString()
+        : null,
+    })
+    .where(eq(schema.workflowRuns.id, runId))
+    .run();
+
+  emit(runId, {
+    t: "error",
+    message:
+      mode === "resume"
+        ? `Chạy tiếp: giữ ${kept} step đã xong, chạy lại ${reset} step.`
+        : `Chạy lại từ đầu: ${reset} step.`,
+  });
+  setRunStatus(runId, "running", null);
+  void advanceRun(runId);
+  return getRun(runId)!;
+}
+
+/**
+ * "I have looked at it, carry on."
+ *
+ * The other half of the confirm gate. The step is parked, its terminal is free,
+ * and the person talks to the agent there for as long as they need — one
+ * exchange or ten. Nothing is recorded as an answer because nothing was a
+ * question: what the run needs is the moment they are satisfied, which is this.
+ */
+export function continueStep(runId: string, stepKey: string): WorkflowRun {
+  const run = getRun(runId);
+  if (!run) throw badRequest("Run not found");
+  const rs = run.runSteps.find((s) => s.stepKey === stepKey);
+  if (!rs) throw badRequest("Step not found in this run");
+  if (rs.status !== "awaiting_input") throw badRequest("This step is not waiting for you");
+
+  // A question the agent itself raised is a different thing: it is parked inside
+  // a tool call and only an answer releases it.
+  const open = run.questions.filter((q) => q.answer === null && q.runStepId === rs.id);
+  if (open.length > 0) {
+    throw badRequest("This step asked you something — answer it instead of continuing past it");
+  }
+
+  upsertRunStep(runId, stepKey, {
+    status: "done",
+    note: "bạn đã xác nhận",
+    finishedAt: nowIso(),
+  });
   setRunStatus(runId, "running", stepKey);
   void advanceRun(runId);
   return getRun(runId)!;

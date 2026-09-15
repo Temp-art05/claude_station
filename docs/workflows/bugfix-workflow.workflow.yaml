@@ -9,8 +9,8 @@
 # đỏ trước đó thì nó không chứng minh được gì.
 name: bugfix-workflow
 description: >-
-  Bug từ ticket (hoặc mô tả tay) → tìm nguyên nhân gốc → sửa tối thiểu + test chống tái phát →
-  test phải xanh → review → PR → cập nhật ticket.
+  Bug từ ticket (hoặc mô tả tay) → tìm nguyên nhân gốc → sửa tối thiểu + test chống tái phát → test
+  phải xanh → review → PR → cập nhật ticket.
 folder: fixbug
 inputs:
   - key: jiraTicket
@@ -21,90 +21,113 @@ inputs:
     label: Repo (label path)
     type: path
     help: Bỏ trống thì dùng thư mục mặc định của run.
-
 steps:
   - key: diagnose
     type: agent
     title: Tìm nguyên nhân gốc
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
+    cwdLabel: '{{repoLabel}}'
     requiresConfirm: true
-    permissionMode: default
+    permissionMode: bypassPermissions
     instruction: >-
       Ticket {{jiraTicket}} (nếu có) đã nằm trong "Tagged sources"; không có ticket thì bug được mô
-      tả trong Goal của run.
-      1. Tự thuật lại đúng triệu chứng được báo — bằng lời của báo cáo, không phải bằng suy đoán của bạn.
-      2. Tái hiện: tìm đường đi từ hành động của người dùng tới chỗ hỏng, tham chiếu file:line.
-      3. Chỉ ra **nguyên nhân gốc**. Chưa hiểu tại sao thì đừng đi tiếp — workflow_ask.
+      tả trong Goal của run. 1. Tự thuật lại đúng triệu chứng được báo — bằng lời của báo cáo, không
+      phải bằng suy đoán của bạn. 2. Tái hiện: tìm đường đi từ hành động của người dùng tới chỗ
+      hỏng, tham chiếu file:line. 3. Chỉ ra **nguyên nhân gốc**. Chưa hiểu tại sao thì đừng đi tiếp
+      — workflow_ask.
          Thử ba lần vẫn không tái hiện được thì dừng và nói rõ, đừng đoán bừa một cái sửa.
       4. Nguyên nhân nằm phía BE hoặc phía khác ngoài repo này → đóng gói bằng chứng (log, request,
          file:line) và workflow_ask, KHÔNG tự vá phía client cho qua.
       Ghi kết luận (triệu chứng · nguyên nhân · phạm vi sẽ sửa · phần KHÔNG sửa) bằng
       workflow_emit_artifact.
-
   - key: fix
     type: agent
     title: Sửa tối thiểu + test chống tái phát
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [diagnose]
-    permissionMode: acceptEdits
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - diagnose
+    permissionMode: bypassPermissions
     maxRetries: 1
     instruction: >-
       Sửa đúng nguyên nhân đã chốt, phạm vi tối thiểu — không bó kèm refactor, không "tiện tay" dọn
-      chỗ khác; PR fix bug càng nhỏ càng dễ tin.
-      Viết một test chống tái phát. Kiểm điều này trước khi coi là xong: **test đó phải đỏ trên code
-      chưa sửa**. Không đỏ nghĩa là nó không bắt được bug này, viết lại.
+      chỗ khác; PR fix bug càng nhỏ càng dễ tin. Viết một test chống tái phát. Kiểm điều này trước
+      khi coi là xong: **test đó phải đỏ trên code chưa sửa**. Không đỏ nghĩa là nó không bắt được
+      bug này, viết lại.
 
+
+      CẬP NHẬT JIRA LIÊN TỤC (run có gắn Jira mới làm; không có thì bỏ qua phần này):
+
+      - Bắt đầu làm task nào → jira_transition task đó sang **In Progress** TRƯỚC khi viết dòng code
+      đầu tiên.
+
+      - Task xong và đã kiểm → **Resolved** ngay, đừng dồn tới cuối. Board phải đọc được trạng thái
+      thật tại mọi thời điểm, không phải một lần duy nhất lúc kết thúc.
+
+      - Luôn jira_list_transitions trước khi chuyển: tên trạng thái khác nhau giữa các project, đoán
+      là hỏng.
+
+      - Xong toàn bộ phần của step này thì để nguyên ở Resolved — bước PR sẽ chuyển sang Reviewing.
   - key: verify
     type: gate
     title: Test cũ và mới đều xanh
     commandName: Test
-    dependsOn: [fix]
+    dependsOn:
+      - fix
     onFail: fix
     maxLoops: 3
-
   - key: review
     type: agent
     title: Review (agent khác đọc lại)
     agentName: spec-reader
-    dependsOn: [verify]
-    permissionMode: default
+    dependsOn:
+      - verify
+    permissionMode: bypassPermissions
     instruction: >-
       Đọc diff. Trả lời đúng ba câu, có dẫn chứng file:line: (1) cái sửa này có đúng nguyên nhân
       trong artifact không, hay chỉ làm triệu chứng biến mất? (2) test mới có thật sự bắt được bug
       không — nó kiểm hành vi hay chỉ kiểm cái vừa viết? (3) có ảnh hưởng phụ nào ở chỗ khác dùng
-      chung đoạn code này không?
-      Ghi danh sách phải sửa ra artifact. Không sửa code.
-
+      chung đoạn code này không? Ghi danh sách phải sửa ra artifact. Không sửa code.
+    readOnly: true
   - key: fix-review
     type: agent
     title: Sửa theo review
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [review]
-    permissionMode: acceptEdits
-    instruction: >-
-      Sửa các mục trong artifact review. Không có gì thì nói rõ và kết thúc.
-
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - review
+    permissionMode: bypassPermissions
+    instruction: Sửa các mục trong artifact review. Không có gì thì nói rõ và kết thúc.
   - key: pr
     type: agent
     title: Commit và mở PR
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [fix-review]
-    permissionMode: acceptEdits
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - fix-review
+    permissionMode: bypassPermissions
     instruction: >-
-      Commit và mở PR. Mô tả gồm: {{jiraTicket}}, triệu chứng, **nguyên nhân gốc**, đã sửa gì,
-      test chống tái phát nào, ảnh hưởng phụ (ghi "Không" nếu không có). KHÔNG merge.
+      Commit và mở PR. Mô tả gồm: {{jiraTicket}}, triệu chứng, **nguyên nhân gốc**, đã sửa gì, test
+      chống tái phát nào, ảnh hưởng phụ (ghi "Không" nếu không có). KHÔNG merge.
 
+
+      Sau khi PR đã mở (run có gắn Jira): jira_comment link PR lên ticket, rồi jira_transition các
+      task của đợt này sang trạng thái **review** của project (Reviewing / In Review — list
+      transitions trước). Bạn là người biết link PR nên bạn làm việc này, không đẩy sang step khác.
   - key: jira-report
     type: agent
     title: Cập nhật ticket
     agentName: jira-pm
-    dependsOn: [pr]
-    permissionMode: acceptEdits
+    dependsOn:
+      - fix-review
+    permissionMode: bypassPermissions
     instruction: >-
-      {{jiraTicket}} trống thì nói rõ và kết thúc. Ngược lại: comment lên ticket đúng bốn dòng —
-      nguyên nhân · cách sửa · test chống tái phát · link PR — rồi kéo sang trạng thái review
-      (list transitions trước). KHÔNG tự Done: Done đi theo PR được merge.
+      Chạy song song với bước PR, nên KHÔNG chờ link PR và cũng đừng đi tìm nó.
+
+      Việc của bạn là tổng kết trên ticket cha: đã làm những task nào, task nào chưa làm và vì sao,
+      giả định nào đã dùng. Trạng thái từng task do bước impl và bước PR cập nhật rồi — chỉ sửa cái
+      nào còn sai so với thực tế.
+
+      KHÔNG tự chuyển sang Done: Done đi theo PR được merge, mà merge là việc của người.
+    condition: inputs.jiraTicket
+    readOnly: true

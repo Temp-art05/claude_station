@@ -26,85 +26,82 @@ inputs:
   - key: repoLabel
     label: Repo (label path)
     type: path
-
 steps:
   - key: plan-split
     type: agent
     title: Khảo sát và chia ba lô
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
+    cwdLabel: '{{repoLabel}}'
     requiresConfirm: true
-    permissionMode: default
+    permissionMode: bypassPermissions
     instruction: >-
       Việc: {{scope}}. Khảo sát repo, liệt kê TẤT CẢ chỗ phải chạm (file:line) — đếm cho đủ trước,
-      vì cả workflow này dựa trên việc bạn đếm đúng.
-      Chia thành đúng ba lô độc lập: hai lô KHÔNG được sửa cùng một file, vì chúng chạy song song.
-      Mỗi lô phải tự đứng được — người làm lô 2 không cần biết lô 1 làm gì.
-      Ghi ra artifact theo đúng dạng "## Lô 1 / ## Lô 2 / ## Lô 3", mỗi lô là danh sách file + việc.
-      Ít hơn ba phần việc thì để lô rỗng và nói rõ là rỗng.
-
+      vì cả workflow này dựa trên việc bạn đếm đúng. Chia thành đúng ba lô độc lập: hai lô KHÔNG
+      được sửa cùng một file, vì chúng chạy song song. Mỗi lô phải tự đứng được — người làm lô 2
+      không cần biết lô 1 làm gì. Ghi ra artifact theo đúng dạng "## Lô 1 / ## Lô 2 / ## Lô 3", mỗi
+      lô là danh sách file + việc. Ít hơn ba phần việc thì để lô rỗng và nói rõ là rỗng.
   - key: worker-1
     type: agent
     title: Thợ 1
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [plan-split]
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - plan-split
     isolate: true
-    permissionMode: acceptEdits
+    permissionMode: bypassPermissions
     instruction: >-
       Làm **Lô 1** trong artifact. Chỉ chạm file thuộc lô của bạn — file của lô khác đang được sửa
       song song, đụng vào là mất thay đổi của nhau. Lô rỗng thì báo và dừng.
-
   - key: worker-2
     type: agent
     title: Thợ 2
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [plan-split]
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - plan-split
     isolate: true
-    permissionMode: acceptEdits
-    instruction: >-
-      Làm **Lô 2** trong artifact. Chỉ chạm file thuộc lô của bạn. Lô rỗng thì báo và dừng.
-
+    permissionMode: bypassPermissions
+    instruction: Làm **Lô 2** trong artifact. Chỉ chạm file thuộc lô của bạn. Lô rỗng thì báo và dừng.
   - key: worker-3
     type: agent
     title: Thợ 3
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [plan-split]
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - plan-split
     isolate: true
-    permissionMode: acceptEdits
-    instruction: >-
-      Làm **Lô 3** trong artifact. Chỉ chạm file thuộc lô của bạn. Lô rỗng thì báo và dừng.
-
+    permissionMode: bypassPermissions
+    instruction: Làm **Lô 3** trong artifact. Chỉ chạm file thuộc lô của bạn. Lô rỗng thì báo và dừng.
   - key: integrate
     type: agent
     title: Gộp ba lô về một nhánh
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [worker-1, worker-2, worker-3]
-    permissionMode: acceptEdits
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - worker-1
+      - worker-2
+      - worker-3
+    permissionMode: bypassPermissions
     instruction: >-
-      Ba thợ làm trong worktree riêng. Gộp thay đổi của cả ba về nhánh chính của run.
-      Có chỗ chồng lấn nghĩa là chia lô sai — ghi lại chỗ đó, đừng chỉ lặng lẽ merge.
-      Đối chiếu lại danh sách ban đầu: ba lô cộng lại có đúng bằng phạm vi đã đếm không, thiếu chỗ
-      nào thì nói ra.
-
+      Ba thợ làm trong worktree riêng. Gộp thay đổi của cả ba về nhánh chính của run. Có chỗ chồng
+      lấn nghĩa là chia lô sai — ghi lại chỗ đó, đừng chỉ lặng lẽ merge. Đối chiếu lại danh sách ban
+      đầu: ba lô cộng lại có đúng bằng phạm vi đã đếm không, thiếu chỗ nào thì nói ra.
   - key: verify
     type: gate
     title: Test phải xanh
     commandName: Test
-    dependsOn: [integrate]
+    dependsOn:
+      - integrate
     onFail: integrate
     maxLoops: 2
-
   - key: pr
     type: agent
     title: Mở PR
     agentName: fe-dev
-    cwdLabel: "{{repoLabel}}"
-    dependsOn: [verify]
-    permissionMode: acceptEdits
+    cwdLabel: '{{repoLabel}}'
+    dependsOn:
+      - verify
+    permissionMode: bypassPermissions
     instruction: >-
       Commit và mở PR. Mô tả: phạm vi ban đầu ({{scope}}), đã chia ba lô thế nào, chỗ nào bị bỏ qua
       và vì sao. KHÔNG merge.

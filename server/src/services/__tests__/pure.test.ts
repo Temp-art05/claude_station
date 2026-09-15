@@ -21,8 +21,14 @@ describe("adfToMarkdown", () => {
         {
           type: "bulletList",
           content: [
-            { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "one" }] }] },
-            { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "two" }] }] },
+            {
+              type: "listItem",
+              content: [{ type: "paragraph", content: [{ type: "text", text: "one" }] }],
+            },
+            {
+              type: "listItem",
+              content: [{ type: "paragraph", content: [{ type: "text", text: "two" }] }],
+            },
           ],
         },
       ],
@@ -67,7 +73,14 @@ describe("excel round trip", () => {
     const target = join(dir, "report.xlsx");
 
     writeWorkbook(target, [
-      { name: "Summary", rows: [["sku", "price"], ["A-1", 10], ["A-2", 20]] },
+      {
+        name: "Summary",
+        rows: [
+          ["sku", "price"],
+          ["A-1", 10],
+          ["A-2", 20],
+        ],
+      },
       { name: "Notes", rows: [["note"], ["hello"]] },
     ]);
 

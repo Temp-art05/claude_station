@@ -3,7 +3,6 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { terminalInputSchema, terminalKindSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
-import { TOKEN } from "../lib/auth";
 import { shq } from "../lib/claude-cli";
 import {
   hasTranscript,
@@ -12,15 +11,14 @@ import {
   transcriptPath,
   transcriptsUnder,
 } from "../lib/claude-transcript";
-import { env as config, setting } from "../lib/config";
+import { setting } from "../lib/config";
 import { newId, nowIso } from "../lib/id";
 import { openWith, writeLauncher } from "../lib/open-terminal";
 import { assertPathAllowed } from "../lib/path-safety";
 import * as tmux from "../lib/tmux";
-import { envVarsFor } from "../services/env-sets";
 import * as pty from "../services/pty-manager";
 import {
-  claudeCommand,
+  reviveTerminal,
   createTerminal,
   removeTerminalContext,
   stopFollowing,
@@ -115,47 +113,13 @@ export function terminalRoutes(app: FastifyInstance): void {
     const existing = db.select().from(schema.terminals).where(eq(schema.terminals.id, id)).get();
     if (!existing) return reply.code(404).send({ error: "Terminal not found" });
     if (pty.isRunning(id)) return existing;
-    const env: Record<string, string> = existing.envSetId ? envVarsFor(existing.envSetId) : {};
-    // Terminal-mode workflow runs curl step progress back with these two vars.
-    // extraEnv is never persisted — and shouldn't be, port/token can change
-    // across boots — so re-derive it when this terminal drives a run.
-    const drivesRun = db
-      .select()
-      .from(schema.workflowRuns)
-      .where(eq(schema.workflowRuns.terminalId, id))
-      .get();
-    if (drivesRun) {
-      env.CLAUDE_STATION_URL = `http://127.0.0.1:${config.port}`;
-      env.CLAUDE_STATION_TOKEN = TOKEN;
+    // Same path the workflow runner takes before it types into a step's terminal:
+    // one implementation, so a terminal revived by a run and one revived by this
+    // button end up in the same state.
+    if (!reviveTerminal(id)) {
+      return reply.code(500).send({ error: "Could not restart this terminal" });
     }
-    const cwd = assertPathAllowed(existing.cwd, existing.projectId);
-    const { pid } = pty.start({
-      id,
-      cwd,
-      env,
-      // App-agent terminals re-run their start command; claude tabs resume the CLI.
-      // The workspace context is rebuilt here, not reused: paths may have been added
-      // or relabelled since this tab was first opened.
-      // With tmux this command is only used when the session is really gone —
-      // pty.start reattaches a live session instead and ignores it. Resuming goes
-      // by session id, so continuing one closed tab never lands in another's
-      // conversation the way `claude --continue` would.
-      command:
-        existing.command ??
-        (existing.kind === "claude"
-          ? claudeCommand(true, {
-              projectId: existing.projectId,
-              terminalId: id,
-              cwd,
-              sessionId: existing.claudeSessionId,
-            })
-          : undefined),
-    });
-    db.update(schema.terminals)
-      .set({ status: "running", pid, closedAt: null })
-      .where(eq(schema.terminals.id, id))
-      .run();
-    return { ...existing, status: "running" as const, pid, closedAt: null };
+    return db.select().from(schema.terminals).where(eq(schema.terminals.id, id)).get();
   });
 
   /**

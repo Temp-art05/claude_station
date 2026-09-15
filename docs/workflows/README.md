@@ -43,6 +43,60 @@ Input kiểu `jira-sprint` liệt kê sprint đang mở của project đã chọ
 sprint mới rồi đẩy ticket vào. Sprint đã đóng không được liệt kê — đó không phải chỗ để thêm việc.
 Project không có scrum board thì ticket nằm ở backlog, và step nói rõ điều đó thay vì im lặng.
 
+## Hình dạng của một workflow impl
+
+`impl-ios-workflow` là bản mẫu, ba nhóm impl kia sao theo:
+
+```
+plan
+ ├─ jira-tasks   (readOnly)       ┐
+ └─ confirm-plan                  ┘ → impl → test → review (readOnly) → fix-review
+                                                                          ├─ pr
+                                                                          └─ jira-report (readOnly)
+```
+
+Hai chỗ rẽ nhánh, và cả hai đều là việc thật sự không chờ nhau: chia task trên Jira không cần biết
+plan đã được duyệt chưa, và tổng kết lên ticket cha không cần link PR.
+
+**`readOnly: true` là thứ khiến nhánh song song thành thật.** Hai step không bao giờ dùng chung một
+working tree; thiếu cờ này thì step Jira vẫn phải đợi cả một lượt để lấy một thư mục nó không hề
+chạm vào — song song trên giấy, nối tiếp trên thực tế.
+
+**Trạng thái Jira đi theo công việc, không dồn về cuối:**
+
+| Lúc nào | Ai làm | Trạng thái |
+|---|---|---|
+| Trước dòng code đầu tiên của một task | step impl | **In Progress** |
+| Task đó xong và đã kiểm | step impl | **Resolved** |
+| PR đã mở | step pr (nó biết link) | **Reviewing** + comment link |
+| Merge | **người** | Done |
+
+Bảng chỉ đúng ở phút cuối là bảng không ai tin được lúc đang chạy.
+
+## Step tự bỏ qua khi không có việc
+
+Điều kiện của step đọc được cả input, nên step nào không có gì để làm thì **bị skip, không chạy**:
+
+```yaml
+condition: inputs.jiraProject || inputs.jiraTicket
+```
+
+Đây là lý do có nó: run không điền Jira thì hai step `jira-tasks` và `jira-report` trước đây vẫn mở
+terminal, khởi động CLI, và tốn vài phút chỉ để nói "run này không gắn Jira". Giờ chúng hiện `skipped`
+ngay lập tức.
+
+Ngôn ngữ điều kiện vẫn cố tình nhỏ — bốn dạng và đúng một toán tử `||`:
+
+| Dạng | Ý nghĩa |
+|---|---|
+| `inputs.<key>` | ô đó có được điền không |
+| `inputs.<key> == "x"` | điền đúng giá trị đó |
+| `answers.<key> == "x"` | câu trả lời của bạn cho `workflow_ask` |
+| `steps.<key>.failed` / `.done` / `.skipped` | trạng thái step khác |
+
+`||` có vì nhu cầu thật: step Jira cần **hoặc** project **hoặc** ticket cha. Không có `&&` — cần
+"và" thì tách thành hai step, hoặc để chính agent quyết.
+
 ## Input và `@`
 
 Workflow khai `inputs` thì màn Start hiện đúng ô đó, mọi step đọc bằng `{{key}}`. Hai kiểu được
@@ -62,3 +116,19 @@ Trong ô Goal và ô instruction, gõ `@` để tag: `@jira:KEY`, `@ticket:KEY-1
 - Project command: các step `gate` gọi command theo tên — `Test` (fe, be, fixbug, other) và `Build`
   (ios). Chưa khai trong tab Commands thì run **dừng ngay tại gate** với đúng lý do đó, không loop
   ba vòng rồi mới báo.
+
+## Quyền của step: `bypassPermissions`
+
+Mọi step agent chạy ở `bypassPermissions`. Lý do đơn giản: `acceptEdits` chỉ tự duyệt **sửa file**,
+nên `git status` ở step đầu đã dừng hỏi — một run không người canh sẽ đứng ở đó tới hết giờ.
+
+Đây là đánh đổi có thật, nói thẳng: **step chạy được mọi lệnh mà không hỏi**. Ba thứ giữ nó lại:
+
+- Step làm trong **worktree riêng** khi workflow khai `isolate`, hoặc trong repo của run — không phải
+  thư mục bạn đang gõ.
+- **Merge vẫn là người bấm**, và đẩy store cũng vậy. Đó là ranh giới duy nhất không được nới.
+- Cổng confirm: step nào khai `requiresConfirm` thì dừng lại cho bạn đọc và trao đổi trong terminal
+  của chính nó trước khi đi tiếp.
+
+Muốn chặt hơn cho một step cụ thể thì đổi `permissionMode` của step đó về `acceptEdits` — và chấp
+nhận nó sẽ dừng hỏi ở lệnh shell đầu tiên.

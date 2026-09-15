@@ -59,6 +59,82 @@ describe("shipped workflow library", () => {
     });
   }
 
+  it("runs every agent step at a permission mode that does not stop for a shell command", () => {
+    // `acceptEdits` auto-accepts *edits* only: the first `git status` still opens
+    // a dialog, and a step running with nobody watching parks there until its
+    // budget runs out. The trade is deliberate — a step may run any command
+    // without asking — and it is bounded by the step working in its own worktree
+    // and by merge staying a person's.
+    for (const file of files) {
+      const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      for (const step of parsed.steps.filter((s) => s.type === "agent")) {
+        expect({ file, key: step.key, mode: step.permissionMode }).toEqual({
+          file,
+          key: step.key,
+          mode: "bypassPermissions",
+        });
+      }
+    }
+  });
+
+  it("fans out after the plan, and again at the end", () => {
+    // impl-ios-workflow is the reference the others copy: the Jira split and the
+    // confirm both hang off `plan`, and PR and the Jira summary hang off the last
+    // fix. Neither pair waits on the other, and neither writes what the other is
+    // reading.
+    const parsed = workflowInputSchema.parse(
+      yaml.load(readFileSync(join(DIR, "impl-ios-workflow.workflow.yaml"), "utf8")),
+    );
+    const steps = withIds(parsed.steps);
+
+    const afterPlan = readySteps(steps, (key) => (key === "plan" ? "done" : "pending"));
+    expect(afterPlan.map((s) => s.key).sort()).toEqual(["confirm-plan", "jira-tasks"]);
+
+    const settled = new Set([
+      "plan",
+      "jira-tasks",
+      "confirm-plan",
+      "impl",
+      "test",
+      "review",
+      "fix-review",
+    ]);
+    const afterFix = readySteps(steps, (key) => (settled.has(key) ? "done" : "pending"));
+    expect(afterFix.map((s) => s.key).sort()).toEqual(["jira-report", "pr"]);
+  });
+
+  it("gives the parallel Jira steps a claim of their own", () => {
+    // Two steps never share a working tree, so without this the Jira half simply
+    // waits a whole turn for a directory it never touches — "parallel" on paper,
+    // sequential in fact.
+    for (const file of files) {
+      const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      for (const step of parsed.steps.filter((s) => s.agentName === "jira-pm")) {
+        expect({ file, key: step.key, readOnly: step.readOnly }).toEqual({
+          file,
+          key: step.key,
+          readOnly: true,
+        });
+      }
+    }
+  });
+
+  it("moves each task through Jira as it goes, not once at the end", () => {
+    for (const file of files) {
+      const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      const impl = parsed.steps.find((s) => ["impl", "impl-ios", "impl-fe", "fix"].includes(s.key));
+      if (!impl) continue;
+      // In Progress before the first line of code, Resolved the moment a task is
+      // done — a board that is only correct at the end is a board nobody trusts
+      // in the middle.
+      expect({ file, live: /In Progress/.test(impl.instruction ?? "") }).toEqual({
+        file,
+        live: true,
+      });
+      expect({ file, live: /Resolved/.test(impl.instruction ?? "") }).toEqual({ file, live: true });
+    }
+  });
+
   it("runs the two sides of a fe-be feature side by side", () => {
     const parsed = workflowInputSchema.parse(
       yaml.load(readFileSync(join(DIR, "fe-be-spec-to-pr.workflow.yaml"), "utf8")),
@@ -93,6 +169,28 @@ describe("shipped workflow library", () => {
         .filter((s) => s.key.startsWith("impl") || s.key === "fix" || s.key === "fix-review")
         .map((s) => s.agentName);
       expect(implementers).not.toContain(review.agentName);
+    }
+  });
+
+  it("skips its Jira steps instead of spending a turn discovering it has none", () => {
+    // A run started without a project or a parent ticket has nothing for these
+    // steps to do. Left unconditional they each open a terminal, start a CLI, and
+    // burn minutes to say so.
+    for (const file of files) {
+      const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      // A workflow whose Jira input is *required* always has work for these steps —
+      // specs-to-jira is exactly that, and a condition there would be noise.
+      const jiraIsOptional =
+        parsed.inputs.some((i) => /jira|parentTicket/i.test(i.key)) &&
+        !parsed.inputs.some((i) => /jira/i.test(i.key) && i.required);
+      if (!jiraIsOptional) continue;
+      for (const step of parsed.steps.filter((s) => s.agentName === "jira-pm")) {
+        expect({ file, key: step.key, condition: step.condition }).toEqual({
+          file,
+          key: step.key,
+          condition: expect.stringContaining("inputs."),
+        });
+      }
     }
   });
 
