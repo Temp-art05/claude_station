@@ -24,6 +24,7 @@ export const Workflow = glyph("schema");
 export const KeyRound = glyph("key");
 export const Settings = glyph("settings");
 export const Search = glyph("search");
+export const Gauge = glyph("monitoring");
 export const Library = glyph("library_books");
 export const Terminal = glyph("terminal");
 export const TerminalSquare = glyph("terminal");

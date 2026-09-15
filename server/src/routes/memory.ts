@@ -12,6 +12,7 @@ import {
   listMemories,
   updateMemory,
 } from "../services/memory";
+import { clearProject, cursorOf, eventsOf, lastSeqOf, stateOf } from "../services/shared-memory";
 
 const idParam = z.object({ id: z.string() });
 
@@ -19,9 +20,9 @@ const idParam = z.object({ id: z.string() });
 async function uploadedFile(req: unknown): Promise<{ filename: string; body: string }> {
   const part = await (
     req as {
-      file: (o?: { limits?: { fileSize?: number } }) => Promise<
-        { filename: string; toBuffer(): Promise<Buffer> } | undefined
-      >;
+      file: (o?: {
+        limits?: { fileSize?: number };
+      }) => Promise<{ filename: string; toBuffer(): Promise<Buffer> } | undefined>;
     }
   ).file({ limits: { fileSize: 4 * 1024 * 1024 } });
   if (!part) throw badRequest("No file in request");
@@ -43,6 +44,32 @@ export function memoryRoutes(app: FastifyInstance): void {
     const { filename, body } = await uploadedFile(req);
     reply.code(201);
     return importMemoryMarkdown(null, filename, body);
+  });
+
+  /**
+   * The shared-memory bus for one project: the folded state, and the log behind it.
+   *
+   * Reading here never advances a cursor — only building a turn's prompt block
+   * does. A tab that moved someone's cursor by being open would quietly cost that
+   * session the context it had not been shown yet.
+   */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/memory/bus", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const query = z.object({ sessionKey: z.string().optional() }).parse(req.query ?? {});
+    const head = lastSeqOf(id);
+    return {
+      state: stateOf(id),
+      events: eventsOf(id),
+      lastSeq: head,
+      // For a terminal, which cannot be injected into mid-conversation: how far
+      // behind it is, so the UI can offer to hand it the difference.
+      pending: query.sessionKey ? Math.max(head - cursorOf(query.sessionKey), 0) : 0,
+    };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/projects/:id/memory/bus", async (req) => {
+    const { id } = idParam.parse(req.params);
+    return { removed: clearProject(id) };
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/memory", async (req) => {

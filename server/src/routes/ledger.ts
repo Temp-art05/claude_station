@@ -11,6 +11,7 @@ import { db, schema } from "../db";
 import { desc, eq } from "drizzle-orm";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import { scanTranscripts } from "../services/ledger-backfill";
+import { reattributeOrphans } from "../services/checkpoints";
 import {
   captureHealth,
   filesOf,
@@ -159,6 +160,26 @@ export function ledgerRoutes(app: FastifyInstance): void {
   });
 
   /** Same, across every project — the Settings button. */
+  /**
+   * Rebuild the whole ledger from the CLI's own transcripts, then re-link the
+   * commits it just orphaned.
+   *
+   * The two halves belong together. Reindexing deletes and rebuilds turns, and a
+   * checkpoint's `turnId` is `set null` — so doing only the first half trades a
+   * ledger with no model for a ledger with no commit attribution. Re-running
+   * attribution afterwards usually lands more links than before, because the
+   * rebuilt turns carry file lists the earlier parser missed.
+   */
+  app.post("/api/ledger/reindex", async (req) => {
+    const body = z.object({ projectId: z.string().optional() }).parse(req.body ?? {});
+    const scan = scanTranscripts({
+      ...(body.projectId ? { projectId: body.projectId } : {}),
+      full: true,
+    });
+    const relinked = reattributeOrphans(body.projectId);
+    return { scan, relinked };
+  });
+
   app.post("/api/ledger/index", async (req) => {
     const { full } = z.object({ full: z.boolean().default(false) }).parse(req.body ?? {});
     return scanTranscripts({ full });

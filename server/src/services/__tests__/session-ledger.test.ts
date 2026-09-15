@@ -6,7 +6,7 @@
  * dynamic imports below: a top-level `import` would be hoisted above the env var
  * and would open (and write to) the developer's own data/claude-station.db.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -16,6 +16,7 @@ process.env.CLAUDE_STATION_DATA = dataDir;
 
 const { db, schema } = await import("../../db");
 const ledger = await import("../session-ledger");
+const pricing = await import("../model-pricing");
 const { newId, nowIso } = await import("../../lib/id");
 
 const PROJECT = "p-ledger";
@@ -447,5 +448,96 @@ describe("capture mtime bookkeeping", () => {
     const row = ledger.getCapture("cli-mtime")!;
     expect(row.mtimeMs).toBe(Math.round(mtimeMs));
     expect(Number.isInteger(row.mtimeMs)).toBe(true);
+  });
+});
+
+describe("cost and line counts", () => {
+  /** A price table in the test's own data dir, which is where pricing reads from. */
+  function givePrices(): void {
+    writeFileSync(
+      join(dataDir, "models-pricing.json"),
+      JSON.stringify({
+        fetchedAt: "2026-09-15T00:00:00.000Z",
+        source: "test",
+        models: {
+          "claude-opus-5": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+        },
+      }),
+    );
+    pricing.forgetPrices();
+  }
+
+  /** Back to having no prices at all — the state every install starts in. */
+  function dropPrices(): void {
+    rmSync(join(dataDir, "models-pricing.json"), { force: true });
+    pricing.forgetPrices();
+  }
+
+  it("marks a cost the caller reported as reported, not estimated", () => {
+    const id = openSdkTurn({ claudeSessionId: "cli-reported" });
+    ledger.closeTurn(id, { costUsd: 0.4 });
+    const turn = ledger.turnsOf({ claudeSessionId: "cli-reported" })[0]!;
+    expect(turn.costSource).toBe("reported");
+    expect(turn.costUsd).toBeCloseTo(0.4);
+  });
+
+  it("prices a turn the caller could not, and says the number was derived", () => {
+    givePrices();
+    const id = openSdkTurn({ claudeSessionId: "cli-estimated", sourceKind: "cli" });
+    ledger.closeTurn(id, {
+      model: "claude-opus-5",
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      cacheReadTokens: 1_000_000,
+    });
+    const turn = ledger.turnsOf({ claudeSessionId: "cli-estimated" })[0]!;
+    expect(turn.model).toBe("claude-opus-5");
+    expect(turn.costSource).toBe("estimated");
+    // Cache reads priced at their own rate: 15 + 1.5, not 15 + 15.
+    expect(turn.costUsd).toBeCloseTo(16.5, 4);
+  });
+
+  it("never lets a later estimate overwrite a reported cost", () => {
+    givePrices();
+    const id = openSdkTurn({ claudeSessionId: "cli-refine" });
+    ledger.closeTurn(id, { costUsd: 0.2, model: "claude-opus-5" });
+    // A live turn is closed again as more of it arrives; the second close has no
+    // cost of its own and must not replace the real one with an estimate.
+    ledger.closeTurn(id, { model: "claude-opus-5", inputTokens: 1_000_000 });
+    const turn = ledger.turnsOf({ claudeSessionId: "cli-refine" })[0]!;
+    expect(turn.costSource).toBe("reported");
+    expect(turn.costUsd).toBeCloseTo(0.2);
+  });
+
+  it("leaves a model nobody has a price for unpriced rather than free", () => {
+    givePrices();
+    const id = openSdkTurn({ claudeSessionId: "cli-unknown", sourceKind: "cli" });
+    ledger.closeTurn(id, { model: "some-other-model", inputTokens: 500_000 });
+    const turn = ledger.turnsOf({ claudeSessionId: "cli-unknown" })[0]!;
+    expect(turn.costUsd).toBeNull();
+    expect(turn.costSource).toBe("unknown");
+  });
+
+  it("prices the turns that were recorded before there was a table", () => {
+    dropPrices();
+    const id = openSdkTurn({ claudeSessionId: "cli-backfill", sourceKind: "cli" });
+    ledger.closeTurn(id, { model: "claude-opus-5", inputTokens: 1_000_000 });
+    // Recorded with no prices available, so it closed unpriced.
+    expect(ledger.turnsOf({ claudeSessionId: "cli-backfill" })[0]!.costUsd).toBeNull();
+
+    givePrices();
+    expect(ledger.repriceUnpriced()).toBeGreaterThan(0);
+    const turn = ledger.turnsOf({ claudeSessionId: "cli-backfill" })[0]!;
+    expect(turn.costSource).toBe("estimated");
+    expect(turn.costUsd).toBeCloseTo(15, 4);
+  });
+
+  it("accumulates line counts instead of overwriting them", () => {
+    const id = openSdkTurn({ claudeSessionId: "cli-lines" });
+    ledger.bumpLines(id, 12, 3);
+    ledger.bumpLines(id, 5, 1);
+    const turn = ledger.turnsOf({ claudeSessionId: "cli-lines" })[0]!;
+    expect(turn.linesAdded).toBe(17);
+    expect(turn.linesRemoved).toBe(4);
   });
 });

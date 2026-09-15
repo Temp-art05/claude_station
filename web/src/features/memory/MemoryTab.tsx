@@ -21,6 +21,7 @@ import { DraftNotice } from "@/components/DraftNotice";
 import { api } from "@/lib/api";
 import { projectKey, useRestorableDraft, useUiState } from "@/lib/uiStore";
 import { fileUrl, uploadFile } from "@/lib/upload";
+import { BusPanel } from "./BusPanel";
 
 const SOURCE_LABEL: Record<ProjectMemory["source"], string> = {
   manual: "you",
@@ -40,6 +41,13 @@ export const memoryBase = (projectId: string | null) =>
  */
 export function MemoryTab({ projectId }: { projectId: string | null }) {
   const confirm = useConfirm();
+  // Two different records, kept apart: `notes` is what you wrote for the agents,
+  // `bus` is what the agents wrote for each other. Only a project has a bus —
+  // the global store has no sessions of its own.
+  const [view, setView] = useUiState<"notes" | "bus">(
+    projectKey(projectId ?? "global", "memory", "view"),
+    "notes",
+  );
   const qc = useQueryClient();
   const scope = projectId ?? "global";
   const key = ["memory", scope];
@@ -83,8 +91,18 @@ export function MemoryTab({ projectId }: { projectId: string | null }) {
 
   const pinnedCount = memories.filter((m) => m.pinned).length;
 
+  if (projectId && view === "bus") {
+    return (
+      <div className="h-full overflow-y-auto px-6 py-4">
+        <ViewSwitch view={view} setView={setView} />
+        <BusPanel projectId={projectId} />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto px-6 py-4">
+      {projectId && <ViewSwitch view={view} setView={setView} />}
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <p className="text-sm text-ink-muted">
@@ -333,5 +351,34 @@ function MemoryEditor({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/** Notes you wrote, or the log the sessions wrote. Same tab, different records. */
+function ViewSwitch({
+  view,
+  setView,
+}: {
+  view: "notes" | "bus";
+  setView: (value: "notes" | "bus") => void;
+}) {
+  const item = (value: "notes" | "bus", label: string) => (
+    <button
+      key={value}
+      onClick={() => setView(value)}
+      className={
+        view === value
+          ? "cursor-pointer rounded-md bg-secondary-container px-2 py-0.5 text-on-secondary-container m3-label-md"
+          : "cursor-pointer rounded-md px-2 py-0.5 text-ink-muted m3-label-md hover:bg-white/6"
+      }
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="mb-3 flex items-center gap-1">
+      {item("notes", "Notes")}
+      {item("bus", "Shared")}
+    </div>
   );
 }

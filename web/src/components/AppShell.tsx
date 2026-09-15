@@ -4,11 +4,13 @@ import {
   FolderKanban,
   Ticket,
   GitPullRequest,
+  Gauge,
   BookOpen,
   Brain,
   Bot,
   Workflow,
   KeyRound,
+  Library,
   Search,
   Settings,
   TerminalSquare,
@@ -26,9 +28,11 @@ const NAV = [
   { to: "/projects", label: "Projects", icon: FolderKanban },
   { to: "/jira", label: "Jira", icon: Ticket },
   { to: "/github", label: "GitHub", icon: GitPullRequest },
+  { to: "/insights", label: "Insights", icon: Gauge },
   { to: "/knowledge", label: "Knowledge", icon: BookOpen },
   { to: "/memory", label: "Memory", icon: Brain },
   { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/packs", label: "Packs", icon: Library },
   { to: "/workflows", label: "Workflows", icon: Workflow },
   { to: "/env", label: "Env", icon: KeyRound },
   { to: "/search", label: "Search", icon: Search },
@@ -37,9 +41,9 @@ const NAV = [
 
 /** Nav is grouped so the daily surfaces sit apart from the configuration ones. */
 const GROUPS: { label?: string; items: typeof NAV }[] = [
-  { items: NAV.slice(0, 3) },
-  { label: "Library", items: NAV.slice(3, 7) },
-  { label: "Setup", items: NAV.slice(7) },
+  { items: NAV.slice(0, 4) },
+  { label: "Library", items: NAV.slice(4, 9) },
+  { label: "Setup", items: NAV.slice(9) },
 ];
 
 export function AppShell() {

@@ -115,6 +115,20 @@ export function unlinkSkill(name: string): void {
   }
 }
 
+/**
+ * Remove a skill outright: the link, and the tree it points at.
+ *
+ * `unlinkSkill` deliberately keeps the content — unlinking is "stop loading
+ * this", not "delete it". Uninstalling a pack means the second thing, and using
+ * the first left `data/skills/docx` behind with no link and no library row;
+ * installing the pack again then found the name taken and produced `docx-2`.
+ */
+export function removeSkillTree(name: string): void {
+  unlinkSkill(name);
+  const dir = join(SKILLS_DIR, name);
+  if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+}
+
 export function skillLinkState(name: string): "linked" | "unlinked" | "conflict" {
   const safe = name.replace(/[^\w.-]+/g, "-");
   const linkPath = join(CLAUDE_SKILLS_LINK_DIR, safe);

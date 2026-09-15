@@ -48,6 +48,14 @@ export interface ActivityEvent {
   kind: "activity";
   at: string | null;
   model: string | null;
+  /**
+   * The assistant's own prose for this record, tool calls excluded.
+   *
+   * Carried so the shared-memory bus can pick up the lines the agent explicitly
+   * marked to be remembered. Not stored anywhere: the follower scans it and
+   * drops it, which is why this is a field and not another table.
+   */
+  text: string;
   usage: TranscriptUsage;
   tools: TranscriptToolUse[];
   cwd: string | null;
@@ -140,6 +148,20 @@ function toolsOf(
   return out;
 }
 
+/** Text blocks of an assistant message, joined. Empty for a tool-only record. */
+function assistantText(message: Record<string, unknown> | undefined): string {
+  const content = message?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const b = block as { type?: unknown; text?: unknown };
+    if (b.type === "text" && typeof b.text === "string") parts.push(b.text);
+  }
+  return parts.join("\n");
+}
+
 export interface ParseResult {
   events: TranscriptEvent[];
   /**
@@ -192,6 +214,7 @@ export function parseRecords(text: string): ParseResult {
       kind: "activity",
       at,
       model: str(message?.model),
+      text: assistantText(message),
       usage: usageOf(message),
       tools: toolsOf(message, sidechain),
       cwd,

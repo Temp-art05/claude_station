@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MASK, redact, redactVerbose } from "../redact";
+import { MASK, redact, redactJson, redactVerbose } from "../redact";
 
 describe("redact — known secret values", () => {
   it("masks a secret env value wherever it appears", () => {
@@ -111,5 +111,94 @@ describe("redactVerbose hits", () => {
       "abcdefghijk",
     ]);
     expect(hits).toEqual(["env-secret", "github-token"]);
+  });
+});
+
+describe("redact — credential named by its field", () => {
+  it("masks a value whose key says it is a secret, whatever it looks like", () => {
+    expect(redact("API_KEY=plainlookingvalue")).toBe(`API_KEY=${MASK}`);
+    expect(redact('{"auth_token": "abcdefghijkl"}')).toBe(`{"auth_token": "${MASK}"}`);
+  });
+
+  it("leaves a path, a URL, a number and a boolean alone next to that name", () => {
+    // Every one of these sits beside a credential-ish name in real text, and
+    // masking them destroys the line while hiding nothing.
+    const text = "KEY_PATH=/Users/x/id_rsa auth_url=https://x.dev token_ttl=3600 useAuth=true";
+    expect(redact(text)).toBe(text);
+  });
+
+  it("does not treat keychain, keyboard or monkey as a key", () => {
+    const text = "keychain=somethinglong keyboard=mechanical monkey=business";
+    expect(redact(text)).toBe(text);
+  });
+});
+
+describe("redact — entropy pass", () => {
+  const blob = "A0K0EHbTRapaWKmaCkElLCf6BxykVN99pFNr8yB8BH";
+
+  it("stays out of the way unless asked for", () => {
+    expect(redact(`blob ${blob}`)).toBe(`blob ${blob}`);
+    expect(redact(`blob ${blob}`, [], { entropy: true })).toBe(`blob ${MASK}`);
+  });
+
+  it("leaves a path alone — the failure that made this measurable", () => {
+    // The first draft masked this: with `/` in the candidate class a path is one
+    // long mixed-case token. 10.8% of real prompts were rewritten this way.
+    const text = "see /Users/dinhngocthe/SkillsAgent/claude_station/data/agents/jira-ai-fixer";
+    expect(redact(text, [], { entropy: true })).toBe(text);
+  });
+
+  it("leaves a git sha, a UUID and a query parameter alone", () => {
+    const text = [
+      "0a8aeb5f2c1d4e6a8b9c0d1e2f3a4b5c6d7e8f90",
+      "21b3ef56-81e1-4fc2-95a6-25aeeeffbe93",
+      "X-Amz-Content-Sha256=UNSIGNED-PAYLOAD",
+    ].join(" ");
+    expect(redact(text, [], { entropy: true })).toBe(text);
+  });
+
+  it("leaves the ids the tooling itself emits alone", () => {
+    const text = "tool call toolu_01Soqez3VMxDmWyvRJKT8r5dAAAA failed";
+    expect(redact(text, [], { entropy: true })).toBe(text);
+  });
+});
+
+describe("redactJson", () => {
+  it("condemns a value by the name it is filed under", () => {
+    const out = redactJson({
+      headers: {
+        Authorization: "opaque-value-nobody-has-a-pattern-for",
+        Accept: "application/json",
+      },
+    }) as { headers: Record<string, string> };
+    expect(out.headers.Authorization).toBe(MASK);
+    expect(out.headers.Accept).toBe("application/json");
+  });
+
+  it("still runs the text rules on ordinary strings", () => {
+    const out = redactJson({ note: "use ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 here" }) as {
+      note: string;
+    };
+    expect(out.note).toBe(`use ${MASK} here`);
+  });
+
+  it("walks arrays and leaves non-strings as they are", () => {
+    const out = redactJson({ items: [{ password: "hunter2hunter2" }, { count: 3, ok: true }] }) as {
+      items: [{ password: string }, { count: number; ok: boolean }];
+    };
+    expect(out.items[0].password).toBe(MASK);
+    expect(out.items[1]).toEqual({ count: 3, ok: true });
+  });
+
+  it("does not mutate the input", () => {
+    const input = { token: "abcdefghijkl" };
+    redactJson(input);
+    expect(input.token).toBe("abcdefghijkl");
+  });
+
+  it("refuses a cycle instead of hanging", () => {
+    const node: Record<string, unknown> = { name: "a" };
+    node.self = node;
+    expect(() => redactJson(node)).not.toThrow();
   });
 });

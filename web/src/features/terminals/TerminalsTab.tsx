@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { Select } from "@/components/ui/select";
 import {
@@ -6,6 +6,7 @@ import {
   History,
   Plus,
   RotateCw,
+  ShieldQuestionMark,
   ToggleOff,
   ToggleOn,
   Trash2,
@@ -20,6 +21,7 @@ import type {
 } from "@claude-station/shared";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { usePanelActive } from "@/components/KeepAlive";
 import { useSettings, useUpdateSettings } from "@/features/settings/hooks";
 import { projectKey, useUiState } from "@/lib/uiStore";
@@ -28,6 +30,7 @@ import { TerminalPane } from "./TerminalPane";
 import {
   useCliSessions,
   useContinueCliSession,
+  useAgentClis,
   useCreateTerminal,
   useDeleteCliSession,
   useDeleteTerminalRecord,
@@ -35,6 +38,7 @@ import {
   useKillTerminal,
   useRestartTerminal,
   useTerminalHistory,
+  useTerminalDiagnostics,
   useTerminals,
 } from "./hooks";
 
@@ -48,6 +52,8 @@ interface Props {
 export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
   const { data: terminals = [], isLoading } = useTerminals(project.id, kind);
   const create = useCreateTerminal(project.id);
+  const { data: agents = [] } = useAgentClis();
+  const [diagnosticsFor, setDiagnosticsFor] = useState<string | null>(null);
   const kill = useKillTerminal(project.id);
   const restart = useRestartTerminal(project.id);
   const handoff = useExportTerminal(project.id);
@@ -221,6 +227,16 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
             <ExternalLink size={16} /> Open in Terminal
           </Button>
         )}
+        {active && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setDiagnosticsFor(active.id)}
+            title="Everything needed to say why this tab did not start"
+          >
+            <ShieldQuestionMark size={16} />
+          </Button>
+        )}
         <Button
           size="sm"
           onClick={() =>
@@ -233,7 +249,32 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
         >
           <Plus size={16} /> {kind === "claude" ? "Claude" : "Terminal"}
         </Button>
+        {/* Other agent CLIs get the terminal and nothing else — no station tools,
+            no turn record. The menu says so rather than implying parity. */}
+        {kind === "shell" && agents.length > 0 && (
+          <Select
+            value=""
+            size="sm"
+            placeholder="Agent…"
+            aria-label="Start another agent CLI"
+            onChange={(agentCli) =>
+              create.mutate(
+                { cwdPathId: pathId || undefined, envSetId: envSetId || null, agentCli },
+                { onSuccess: (t) => setActiveId(t.id) },
+              )
+            }
+            options={agents.map((a) => ({
+              value: a.id,
+              label: a.installed ? a.label : `${a.label} — not installed`,
+              disabled: !a.installed,
+            }))}
+          />
+        )}
       </div>
+
+      {diagnosticsFor && (
+        <DiagnosticsDialog id={diagnosticsFor} onClose={() => setDiagnosticsFor(null)} />
+      )}
 
       {historyOpen && (
         <HistoryPanel
@@ -317,6 +358,7 @@ export function TerminalsTab({ project, envSets, kind = "shell" }: Props) {
           <TerminalPane
             key={active.id}
             terminalId={active.id}
+            cwd={active.cwd}
             seedText={seed && active.id === seedTarget ? seed : undefined}
             onSeedSent={clearSeed}
           />
@@ -383,9 +425,7 @@ function HistoryPanel({
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-      {cliSessions && (
-        <h3 className="m3-label-md mb-2 text-ink-muted">Sessions in this app</h3>
-      )}
+      {cliSessions && <h3 className="m3-label-md mb-2 text-ink-muted">Sessions in this app</h3>}
       {items.length === 0 && (
         <p className="m3-body-sm text-ink-faint">
           Nothing closed yet. {kind === "claude" ? "A Claude session" : "A shell"} you close shows
@@ -460,8 +500,8 @@ function HistoryPanel({
           </h3>
           {cliSessions.length === 0 && (
             <p className="m3-body-sm text-ink-faint">
-              Nothing on disk for these directories. The CLI keeps 30 days by default
-              (<code className="font-mono">cleanupPeriodDays</code>).
+              Nothing on disk for these directories. The CLI keeps 30 days by default (
+              <code className="font-mono">cleanupPeriodDays</code>).
             </p>
           )}
           <div className="space-y-1.5">
@@ -511,5 +551,45 @@ function HistoryPanel({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Why this terminal is not doing anything.
+ *
+ * One copyable blob rather than a diagnosis: the report that used to arrive was
+ * "the tab is just sitting there", and every actual cause — a binary not on the
+ * server's PATH, an env set with the wrong key, a CLI that printed a complaint
+ * and exited — is plain in here and invisible from outside.
+ */
+function DiagnosticsDialog({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data, isLoading } = useTerminalDiagnostics(id);
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <Dialog open onClose={onClose} title="Terminal diagnostics" className="max-w-3xl">
+      {isLoading ? (
+        <p className="text-sm text-ink-muted">Collecting…</p>
+      ) : (
+        <>
+          <pre className="max-h-96 overflow-auto rounded-lg bg-black/25 p-3 font-mono text-xs whitespace-pre-wrap">
+            {data?.text}
+          </pre>
+          <div className="mt-3 flex items-center gap-2">
+            <Button
+              onClick={() => {
+                void navigator.clipboard.writeText(data?.text ?? "");
+                setCopied(true);
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </Button>
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </>
+      )}
+    </Dialog>
   );
 }

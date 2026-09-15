@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { terminalInputSchema, terminalKindSchema } from "@claude-station/shared";
 import { db, schema } from "../db";
+import { presetStatuses } from "../lib/agent-cli";
 import { shq } from "../lib/claude-cli";
 import {
   hasTranscript,
@@ -52,6 +54,56 @@ export function terminalRoutes(app: FastifyInstance): void {
         t.status === "running" && !pty.isRunning(t.id) ? ("orphaned" as const) : t.status;
       return { ...t, status, tmuxAlive: alive.has(t.id) };
     });
+  });
+
+  /** Which agent CLIs are on this machine, for the "new terminal" menu. */
+  app.get("/api/agents/cli", async () => presetStatuses());
+
+  /**
+   * Everything anyone needs to say why a terminal did not start.
+   *
+   * The reports that arrive without this are all the same: "the agent tab is
+   * just sitting there". A binary that is not on the server's PATH, an env set
+   * with a wrong key, a CLI that printed its complaint and exited — all look
+   * identical from the outside, and all are obvious in this blob.
+   *
+   * Nothing here is conversation content: the tail is the terminal's own output,
+   * which the person is already looking at, and env values are named, never read.
+   */
+  app.get<{ Params: { id: string } }>("/api/terminals/:id/diagnostics", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const row = db.select().from(schema.terminals).where(eq(schema.terminals.id, id)).get();
+    if (!row) return reply.code(404).send({ error: "No such terminal" });
+
+    const envKeys = row.envSetId
+      ? db
+          .select({ key: schema.envVars.key, secret: schema.envVars.isSecret })
+          .from(schema.envVars)
+          .where(eq(schema.envVars.envSetId, row.envSetId))
+          .all()
+          .map((v) => `${v.key}${v.secret ? " (secret)" : ""}`)
+      : [];
+
+    const transcript = transcriptPath(row.claudeSessionId);
+
+    const blob = [
+      `terminal   ${row.id}  (${row.kind})`,
+      `title      ${row.title}`,
+      `status     ${row.status}${pty.isRunning(row.id) ? " — pty alive" : " — no pty"}`,
+      `cwd        ${row.cwd}`,
+      `command    ${row.command ?? "(login shell)"}`,
+      `pid        ${row.pid ?? "none"}`,
+      `tmux       ${pty.tmuxEnabled() ? (pty.tmuxInstalled() ? "on" : "on, but tmux is missing") : "off"}`,
+      `env set    ${row.envSetId ?? "none"}${envKeys.length ? ` — ${envKeys.join(", ")}` : ""}`,
+      `session    ${row.claudeSessionId ?? "n/a"}`,
+      `transcript ${transcript ? `${transcript} ${existsSync(transcript) ? "(exists)" : "(not written yet)"}` : "n/a"}`,
+      `created    ${row.createdAt}`,
+      "",
+      "--- last output ---",
+      pty.recentOutput(row.id, 4000) || "(nothing captured)",
+    ].join("\n");
+
+    return { text: blob };
   });
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/terminals", async (req, reply) => {

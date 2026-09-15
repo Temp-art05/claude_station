@@ -37,6 +37,7 @@ import {
 } from "./git";
 import { watchGitDir, watchedGitDirs } from "./git-watch";
 import { filesOf, ledgerEnabled, turnsRunningAt, type Turn } from "./session-ledger";
+import { emit } from "./shared-memory";
 
 export type Confidence = "exact" | "inferred" | "orphan";
 export type Checkpoint = typeof schema.checkpoints.$inferSelect;
@@ -197,6 +198,19 @@ export function ingest(input: string): { added: number; repointed: number } {
       })
       .run();
     result.added += 1;
+
+    // A commit message is the one decision record an agent writes on purpose and
+    // in its own words, so it goes on the bus whatever the attribution turns out
+    // to be — orphan or not, the work landed.
+    emit({
+      projectId: owner.projectId,
+      kind: "commit",
+      sourceKind: "app",
+      refId: commit.sha,
+      text: `${commit.sha.slice(0, 7)} ${commit.subject}`,
+      createdAt: commit.committedAt,
+    });
+
     if (isMerge) continue;
 
     const confidence = attribute(id, worktrees);
@@ -634,6 +648,90 @@ export function checkpointsOfSession(key: {
     .where(where)
     .orderBy(desc(schema.checkpoints.committedAt))
     .all();
+}
+
+/**
+ * Every commit a workflow run produced.
+ *
+ * C4. Goes through the turns rather than the checkpoints directly: a checkpoint
+ * knows the turn that made it, and the turn is what carries `workflowRunId`, so
+ * this needs no column and no migration — the ledger was built with the join in
+ * mind (`session_turns.workflowRunId` was filled from the start for exactly this).
+ *
+ * A run whose steps only ran commands, or whose agent committed nothing, answers
+ * with an empty list, and the run view says "no commits" rather than nothing —
+ * "this run changed nothing in the repo" is itself worth reading.
+ */
+export function checkpointsOfRun(
+  runId: string,
+): (CheckpointView & { subject: string; committedAt: string })[] {
+  const turnIds = db
+    .select({ id: schema.sessionTurns.id })
+    .from(schema.sessionTurns)
+    .where(eq(schema.sessionTurns.workflowRunId, runId))
+    .all()
+    .map((row) => row.id);
+  if (turnIds.length === 0) return [];
+
+  return db
+    .select()
+    .from(schema.checkpoints)
+    .where(inArray(schema.checkpoints.turnId, turnIds))
+    .orderBy(desc(schema.checkpoints.committedAt))
+    .all()
+    .map((row) => {
+      const turn = row.turnId
+        ? (db
+            .select()
+            .from(schema.sessionTurns)
+            .where(eq(schema.sessionTurns.id, row.turnId))
+            .get() ?? null)
+        : null;
+      // `subject` is not on the view — but a list of shas with no messages is
+      // unreadable, and this is the one place the commits are the answer.
+      return { ...toView(row, turn), subject: row.subject, committedAt: row.committedAt };
+    });
+}
+
+/**
+ * Try again on every commit nothing could be attributed to.
+ *
+ * Needed because reindexing the ledger deletes and rebuilds its turns, and
+ * `checkpoints.turnId` is `set null` — so a reindex silently turns every
+ * attributed commit into an orphan. Re-running attribution afterwards is what
+ * makes reindexing safe, and it usually ends up *better* than before: the rebuilt
+ * turns carry the model and the file lists that the parser missed the first time.
+ *
+ * Only orphans are touched. An `exact` link was made by watching the app commit
+ * and is not a guess worth re-deriving.
+ */
+export function reattributeOrphans(projectId?: string): { examined: number; linked: number } {
+  const out = { examined: 0, linked: 0 };
+  if (!ledgerEnabled()) return out;
+
+  const rows = db
+    .select()
+    .from(schema.checkpoints)
+    .where(
+      projectId
+        ? and(eq(schema.checkpoints.projectId, projectId), isNull(schema.checkpoints.turnId))
+        : isNull(schema.checkpoints.turnId),
+    )
+    .all();
+
+  // One worktree listing per repo, not per commit: `git worktree list` is a
+  // process, and this loop can run over thousands of orphans.
+  const treesByRepo = new Map<string, string[]>();
+  for (const row of rows) {
+    out.examined += 1;
+    let trees = treesByRepo.get(row.repoPath);
+    if (!trees) {
+      trees = worktreesOf(row.repoPath);
+      treesByRepo.set(row.repoPath, trees);
+    }
+    if (attribute(row.id, trees) !== "orphan") out.linked += 1;
+  }
+  return out;
 }
 
 /** Commits nothing could be attributed to — the honest measure of the blind spots. */

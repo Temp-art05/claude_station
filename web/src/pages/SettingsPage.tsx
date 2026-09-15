@@ -174,6 +174,26 @@ export function SettingsPage() {
                 ["notifications.enabled", "Desktop notifications for finished turns"],
                 ["git.useWorktreeDefault", "New sessions get their own git worktree by default"],
                 [
+                  "reach.enabled",
+                  "Reach: install the /reach-* commands so a claude terminal can ask this workspace questions — who last changed a file, why something was decided, what the ticket says. Off removes them again.",
+                ],
+                [
+                  "reach.mirror",
+                  "Reach: keep a .station/ directory of pointers inside each repo so the CLI's own @ completion reaches knowledge, plans, memory and fetched tickets. Ignored through .git/info/exclude, so no tracked file is touched.",
+                ],
+                [
+                  "memory.busEnabled",
+                  "Shared memory between sessions: a session writes what it decided, what failed and what it changed, and every other session in that project is handed what it has not seen yet on its next turn.",
+                ],
+                [
+                  "ledger.redactEntropy",
+                  "Also scrub long high-entropy strings from a recorded prompt, on top of known secret values and known credential shapes. Measured on the transcript store here: 0.3% of prompts touched, every hit credential-shaped.",
+                ],
+                [
+                  "pricing.enabled",
+                  "Fetch model prices from models.dev, so a terminal turn — which reports no cost of its own — can be priced from its tokens. The only outbound call this app makes; off means Mission control shows tokens and the costs the SDK reported.",
+                ],
+                [
                   "terminal.tmux",
                   "Run new terminals inside tmux — a session then survives a reload and can be handed to a real terminal window, at the cost of a full repaint after each burst of output. Off is smoother. Also switchable from the terminal toolbar.",
                 ],
@@ -194,6 +214,7 @@ export function SettingsPage() {
         </Card>
       )}
 
+      <LedgerSettings />
       <JiraSettings />
       <GitHubSettings />
       <BackupSettings />
@@ -506,6 +527,78 @@ function GitHubForm({ initial }: { initial: string }) {
 }
 
 /** Whole-app export/import — move the station (and all its data) between machines. */
+/**
+ * Rebuilding the turn record from the CLI's own transcripts.
+ *
+ * The button exists because the parser keeps learning things after the fact. It
+ * did not record which model answered until 2026-09-15, so every turn captured
+ * before that is unpriced — Mission control shows the token counts and a blank
+ * cost, and no amount of waiting fixes it. A reindex reads the transcripts again
+ * with the parser as it is now.
+ */
+function LedgerSettings() {
+  const confirm = useConfirm();
+  const [result, setResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const reindex = useMutation({
+    mutationFn: () =>
+      api.post<{
+        scan: { indexed: number; caughtUp: number; skipped: number };
+        relinked: { examined: number; linked: number };
+      }>("/api/ledger/reindex"),
+    onSuccess: (r) =>
+      setResult({
+        tone: "ok",
+        text:
+          `Reparsed ${r.scan.indexed} conversation(s), skipped ${r.scan.skipped}. ` +
+          `Re-linked ${r.relinked.linked} of ${r.relinked.examined} unattributed commit(s).`,
+      }),
+    onError: (err: unknown) =>
+      setResult({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
+  });
+
+  return (
+    <Card className="mt-4 space-y-3">
+      <h2 className="m3-title-sm">Session record</h2>
+      <p className="text-xs text-ink-muted">
+        Reads every <code className="font-mono">claude</code> transcript again with the current
+        parser and rebuilds the turn record from it. Do this when Mission control shows turns with
+        no cost: turns captured before the parser learned to record the model cannot be priced, and
+        only a reparse fixes them.
+      </p>
+      <p className="text-xs text-ink-faint">
+        It rebuilds rows, so every commit that was linked to a session is re-linked afterwards —
+        that second pass is part of the same button. A live Claude tab is skipped rather than having
+        the turn it is filling deleted underneath it. Minutes, on a large history.
+      </p>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          disabled={reindex.isPending}
+          onClick={async () => {
+            const ok = await confirm({
+              title: "Reindex the session record?",
+              body: "Every turn is rebuilt from the transcripts on disk. Nothing is lost that the transcripts still hold — but anything the transcripts no longer have goes with it.",
+              confirmLabel: "Reindex",
+            });
+            if (ok) {
+              setResult(null);
+              reindex.mutate();
+            }
+          }}
+        >
+          {reindex.isPending ? "Reparsing…" : "Reindex history"}
+        </Button>
+        {result && (
+          <span className={result.tone === "ok" ? "text-xs text-ok" : "text-xs text-err"}>
+            {result.text}
+          </span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function BackupSettings() {
   const confirm = useConfirm();
   const fileRef = useRef<HTMLInputElement | null>(null);

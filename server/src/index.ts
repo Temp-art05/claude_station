@@ -20,6 +20,12 @@ import { gitRoutes } from "./routes/git";
 import { integrationRoutes } from "./routes/integrations";
 import { knowledgeRoutes } from "./routes/knowledge";
 import { mcpRoutes } from "./routes/mcp";
+import { insightsRoutes } from "./routes/insights";
+import { packRoutes } from "./routes/packs";
+import { reachRoutes } from "./routes/reach";
+import { sweepStaging } from "./services/packs";
+import { installReachCommands, removeReachCommands } from "./services/reach-skills";
+import { planRoutes } from "./routes/plans";
 import { ledgerRoutes } from "./routes/ledger";
 import { memoryRoutes } from "./routes/memory";
 import { projectRoutes } from "./routes/projects";
@@ -30,12 +36,13 @@ import { workflowRoutes } from "./routes/workflows";
 import { seedGlobalMemories } from "./services/memory";
 import { catchUpRepos, watchProjectRepos } from "./services/checkpoints";
 import { scanTranscripts } from "./services/ledger-backfill";
-import { markInterrupted } from "./services/session-ledger";
+import { markInterrupted, repriceUnpriced } from "./services/session-ledger";
 import { followOpenClaudeTerminals } from "./services/terminals";
 import { unwatchAllGitDirs } from "./services/git-watch";
 import { unfollowAll } from "./services/transcript-follower";
+import { refreshPrices } from "./services/model-pricing";
 import { startTriggerLoop, stopTriggerLoop } from "./services/workflow-triggers";
-import { backfillChatSearch, ensureSearchTables } from "./services/search";
+import { backfillChatSearch, backfillMemorySearch, ensureSearchTables } from "./services/search";
 import { reconcileWorktreesOnBoot } from "./services/sessions";
 import { reconcileRunsOnBoot } from "./services/workflow-runner";
 import { killAllRuns } from "./services/commands";
@@ -79,6 +86,7 @@ registerAuth(app);
 // FTS5 tables + triggers live outside drizzle's schema.
 ensureSearchTables();
 backfillChatSearch();
+backfillMemorySearch();
 // Built-in global memory notes — inserted once each, then left alone.
 seedGlobalMemories();
 // Our own tmux socket gets its config rewritten every boot: the settings there are
@@ -158,6 +166,10 @@ agentRoutes(app);
 gitRoutes(app);
 knowledgeRoutes(app);
 ledgerRoutes(app);
+insightsRoutes(app);
+planRoutes(app);
+packRoutes(app);
+reachRoutes(app);
 mcpRoutes(app);
 memoryRoutes(app);
 workflowRoutes(app);
@@ -212,6 +224,35 @@ try {
       app.log.info(`checkpoints: ingested ${added} commit(s), orphaned ${orphaned}`);
     }
   });
+
+  // Model prices, so a CLI turn — which reports no cost of its own — can be
+  // priced from its tokens. One outbound call, after the port is open, and the
+  // cached table from last time stays in force if it fails.
+  void refreshPrices()
+    .then((result) => {
+      if (!result?.changed) return;
+      const priced = repriceUnpriced();
+      app.log.info(
+        `pricing: ${result.models} model(s)${priced > 0 ? `, priced ${priced} past turn(s)` : ""}`,
+      );
+    })
+    .catch(() => {
+      /* pricing is never allowed to be the reason boot logs an error */
+    });
+
+  // The `/reach-*` commands, so a terminal can ask this workspace questions.
+  // Rewritten only when their text changed, so a restart is normally silent.
+  if (setting("reach.enabled")) {
+    const written = installReachCommands();
+    if (written > 0) app.log.info(`reach: wrote ${written} command(s)`);
+  } else {
+    const removed = removeReachCommands();
+    if (removed > 0) app.log.info(`reach: removed ${removed} command(s)`);
+  }
+
+  // Pack previews that were cloned and never decided on.
+  const sweptPacks = sweepStaging();
+  if (sweptPacks > 0) app.log.info(`packs: swept ${sweptPacks} abandoned preview clone(s)`);
 
   // Workflow triggers. Off unless `workflows.triggersEnabled` says otherwise, so
   // a fresh install never starts a run on its own.

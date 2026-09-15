@@ -9,13 +9,16 @@ import { TERMINAL_CONTEXT_DIR, projectKnowledgeDir } from "../lib/data-dir";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import { TOKEN } from "../lib/auth";
-import { env as env_ } from "../lib/config";
+import { env as env_, setting } from "../lib/config";
 import { envVarsFor } from "./env-sets";
 import { createWorktree } from "./git";
 import { attachedAssetDirs } from "./library";
 import * as pty from "./pty-manager";
 import * as follower from "./transcript-follower";
 import { buildWorkspaceContext } from "./workspace-context";
+import { reachEnv } from "./reach-skills";
+import { refreshMirrors } from "./reach-mirror";
+import { presetById, presetCommand } from "../lib/agent-cli";
 
 function terminalContextPath(terminalId: string): string {
   return join(TERMINAL_CONTEXT_DIR, `${terminalId}.md`);
@@ -27,8 +30,12 @@ function terminalContextPath(terminalId: string): string {
  * dodges escaping a multi-line markdown blob through `zsh -c`.
  * Returns "" when there is nothing to say, so the caller drops the flag.
  */
-function writeTerminalContext(projectId: string, terminalId: string): string {
-  const context = buildWorkspaceContext(projectId).trim();
+function writeTerminalContext(
+  projectId: string,
+  terminalId: string,
+  sessionKey: string | null,
+): string {
+  const context = buildWorkspaceContext(projectId, sessionKey).trim();
   if (!context) return "";
   const file = terminalContextPath(terminalId);
   mkdirSync(TERMINAL_CONTEXT_DIR, { recursive: true });
@@ -73,7 +80,12 @@ export function claudeCommand(
     sessionId: opts.sessionId ?? undefined,
     mcpConfigFile: opts.mcpConfigFile,
     permissionMode: opts.permissionMode,
-    contextFile: writeTerminalContext(opts.projectId, opts.terminalId) || undefined,
+    // The conversation id doubles as the bus cursor key. A terminal is written
+    // once, at spawn, so what it gets is the state — the deltas that arrive while
+    // it runs are what the Memory tab's "new since" count is for: there is no way
+    // to inject into a PTY mid-conversation without typing for the user.
+    contextFile:
+      writeTerminalContext(opts.projectId, opts.terminalId, opts.sessionId ?? null) || undefined,
     extraDirs: [
       ...paths.map((p) => p.path).filter((p) => p !== opts.cwd),
       projectKnowledgeDir(opts.projectId),
@@ -115,9 +127,19 @@ export function createTerminal(
     /** Workflow steps only: the bridge config and the step's permission mode. */
     mcpConfigFile?: string;
     permissionMode?: string;
+    /**
+     * Start an agent CLI that is not Claude Code (`codex`, `opencode`, …).
+     *
+     * Stays a `shell` terminal on purpose: the transcript follower, the ledger
+     * and the MCP bridge are all Claude-shaped, and pretending otherwise would
+     * produce a History tab full of sessions with no turns in them.
+     */
+    agentCli?: string;
   },
 ) {
-  const kind: TerminalKind = input.kind ?? "shell";
+  const preset = input.agentCli ? presetById(input.agentCli) : null;
+  if (input.agentCli && !preset) throw badRequest(`Unknown agent CLI: ${input.agentCli}`);
+  const kind: TerminalKind = preset ? "shell" : (input.kind ?? "shell");
   const id = newId();
   // Pinning the CLI to an id of our own is what makes "continue this one" exact
   // later on, and what makes its transcript findable when the row is deleted.
@@ -125,7 +147,14 @@ export function createTerminal(
   const base = resolveCwd(projectId, input);
   // A worktree cwd lives in data/worktrees/<terminalId>, which path-safety allows.
   const cwd = input.useWorktree ? createWorktree(base, id) : base;
-  const env = { ...(input.envSetId ? envVarsFor(input.envSetId) : {}), ...input.extraEnv };
+  // Reach needs to know where to call back and with what. Deliberately named
+  // `CS_*` rather than reusing `CLAUDE_STATION_TOKEN`, which `childBaseEnv()`
+  // strips on purpose — this is a grant, not a leak through inheritance.
+  const env = {
+    ...(kind === "claude" && setting("reach.enabled") ? reachEnv(TOKEN) : {}),
+    ...(input.envSetId ? envVarsFor(input.envSetId) : {}),
+    ...input.extraEnv,
+  };
   const { pid } = pty.start({
     id,
     cwd,
@@ -133,6 +162,7 @@ export function createTerminal(
     // App agents pass their start command; a claude tab runs the CLI; else plain shell.
     command:
       input.command ??
+      (preset ? presetCommand(preset) : undefined) ??
       (kind === "claude"
         ? claudeCommand(Boolean(input.resumeSessionId), {
             projectId,
@@ -155,12 +185,14 @@ export function createTerminal(
   const row = {
     id,
     projectId,
-    title: input.title ?? `${kind === "claude" ? "Claude" : "Terminal"} ${count + 1}`,
+    title:
+      input.title ??
+      `${preset ? preset.label : kind === "claude" ? "Claude" : "Terminal"} ${count + 1}`,
     cwd,
     envSetId: input.envSetId ?? null,
     pid,
     kind,
-    command: input.command ?? null,
+    command: input.command ?? (preset ? presetCommand(preset) : null),
     claudeSessionId,
     status: "running" as const,
     createdAt: nowIso(),
@@ -170,6 +202,16 @@ export function createTerminal(
   // The CLI writes the transcript itself; following it is how a terminal tab gets
   // the same turn record an Agent SDK session gets. The file usually does not
   // exist yet at this point — the follower waits for it.
+  // The `@`-reachable pointers, rebuilt as the terminal opens so what completes
+  // matches what the stores hold right now.
+  if (kind === "claude" && setting("reach.enabled") && setting("reach.mirror")) {
+    try {
+      refreshMirrors(projectId);
+    } catch {
+      /* a repo we cannot write to simply has no mirror */
+    }
+  }
+
   if (claudeSessionId) {
     follower.follow({ claudeSessionId, projectId, cwd, terminalId: id });
   }
