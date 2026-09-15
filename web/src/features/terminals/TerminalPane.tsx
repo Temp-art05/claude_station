@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { wsUrl } from "@/lib/token";
+import { ReachPicker } from "./ReachPicker";
 
 /**
  * `"… Variable"` is the family @fontsource actually declares (`index.css:110`); the
@@ -33,18 +34,25 @@ const THEME = {
 
 interface Props {
   terminalId: string;
+  /** Where the PTY is running — the Reach picker offers that project's files. */
+  cwd?: string;
   onExit?: (code: number | null) => void;
   /** Typed into the PTY once it produces output — bracketed paste, never submitted. */
   seedText?: string;
   onSeedSent?: () => void;
 }
 
-export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props) {
+export function TerminalPane({ terminalId, cwd, onExit, seedText, onSeedSent }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   // Status lives here, never in the terminal buffer: writing into xterm while a
   // full-screen program owns the screen scrolls and overwrites *its* rows, and the
   // leftovers survive until something repaints (see the tmux repaint on reconnect).
   const [notice, setNotice] = useState<{ tone: "err" | "info"; text: string } | null>(null);
+  // Reach: `;;` opens a picker that types a command in. Held as refs because the
+  // terminal effect must not re-run when it opens — recreating the PTY view on a
+  // keystroke would throw away the scrollback.
+  const [reachOpen, setReachOpen] = useState(false);
+  const sendInputRef = useRef<((data: string) => void) | null>(null);
   // Refs so a changing seed never recreates the terminal (effect deps stay stable).
   const seedRef = useRef(seedText);
   const onSeedSentRef = useRef(onSeedSent);
@@ -274,10 +282,39 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
     };
     connect();
 
-    const dataSub = term.onData((data) => {
+    const sendInput = (data: string) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ t: "input", data }));
       }
+    };
+    sendInputRef.current = sendInput;
+
+    /**
+     * `;;` opens the Reach picker.
+     *
+     * The first `;` has already been forwarded and echoed by the program by the
+     * time the second arrives — there is no lookahead in a PTY — so opening the
+     * picker also has to erase it. `\x7f` is what the terminal sends for
+     * backspace, which is what every line editor on the other end expects.
+     *
+     * Two semicolons rather than one key: a single sigil would fire while
+     * someone types a shell one-liner, and `;;` is claimed by nothing here.
+     */
+    let lastSemicolonAt = 0;
+    const dataSub = term.onData((data) => {
+      if (data === ";") {
+        const now = Date.now();
+        if (now - lastSemicolonAt < 600) {
+          lastSemicolonAt = 0;
+          sendInput("\x7f");
+          setReachOpen(true);
+          return;
+        }
+        lastSemicolonAt = now;
+      } else {
+        lastSemicolonAt = 0;
+      }
+      sendInput(data);
     });
 
     // Keep the PTY's viewport in sync with the pane, not the window. The 0×0
@@ -321,6 +358,18 @@ export function TerminalPane({ terminalId, onExit, seedText, onSeedSent }: Props
 
   return (
     <div className="relative h-full min-h-0">
+      {reachOpen && (
+        <ReachPicker
+          cwd={cwd}
+          onClose={() => setReachOpen(false)}
+          onPick={(text) => {
+            setReachOpen(false);
+            // Bracketed paste, the same way a seed is typed in: it stops the
+            // program on the other end treating the text as a burst of keys.
+            sendInputRef.current?.(`\x1b[200~${text}\x1b[201~`);
+          }}
+        />
+      )}
       {notice && (
         <div
           className={`absolute inset-x-0 top-0 z-10 px-3 py-1.5 text-xs ${

@@ -26,6 +26,8 @@ export const AGENTS_DIR = join(DATA_DIR, "agents");
 export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
 export const LOGS_DIR = join(DATA_DIR, "logs");
 export const WORKTREES_DIR = join(DATA_DIR, "worktrees");
+/** Repos cloned by the Packs feature, one directory per installed pack. */
+export const PACKS_DIR = join(DATA_DIR, "packs");
 /** Workspace-context files a `claude` terminal reads via --append-system-prompt-file. */
 export const TERMINAL_CONTEXT_DIR = join(DATA_DIR, "terminal-context");
 /** Config for the station's own tmux server — rewritten on every boot. */
@@ -54,6 +56,7 @@ export function ensureDataDirs(): void {
     ATTACHMENTS_DIR,
     LOGS_DIR,
     WORKTREES_DIR,
+    PACKS_DIR,
     TERMINAL_CONTEXT_DIR,
     LAUNCHERS_DIR,
   ]) {

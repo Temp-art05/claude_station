@@ -14,6 +14,8 @@ import { MemoryPage } from "@/pages/MemoryPage";
 import { AgentsPage } from "@/pages/AgentsPage";
 import { WorkflowsPage } from "@/pages/WorkflowsPage";
 import { SearchPage } from "@/pages/SearchPage";
+import { InsightsPage } from "@/pages/InsightsPage";
+import { PacksPage } from "@/pages/PacksPage";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -39,6 +41,8 @@ const router = createBrowserRouter([
       { path: "agents", element: <AgentsPage /> },
       { path: "workflows", element: <WorkflowsPage /> },
       { path: "search", element: <SearchPage /> },
+      { path: "insights", element: <InsightsPage /> },
+      { path: "packs", element: <PacksPage /> },
     ],
   },
 ]);

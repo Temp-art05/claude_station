@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filesFromToolUse, toolLabel } from "../tool-files";
+import { filesFromToolUse, linesFromToolUse, toolLabel } from "../tool-files";
 
 const CWD = "/Users/x/repo";
 
@@ -66,5 +66,55 @@ describe("toolLabel", () => {
 
   it("leaves every other tool name alone", () => {
     expect(toolLabel("Edit", { file_path: "/a" })).toBe("Edit");
+  });
+});
+
+describe("linesFromToolUse", () => {
+  it("counts an Edit on both sides", () => {
+    expect(linesFromToolUse("Edit", { old_string: "a\nb", new_string: "a\nb\nc" })).toEqual({
+      added: 3,
+      removed: 2,
+    });
+  });
+
+  it("sums every edit of a MultiEdit", () => {
+    expect(
+      linesFromToolUse("MultiEdit", {
+        edits: [
+          { old_string: "a", new_string: "a\nb" },
+          { old_string: "x\ny", new_string: "" },
+        ],
+      }),
+    ).toEqual({ added: 2, removed: 3 });
+  });
+
+  it("counts a Write as all added — the call says nothing about what was there", () => {
+    expect(linesFromToolUse("Write", { content: "one\ntwo\nthree" })).toEqual({
+      added: 3,
+      removed: 0,
+    });
+  });
+
+  it("counts nothing for a Bash call, which is the known blind spot", () => {
+    expect(linesFromToolUse("Bash", { command: "sed -i '' s/a/b/ f.ts" })).toEqual({
+      added: 0,
+      removed: 0,
+    });
+  });
+
+  it("treats an empty string as zero lines, not one", () => {
+    expect(linesFromToolUse("Write", { content: "" }).added).toBe(0);
+  });
+
+  it("survives arguments that are not what the tool promised", () => {
+    expect(linesFromToolUse("Edit", null)).toEqual({ added: 0, removed: 0 });
+    expect(linesFromToolUse("MultiEdit", { edits: "nope" })).toEqual({ added: 0, removed: 0 });
+  });
+
+  it("counts a notebook cell delete as removed", () => {
+    expect(linesFromToolUse("NotebookEdit", { edit_mode: "delete", new_source: "a\nb" })).toEqual({
+      added: 0,
+      removed: 2,
+    });
   });
 });

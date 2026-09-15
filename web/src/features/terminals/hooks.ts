@@ -116,9 +116,7 @@ export function useExportTerminal(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api.post<{ opened: string; session: string; app: string }>(
-        `/api/terminals/${id}/export`,
-      ),
+      api.post<{ opened: string; session: string; app: string }>(`/api/terminals/${id}/export`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["terminals", projectId] }),
   });
 }
@@ -129,5 +127,38 @@ export function useRenameTerminal(projectId: string) {
     mutationFn: ({ id, title }: { id: string; title: string }) =>
       api.patch<Terminal>(`/api/terminals/${id}`, { title }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["terminals", projectId] }),
+  });
+}
+
+export interface AgentCli {
+  id: string;
+  label: string;
+  installed: boolean;
+  version: string;
+  path: string;
+  install: string;
+  limits: string;
+}
+
+/**
+ * Agent CLIs other than Claude Code, and whether they are on this machine.
+ *
+ * Cached for the session: `which` plus `--version` per agent is a few processes,
+ * and the answer only changes when somebody installs something.
+ */
+export function useAgentClis() {
+  return useQuery({
+    queryKey: ["agent-clis"],
+    queryFn: () => api.get<AgentCli[]>("/api/agents/cli"),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** The blob that says why a terminal did not start. */
+export function useTerminalDiagnostics(id: string | null) {
+  return useQuery({
+    queryKey: ["terminal-diagnostics", id],
+    queryFn: () => api.get<{ text: string }>(`/api/terminals/${id}/diagnostics`),
+    enabled: !!id,
   });
 }

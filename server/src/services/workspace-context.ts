@@ -4,14 +4,26 @@ import { setting } from "../lib/config";
 import { projectKnowledgeDir } from "../lib/data-dir";
 import { listProjectKnowledge } from "./library";
 import { memoryPromptSection } from "./memory";
+import { promptBlock } from "./shared-memory";
 
 /**
  * The prompt fragment that tells Claude what this workspace *is*: which repo is
  * which, what commands exist, where imported docs live. Capped so a big
  * knowledge folder can't crowd out the conversation — anything past the cap is
  * reachable through the knowledge_search tool instead.
+ *
+ * `sessionKey` opts the caller into the shared-memory bus: pass the session's own
+ * id and the block carries what *other* sessions have established, in full the
+ * first time and as a delta after that. Omit it and this is the static context
+ * it always was — which is what a caller building a preview rather than a turn
+ * wants, because asking for the block advances that session's cursor.
  */
-export function buildWorkspaceContext(projectId: string): string {
+export function buildWorkspaceContext(
+  projectId: string,
+  sessionKey?: string | null,
+  /** The message this turn is answering, used to retrieve matching memory. */
+  query?: string | null,
+): string {
   const project = db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).get();
   if (!project) return "";
 
@@ -46,13 +58,15 @@ export function buildWorkspaceContext(projectId: string): string {
   const knowledge = listProjectKnowledge(projectId);
 
   if (knowledge.length > 0) {
-    lines.push("", "## Imported knowledge", `Project store: \`${projectKnowledgeDir(projectId)}\`.`);
+    lines.push(
+      "",
+      "## Imported knowledge",
+      `Project store: \`${projectKnowledgeDir(projectId)}\`.`,
+    );
     for (const k of knowledge) {
       const parsed = k.parsedPath ? ` (parsed copy: \`${k.parsedPath}\`)` : "";
       const from = k.attached ? ` [library${k.folder ? `/${k.folder}` : ""}]` : "";
-      lines.push(
-        `- \`${k.storedPath}\`${from} — ${k.description || k.kind}${parsed}`,
-      );
+      lines.push(`- \`${k.storedPath}\`${from} — ${k.description || k.kind}${parsed}`);
     }
     lines.push(
       "",
@@ -72,5 +86,6 @@ export function buildWorkspaceContext(projectId: string): string {
     text = `${head}\n\n…(index truncated — use knowledge_search instead of assuming)`;
   }
 
-  return `${text}\n\n${memoryPromptSection(projectId, cap)}`;
+  const shared = promptBlock(projectId, sessionKey ?? null, setting("memory.busBytes"));
+  return [text, memoryPromptSection(projectId, cap, query), shared].filter(Boolean).join("\n\n");
 }

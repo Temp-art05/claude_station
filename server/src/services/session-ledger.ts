@@ -18,6 +18,7 @@ import { setting } from "../lib/config";
 import { newId, nowIso } from "../lib/id";
 import { pathUnder, pathUnderAny, realish, relativeUnder } from "../lib/path-compare";
 import { redactVerbose } from "../lib/redact";
+import { estimateCost } from "./model-pricing";
 
 export type TurnSource = "sdk" | "cli";
 export type TurnStatus = "running" | "done" | "error" | "interrupted";
@@ -44,6 +45,12 @@ export interface OpenTurnInput {
 
 export interface CloseTurnInput {
   status?: TurnStatus;
+  /**
+   * The model that answered, when the caller only learns it mid-turn. The CLI
+   * does: the prompt record names no model, the assistant records that follow it
+   * do — and without it the turn cannot be priced.
+   */
+  model?: string | null;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -176,7 +183,9 @@ function nextSeq(input: OpenTurnInput): number {
 export function openTurn(input: OpenTurnInput): string | null {
   if (!ledgerEnabled()) return null;
   try {
-    const prompt = redactVerbose(input.prompt ?? "", secretValues()).text;
+    const prompt = redactVerbose(input.prompt ?? "", secretValues(), {
+      entropy: setting("ledger.redactEntropy"),
+    }).text;
     const id = newId();
     db.insert(schema.sessionTurns)
       .values({
@@ -258,15 +267,135 @@ export function closeTurn(turnId: string | null, input: CloseTurnInput = {}): vo
           ? {}
           : { cacheCreateTokens: input.cacheCreateTokens }),
         ...(input.costUsd === undefined ? {} : { costUsd: input.costUsd }),
+        ...(input.model === undefined || input.model === null ? {} : { model: input.model }),
         ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
         ...(input.toolCallCount === undefined ? {} : { toolCallCount: input.toolCallCount }),
         endedAt: input.endedAt ?? nowIso(),
       })
       .where(eq(schema.sessionTurns.id, turnId))
       .run();
+    priceTurn(turnId, input);
     announceClosed(turnId, input.status ?? "done");
   } catch {
     /* capture is best effort - see the header */
+  }
+}
+
+/**
+ * Settle what the turn cost, and say where the number came from.
+ *
+ * Called on every close, including the repeated closes a live CLI turn gets as
+ * more of its transcript arrives — so it has to be idempotent, and it has to
+ * refuse to downgrade: once the SDK has reported a real cost, no later estimate
+ * may overwrite it.
+ */
+function priceTurn(turnId: string, input: CloseTurnInput): void {
+  try {
+    if (typeof input.costUsd === "number") {
+      db.update(schema.sessionTurns)
+        .set({ costSource: "reported" })
+        .where(eq(schema.sessionTurns.id, turnId))
+        .run();
+      return;
+    }
+
+    // The toggle governs new estimates too, not just the fetch: turning pricing
+    // off and still watching derived numbers appear would make it a lie.
+    if (!setting("pricing.enabled")) return;
+
+    const row = db
+      .select({
+        model: schema.sessionTurns.model,
+        costSource: schema.sessionTurns.costSource,
+        inputTokens: schema.sessionTurns.inputTokens,
+        outputTokens: schema.sessionTurns.outputTokens,
+        cacheReadTokens: schema.sessionTurns.cacheReadTokens,
+        cacheCreateTokens: schema.sessionTurns.cacheCreateTokens,
+      })
+      .from(schema.sessionTurns)
+      .where(eq(schema.sessionTurns.id, turnId))
+      .get();
+    if (!row || row.costSource === "reported") return;
+
+    const usd = estimateCost(input.model ?? row.model, row);
+    // No price for this model: leave the turn `unknown` and let the UI show
+    // tokens. A zero here would read as "this was free".
+    if (usd === null) return;
+
+    db.update(schema.sessionTurns)
+      .set({ costUsd: usd, costSource: "estimated" })
+      .where(eq(schema.sessionTurns.id, turnId))
+      .run();
+  } catch {
+    /* pricing is the least important thing a turn does */
+  }
+}
+
+/**
+ * Price every turn that was recorded before there was a price table.
+ *
+ * A turn is only priced at the moment it closes, so the rows already in the
+ * ledger when pricing arrives would stay blank for ever. Run after a refresh
+ * succeeds. Turns whose model was never recorded — every CLI turn captured before
+ * the follower learned to carry one — cannot be priced here; a full reindex from
+ * Settings rebuilds those from the transcript.
+ */
+export function repriceUnpriced(limit = 20_000): number {
+  try {
+    const rows = db
+      .select({
+        id: schema.sessionTurns.id,
+        model: schema.sessionTurns.model,
+        inputTokens: schema.sessionTurns.inputTokens,
+        outputTokens: schema.sessionTurns.outputTokens,
+        cacheReadTokens: schema.sessionTurns.cacheReadTokens,
+        cacheCreateTokens: schema.sessionTurns.cacheCreateTokens,
+      })
+      .from(schema.sessionTurns)
+      .where(
+        and(
+          eq(schema.sessionTurns.costSource, "unknown"),
+          isNull(schema.sessionTurns.costUsd),
+          sql`${schema.sessionTurns.model} is not null`,
+        ),
+      )
+      .limit(limit)
+      .all();
+
+    let priced = 0;
+    for (const row of rows) {
+      const usd = estimateCost(row.model, row);
+      if (usd === null) continue;
+      db.update(schema.sessionTurns)
+        .set({ costUsd: usd, costSource: "estimated" })
+        .where(eq(schema.sessionTurns.id, row.id))
+        .run();
+      priced += 1;
+    }
+    return priced;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Add to the turn's line counts.
+ *
+ * Accumulated rather than set, because both surfaces see tool calls arrive in
+ * batches — a drain at a time for the CLI, a message at a time for the SDK.
+ */
+export function bumpLines(turnId: string | null, added: number, removed: number): void {
+  if (!turnId || (added === 0 && removed === 0)) return;
+  try {
+    db.update(schema.sessionTurns)
+      .set({
+        linesAdded: sql`${schema.sessionTurns.linesAdded} + ${added}`,
+        linesRemoved: sql`${schema.sessionTurns.linesRemoved} + ${removed}`,
+      })
+      .where(eq(schema.sessionTurns.id, turnId))
+      .run();
+  } catch {
+    /* best effort */
   }
 }
 

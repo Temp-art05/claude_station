@@ -20,7 +20,9 @@ import { agentBundleDirs, agentDefinition, agentsForProject } from "./agents";
 import { envVarsFor } from "./env-sets";
 import { attachedAssetDirs } from "./library";
 import { notify } from "./notify";
-import { filesFromToolUse, toolLabel } from "../lib/tool-files";
+import { filesFromToolUse, linesFromToolUse, toolLabel } from "../lib/tool-files";
+import { recordPlan, settlePlan } from "./plans";
+import { ingestAssistantText, noteTurnClosed } from "./shared-memory";
 import * as ledger from "./session-ledger";
 import { snapshotTree, touchesBetween, type TreeSnapshot } from "./tree-snapshot";
 import { buildWorkspaceContext } from "./workspace-context";
@@ -171,7 +173,11 @@ function runningTurns(): number {
   return n;
 }
 
-function buildOptions(session: ReturnType<typeof loadSession>): Options {
+function buildOptions(
+  session: ReturnType<typeof loadSession>,
+  /** The turn's own message, so memory can be retrieved against it. */
+  prompt?: string,
+): Options {
   const paths = db
     .select()
     .from(schema.projectPaths)
@@ -221,7 +227,7 @@ function buildOptions(session: ReturnType<typeof loadSession>): Options {
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: buildWorkspaceContext(session.projectId),
+      append: buildWorkspaceContext(session.projectId, session.id, prompt),
     },
     // Jira / spreadsheet / knowledge / build-command tools, in-process.
     mcpServers: {
@@ -284,6 +290,20 @@ function requestPermission(
   const requestId = randomUUID();
   const timeoutSec = setting("permission.timeoutSec");
 
+  // Leaving plan mode is the one approval whose payload is worth keeping: the
+  // plan exists here and in the modal, and nowhere else once either closes.
+  if (toolName === "ExitPlanMode" && typeof input.plan === "string") {
+    const session = loadSession(sessionId);
+    recordPlan({
+      projectId: session.projectId,
+      sourceKind: "sdk",
+      chatSessionId: sessionId,
+      turnId: s.turnId,
+      requestId,
+      markdown: input.plan,
+    });
+  }
+
   return new Promise<PermissionResult>((resolve) => {
     const timer = setTimeout(() => {
       s.pending.delete(requestId);
@@ -307,6 +327,9 @@ export function resolvePermission(
   clearTimeout(pending.timer);
   s.pending.delete(requestId);
   pending.resolve(result);
+  // Only touches a row if this approval was a plan; the decision is the half of
+  // the record that says whether the plan was ever the agreed one.
+  settlePlan(requestId, result.behavior === "allow" ? "accepted" : "rejected");
   if (result.behavior === "deny") {
     const session = loadSession(sessionId);
     db.insert(schema.workHistory)
@@ -446,7 +469,7 @@ async function runTurn(
   isRetry = false,
 ): Promise<void> {
   const s = state(sessionId);
-  const options = buildOptions(session);
+  const options = buildOptions(session, text);
   const q = query({ prompt: text, options });
   s.activeQuery = q;
 
@@ -468,6 +491,18 @@ async function runTurn(
       // still leaves behind what it had already touched, which is exactly what
       // commit attribution needs.
       recordToolUse(sessionId, session, message);
+
+      // What the agent asked to be remembered, in its own words. Only explicit
+      // markers are taken (see `shared-memory.ts` § MARKERS) — this is not an
+      // attempt to work out which sentences mattered.
+      if (message.type === "assistant") {
+        ingestAssistantText(assistantTextOf(raw), {
+          projectId: session.projectId,
+          sourceKind: "sdk",
+          sessionKey: sessionId,
+          turnId: s.turnId,
+        });
+      }
 
       if (typeof raw.session_id === "string" && raw.session_id !== session.sdkSessionId) {
         // Resume can mint a new id — always keep the newest.
@@ -517,6 +552,13 @@ async function runTurn(
           cacheCreateTokens: num(usage.cache_creation_input_tokens),
           costUsd: typeof result.total_cost_usd === "number" ? result.total_cost_usd : null,
           durationMs: typeof result.duration_ms === "number" ? result.duration_ms : null,
+        });
+        noteTurnClosed({
+          projectId: session.projectId,
+          turnId: s.turnId,
+          sessionKey: sessionId,
+          sourceKind: "sdk",
+          status: result.is_error ? "error" : "done",
         });
         s.turnId = null;
       }
@@ -594,6 +636,8 @@ function recordToolUse(
   const cwd = session.worktreePath ?? session.cwd;
   const touches: ledger.FileTouch[] = [];
   let calls = 0;
+  let added = 0;
+  let removed = 0;
 
   for (const block of content as Array<Record<string, unknown>>) {
     if (block.type !== "tool_use" || typeof block.name !== "string") continue;
@@ -602,10 +646,30 @@ function recordToolUse(
     for (const touch of filesFromToolUse(block.name, block.input, cwd)) {
       touches.push({ ...touch, source: "tool", toolName: label });
     }
+    const lines = linesFromToolUse(block.name, block.input);
+    added += lines.added;
+    removed += lines.removed;
   }
 
   if (calls > 0) ledger.bumpToolCalls(turnId, calls);
   if (touches.length > 0) ledger.recordFiles(turnId, touches);
+  ledger.bumpLines(turnId, added, removed);
+}
+
+/** The text blocks of one assistant message, joined. Tool calls are ignored. */
+function assistantTextOf(raw: Record<string, unknown>): string {
+  const content = (raw as { message?: { content?: unknown } }).message?.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    )
+    .map((block) => block.text)
+    .join("\n");
 }
 
 function extractDelta(raw: Record<string, unknown>): string | null {

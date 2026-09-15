@@ -16,7 +16,9 @@
  */
 import { watch, type FSWatcher } from "node:fs";
 import { transcriptPath } from "../lib/claude-transcript";
-import { filesFromToolUse, toolLabel } from "../lib/tool-files";
+import { filesFromToolUse, linesFromToolUse, toolLabel } from "../lib/tool-files";
+import { recordPlan } from "./plans";
+import { ingestAssistantText, noteTurnClosed } from "./shared-memory";
 import {
   addUsage,
   emptyUsage,
@@ -46,6 +48,12 @@ interface Follower {
   turnId: string | null;
   usage: TranscriptUsage;
   toolCalls: number;
+  /**
+   * The model that answered. A prompt record names none — only the assistant
+   * records that follow it do — so it arrives after the turn has been opened, and
+   * it is what lets a CLI turn be priced at all.
+   */
+  model: string | null;
   lastAt: string | null;
   watcher: FSWatcher | null;
   debounce: NodeJS.Timeout | null;
@@ -110,6 +118,7 @@ function newFollower(input: FollowInput, offset?: number): Follower {
     turnId: null,
     usage: emptyUsage(),
     toolCalls: 0,
+    model: null,
     lastAt: null,
     watcher: null,
     debounce: null,
@@ -366,12 +375,44 @@ function apply(follower: Follower, event: TranscriptEvent): void {
   if (!follower.turnId) return;
 
   follower.usage = addUsage(follower.usage, event.usage);
+  if (event.model) follower.model = event.model;
+
+  // A subagent's prose is its own working-out, not the session's conclusion.
+  if (!event.sidechain && event.text) {
+    ingestAssistantText(event.text, {
+      projectId: follower.projectId,
+      sourceKind: "cli",
+      sessionKey: follower.claudeSessionId,
+      turnId: follower.turnId,
+    });
+  }
   if (event.at) follower.lastAt = event.at;
 
   const cwd = event.cwd ?? follower.cwd;
   const touches: ledger.FileTouch[] = [];
+  let added = 0;
+  let removed = 0;
   for (const call of event.tools) {
     follower.toolCalls += 1;
+    // A terminal has no approval modal we can see, so a plan read here is only
+    // ever `proposed`: the transcript records that Claude asked, never what the
+    // user pressed.
+    if (call.name === "ExitPlanMode") {
+      const plan = (call.input as { plan?: unknown } | null)?.plan;
+      if (typeof plan === "string") {
+        recordPlan({
+          projectId: follower.projectId,
+          sourceKind: "cli",
+          claudeSessionId: follower.claudeSessionId,
+          turnId: follower.turnId,
+          markdown: plan,
+          ...(event.at ? { createdAt: event.at } : {}),
+        });
+      }
+    }
+    const lines = linesFromToolUse(call.name, call.input);
+    added += lines.added;
+    removed += lines.removed;
     const label = toolLabel(call.name, call.input);
     for (const touch of filesFromToolUse(call.name, call.input, cwd)) {
       // A subagent's edits are the parent turn's edits — the plan keeps one turn
@@ -384,6 +425,7 @@ function apply(follower: Follower, event: TranscriptEvent): void {
     }
   }
   if (touches.length > 0) ledger.recordFiles(follower.turnId, touches);
+  ledger.bumpLines(follower.turnId, added, removed);
 }
 
 /**
@@ -417,11 +459,23 @@ function closeOpenTurn(follower: Follower, opts: { keepOpen?: boolean } = {}): v
     cacheReadTokens: follower.usage.cacheReadTokens,
     cacheCreateTokens: follower.usage.cacheCreateTokens,
     toolCallCount: follower.toolCalls,
+    model: follower.model,
     ...(follower.lastAt ? { endedAt: follower.lastAt } : {}),
   });
   if (!opts.keepOpen) {
+    // Only on the real close: a live turn is closed repeatedly as more of the
+    // transcript arrives, and announcing the same files each time would make the
+    // bus a stutter.
+    noteTurnClosed({
+      projectId: follower.projectId,
+      turnId: follower.turnId,
+      sessionKey: follower.claudeSessionId,
+      sourceKind: "cli",
+      status: "done",
+    });
     follower.turnId = null;
     follower.usage = emptyUsage();
     follower.toolCalls = 0;
+    follower.model = null;
   }
 }

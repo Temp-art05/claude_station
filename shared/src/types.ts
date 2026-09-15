@@ -295,6 +295,8 @@ export const terminalInputSchema = z.object({
   cwd: z.string().optional(),
   envSetId: z.string().nullable().optional(),
   kind: terminalKindSchema.optional(),
+  /** Start an agent CLI other than Claude Code — see `lib/agent-cli.ts`. */
+  agentCli: z.string().optional(),
 });
 export type TerminalInput = z.infer<typeof terminalInputSchema>;
 
@@ -1324,8 +1326,42 @@ export const appSettingsSchema = z.object({
    * real iOS repos (one of them 6.3GB), so it is on by default.
    */
   "ledger.treeSnapshot": z.boolean().default(true),
+  /**
+   * Reach: install the `/reach-*` commands into the user-level skills directory,
+   * and give every `claude` terminal the URL and token they call back with. Off
+   * removes them — a terminal then has only what its spawn-time context file said.
+   */
+  "reach.enabled": z.boolean().default(true),
+  /**
+   * Reach's `.station/` mirror: a directory of pointers inside each repo so the
+   * CLI's own `@` completion can reach knowledge, plans, memory and fetched
+   * tickets. Ignored through `.git/info/exclude`, never `.gitignore`.
+   */
+  "reach.mirror": z.boolean().default(true),
+  /**
+   * The shared memory bus: sessions in a project write typed events (decisions,
+   * failures, plans, commits) and every other session in that project is handed
+   * what it has not seen yet. Off means nothing is written and nothing injected.
+   */
+  "memory.busEnabled": z.boolean().default(true),
+  /** Cap on the injected shared-memory block, per turn. */
+  "memory.busBytes": z.number().int().min(256).max(32768).default(4096),
+  /**
+   * Also scrub long high-entropy strings out of a recorded prompt, on top of the
+   * known secret values and known credential shapes. Measured at 0.3% of prompts
+   * touched on the transcript store here, all of them credential-shaped — see
+   * `lib/redact.ts` § RedactOptions before changing it.
+   */
+  "ledger.redactEntropy": z.boolean().default(true),
   /** How far back to look for the turn that produced a commit. */
   "ledger.windowHours": z.number().int().min(1).max(720).default(24),
+  /**
+   * Fetch model prices from models.dev so a CLI turn — which reports no cost of
+   * its own — can be priced from its token counts. One outbound call in an app
+   * that otherwise makes none, so it is a switch, and the numbers it produces are
+   * always labelled as estimates.
+   */
+  "pricing.enabled": z.boolean().default(true),
   /**
    * How many workflow steps may run at once. Two branches of the same run never
    * share a repo — one claims it, the other waits for the next round — so this

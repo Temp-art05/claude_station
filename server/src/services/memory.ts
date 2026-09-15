@@ -3,6 +3,7 @@ import type { ProjectMemory, ProjectMemoryInput } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
+import { searchMemories as memoryHits } from "./search";
 
 type Row = typeof schema.projectMemories.$inferSelect;
 
@@ -195,8 +196,18 @@ export function deleteMemory(id: string): void {
  * instead of being spent on other projects' notes.
  */
 export function searchMemories(projectId: string, query: string, limit = 20): ProjectMemory[] {
-  const term = `%${query.trim()}%`;
   if (!query.trim()) return [];
+
+  // Ranked first: the index knows which note is the best answer, and substring
+  // matching cannot — it only knows which notes contain the literal string.
+  const ranked = memoryHits(projectId, query, limit, { includePinned: true })
+    .map((hit) => getMemory(hit.id))
+    .filter((memory): memory is ProjectMemory => memory !== null);
+  if (ranked.length > 0) return ranked;
+
+  // Fall back to substring for the queries FTS is bad at — an exact identifier,
+  // a path fragment, a word shorter than the tokenizer keeps.
+  const term = `%${query.trim()}%`;
   return db
     .select()
     .from(schema.projectMemories)
@@ -230,7 +241,12 @@ export function importMemoryMarkdown(
       ? lines[headingIndex]!.replace(/^#\s+/, "").trim()
       : filename.replace(/\.(md|markdown|txt)$/i, "").trim();
   const body =
-    headingIndex >= 0 ? lines.slice(headingIndex + 1).join("\n").trim() : contents.trim();
+    headingIndex >= 0
+      ? lines
+          .slice(headingIndex + 1)
+          .join("\n")
+          .trim()
+      : contents.trim();
   if (!body) throw badRequest("The file has no content below its heading");
   return createMemory(projectId, { title, body, tags: null, pinned: false }, "imported");
 }
@@ -271,6 +287,45 @@ function renderGroup(
 }
 
 /**
+ * Notes that match the message, inlined ahead of the lists.
+ *
+ * Deliberately lexical (FTS5/BM25) rather than embeddings: measured against what
+ * this store actually holds — short notes written in two languages — matching the
+ * words is most of the value, and it costs no model, no download and no index
+ * build. The vector version is A5b and stays unbuilt until this is shown not to
+ * be enough.
+ *
+ * Each note says *why* it was pulled in, because a retrieved note that appears
+ * without explanation is indistinguishable from a note someone pinned, and the
+ * difference matters when you are working out why Claude believed something.
+ */
+function renderRetrieved(
+  projectId: string,
+  query: string | null | undefined,
+  budget: { left: number },
+): string[] {
+  if (!query) return [];
+  const hits = memoryHits(projectId, query, 4);
+  if (hits.length === 0) return [];
+
+  const parts: string[] = [
+    "## Relevant to what you were just asked",
+    "Matched against this message from the notes below. Not pinned — surfaced because it looks relevant.",
+  ];
+  let used = false;
+  for (const hit of hits) {
+    const memory = getMemory(hit.id);
+    if (!memory) continue;
+    const block = `\n### ${memory.title}\n${memory.body}`;
+    if (block.length > budget.left) continue;
+    budget.left -= block.length;
+    parts.push(block);
+    used = true;
+  }
+  return used ? [...parts, ""] : [];
+}
+
+/**
  * When to write a note. This is the whole reason memory fills up on its own:
  * without it a session sees the notes it can read and never infers that writing
  * one is its job, so every project stays empty until the user asks by hand.
@@ -303,13 +358,24 @@ to this one. Pin only what every session needs.`;
  * rest are titles only, so a big memory bank can't crowd out the conversation —
  * Claude pulls those with memory_get when it needs them.
  */
-export function memoryPromptSection(projectId: string, capBytes: number): string {
+export function memoryPromptSection(
+  projectId: string,
+  capBytes: number,
+  /**
+   * The message this prompt is being built for. Given one, notes that match it
+   * are pulled in whole even though they are not pinned — which is the whole
+   * point: before this, an unpinned note was a title in a list and was read only
+   * if Claude happened to guess it was worth a `memory_get`.
+   */
+  query?: string | null,
+): string {
   const budget = { left: capBytes };
   return [
+    ...renderRetrieved(projectId, query, budget),
     ...renderGroup(
       "## Global memory (every project)",
       listGlobalMemories(),
-      "None yet — save one with scope \"global\" when you learn a rule that holds everywhere.",
+      'None yet — save one with scope "global" when you learn a rule that holds everywhere.',
       budget,
     ),
     "",

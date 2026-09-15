@@ -740,8 +740,25 @@ export const sessionTurns = sqliteTable(
      * derived from a price table that would silently rot every old number.
      */
     costUsd: real("cost_usd"),
+    /**
+     * Where `costUsd` came from, because the two are not the same claim:
+     *   reported  — the SDK told us (`result.total_cost_usd`).
+     *   estimated — we priced the tokens ourselves from the models.dev table.
+     *   unknown   — no cost and no price for this model. `costUsd` stays NULL.
+     * Without this a dashboard cannot tell the user which of its numbers is real,
+     * and a number that looks measured but was derived is worse than no number.
+     */
+    costSource: text("cost_source").notNull().default("unknown"),
     durationMs: integer("duration_ms"),
     toolCallCount: integer("tool_call_count").notNull().default(0),
+    /**
+     * Lines the turn's edit tools added and removed. Counted from the tool call's
+     * own arguments, never from the file — so an edit made through `Bash` counts
+     * zero here even though `session_files` still records the path from the tree
+     * snapshot. Measurement only: no path, no content, no argument is kept.
+     */
+    linesAdded: integer("lines_added").notNull().default(0),
+    linesRemoved: integer("lines_removed").notNull().default(0),
     status: text("status").notNull().default("running"), // running|done|error|interrupted
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
@@ -824,6 +841,180 @@ export const sessionCapture = sqliteTable("session_capture", {
  * probable must say so, and one that cannot be made says `orphan` rather than
  * guessing. A badge that is wrong is worse than no badge.
  */
+/**
+ * Every plan an agent proposed, kept past the session that proposed it.
+ *
+ * Claude asks to leave plan mode by calling `ExitPlanMode` with the plan as
+ * markdown. Today that plan exists in exactly one place — the approval modal, or
+ * a terminal's scrollback — and is gone the moment either closes. This is the
+ * store the Plans view reads, so "what did we decide to do, and did we agree to
+ * it" survives the session.
+ *
+ * Deliberately not written to `docs/plans/` on capture: most proposals are drafts
+ * and some are rejected, and a repo full of those is noise. Export is a button.
+ */
+export const sessionPlans = sqliteTable(
+  "session_plans",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** sdk | cli — which surface proposed it. */
+    sourceKind: text("source_kind").notNull(),
+    chatSessionId: text("chat_session_id"),
+    claudeSessionId: text("claude_session_id"),
+    /**
+     * The turn it was proposed in. Not a foreign key for the same reason the
+     * ledger's own CLI column is not: a plan recovered from a transcript can
+     * outlive every row this app ever made for that conversation.
+     */
+    turnId: text("turn_id"),
+    /**
+     * The SDK approval this plan belongs to, so the decision can be written back
+     * when the user answers. NULL for a plan read out of a transcript, where the
+     * request is long gone.
+     */
+    requestId: text("request_id"),
+    /** What the user had asked, copied at capture so a deleted turn keeps it. */
+    promptPreview: text("prompt_preview").notNull().default(""),
+    markdown: text("markdown").notNull(),
+    /**
+     * proposed | accepted | rejected. A rejected plan is kept on purpose: the
+     * approach that was turned down is the more useful half of the record.
+     */
+    status: text("status").notNull().default("proposed"),
+    createdAt: text("created_at").notNull(),
+    settledAt: text("settled_at"),
+  },
+  (t) => [
+    index("idx_session_plans_project").on(t.projectId, t.createdAt),
+    // One plan per approval: the SDK can ask twice for the same request id if a
+    // turn is retried, and the second ask is the same plan, not a new one.
+    uniqueIndex("idx_session_plans_request").on(t.requestId),
+  ],
+);
+
+/**
+ * The shared memory bus: what one session learned, in a form the next one reads.
+ *
+ * An append-only log of **typed** events rather than transcript, because a
+ * transcript is not context — it is the thing you were trying not to re-read. A
+ * session writes `decision`, `fact`, `failure`, `architecture`, `plan`,
+ * `file_change`, `commit`; every other session in the project reads them.
+ *
+ * `seq` is per project and monotonic, and it is what makes injection continuous
+ * instead of one-shot: a session remembers the last seq it was shown
+ * (`session_memory_cursors`), so its next turn carries only what changed since —
+ * and carries nothing at all when nothing did.
+ */
+export const sessionMemoryEvents = sqliteTable(
+  "session_memory_events",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** Monotonic within the project. The cursor compares against this. */
+    seq: integer("seq").notNull(),
+    /** plan | decision | fact | failure | architecture | file_change | commit */
+    kind: text("kind").notNull(),
+    /** sdk | cli | app — `app` is something the station itself observed. */
+    sourceKind: text("source_kind").notNull(),
+    /**
+     * Who wrote it: a chat session id, or a `claude` conversation id. Used to
+     * keep a session from being handed back its own events.
+     */
+    sessionKey: text("session_key"),
+    turnId: text("turn_id"),
+    /** The plan id, commit sha, or turn this event came out of. */
+    refId: text("ref_id"),
+    /** One line, redacted, already in the shape it will be injected in. */
+    text: text("text").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("idx_memory_events_seq").on(t.projectId, t.seq),
+    index("idx_memory_events_kind").on(t.projectId, t.kind, t.seq),
+  ],
+);
+
+/**
+ * How far through the log each session has been shown.
+ *
+ * Kept per session rather than per project: two sessions running side by side
+ * are at different points, and the whole value of the bus is that the one that
+ * started later does not get handed the same state twice.
+ */
+export const sessionMemoryCursors = sqliteTable("session_memory_cursors", {
+  /** Chat session id, or `claude` conversation id — whichever the surface has. */
+  sessionKey: text("session_key").primaryKey(),
+  projectId: text("project_id").notNull(),
+  lastSeq: integer("last_seq").notNull().default(0),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
+ * A pack: one GitHub repo's worth of skills, agents and workflows, installed as
+ * a set instead of one file at a time.
+ *
+ * Pinned to a **commit sha**, never a branch. A pack is code that ends up in a
+ * prompt (and, if it carried scripts, could end up executed), so "install this
+ * repo and follow it" is a standing invitation for someone else to change what
+ * runs here. Updating is a decision, and it has a diff.
+ */
+export const packs = sqliteTable(
+  "packs",
+  {
+    id: text("id").primaryKey(),
+    /** Directory name under `data/packs/`, and how the UI refers to it. */
+    name: text("name").notNull().unique(),
+    repoUrl: text("repo_url").notNull(),
+    /** What the user asked for — a branch or tag. Kept to make update meaningful. */
+    ref: text("ref").notNull().default("HEAD"),
+    /** What is actually installed. This, not `ref`, is the truth. */
+    sha: text("sha").notNull(),
+    installedPath: text("installed_path").notNull(),
+    /**
+     * Scripts and hooks found in the pack are recorded but never wired up unless
+     * this is on, and it is off unless someone turns it on per pack. A pack with
+     * a hook is remote code execution wearing a friendly name.
+     */
+    scriptsEnabled: integer("scripts_enabled", { mode: "boolean" }).notNull().default(false),
+    installedAt: text("installed_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("idx_packs_name").on(t.name)],
+);
+
+/**
+ * One asset a pack registered, and what it became here.
+ *
+ * `refId` points at the row the asset turned into — a knowledge item for a
+ * skill, an agent, a workflow — so uninstalling can take back exactly what was
+ * added and nothing a person made themselves.
+ */
+export const packAssets = sqliteTable(
+  "pack_assets",
+  {
+    id: text("id").primaryKey(),
+    packId: text("pack_id")
+      .notNull()
+      .references(() => packs.id, { onDelete: "cascade" }),
+    /** skill | agent | workflow | script — `script` is recorded, not installed. */
+    kind: text("kind").notNull(),
+    /** Path inside the pack, which is what a diff on update compares. */
+    relPath: text("rel_path").notNull(),
+    /** The name it took here, which can differ when it had to be de-duplicated. */
+    name: text("name").notNull(),
+    refId: text("ref_id"),
+    /** installed | skipped | conflict | removed */
+    status: text("status").notNull().default("installed"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_pack_assets_pack").on(t.packId, t.kind)],
+);
+
 export const checkpoints = sqliteTable(
   "checkpoints",
   {

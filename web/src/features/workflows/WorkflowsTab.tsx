@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { ChevronLeft, Import, Play, Trash2, Workflow as WorkflowIcon } from "@/components/ui/icons";
+import {
+  ChevronLeft,
+  Import,
+  Play,
+  Sparkles,
+  Trash2,
+  Workflow as WorkflowIcon,
+} from "@/components/ui/icons";
 import type { EnvSet, Project, Workflow, WorkflowInputDef } from "@claude-station/shared";
 import { useQuery } from "@tanstack/react-query";
 import { useConfirm } from "@/components/ui/confirm";
@@ -90,6 +97,8 @@ export function WorkflowsTab({ project, envSets }: Props) {
           </Link>
         </div>
       </div>
+
+      <SuggestionsPanel projectId={project.id} />
 
       {imported.length === 0 ? (
         <Card className="flex flex-col items-center gap-2 py-10 text-center">
@@ -642,6 +651,85 @@ function WorkflowInputField({
       </Label>
       {field}
       {def.help && <p className="mt-1 m3-label-sm text-ink-faint">{def.help}</p>}
+    </div>
+  );
+}
+
+interface Suggestion {
+  steps: string[];
+  occurrences: number;
+  cleanRuns: number;
+  lastSeenAt: string;
+  title: string;
+  draft: { name: string; description: string };
+}
+
+/**
+ * Workflows this project's history suggests, from commands that actually ran.
+ *
+ * Kept small and dismissible. It is a pattern in `command_runs`, not a claim
+ * about intent: if the sequence is one you run on purpose, it is worth a
+ * workflow; if it is an accident of how a week went, it is worth ignoring, and
+ * nothing here creates anything until you say so.
+ */
+function SuggestionsPanel({ projectId }: { projectId: string }) {
+  const [dismissed, setDismissed] = useUiState<string[]>(
+    projectKey(projectId, "workflows", "dismissedSuggestions"),
+    [],
+  );
+  const { data } = useQuery({
+    queryKey: ["workflow-suggestions", projectId],
+    queryFn: () =>
+      api.get<{ suggestions: Suggestion[] }>(`/api/projects/${projectId}/workflow-suggestions`),
+    staleTime: 10 * 60_000,
+  });
+
+  const shown = (data?.suggestions ?? []).filter((s) => !dismissed.includes(s.title)).slice(0, 3);
+  if (shown.length === 0) return null;
+
+  return (
+    <div className="mb-5 space-y-2">
+      <p className="m3-label-sm font-bold tracking-[0.12em] text-ink-faint uppercase">
+        From what you actually run
+      </p>
+      {shown.map((suggestion) => (
+        <Card key={suggestion.title} className="flex items-start gap-3 p-3">
+          <Sparkles size={16} className="mt-0.5 shrink-0 text-tertiary" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">{suggestion.title}</p>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              Ran {suggestion.occurrences} times
+              {suggestion.cleanRuns > 0 && `, ${suggestion.cleanRuns} of them clean`} · last{" "}
+              {new Date(suggestion.lastSeenAt).toLocaleDateString()}
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {suggestion.steps.map((step, i) => (
+                <span
+                  key={`${step}-${i}`}
+                  className="m3-label-sm rounded-pill bg-white/6 px-2 py-0.5 font-mono text-ink-muted"
+                >
+                  {step}
+                </span>
+              ))}
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0"
+            onClick={() => setDismissed([...dismissed, suggestion.title])}
+          >
+            Dismiss
+          </Button>
+        </Card>
+      ))}
+      <p className="m3-label-sm text-ink-faint">
+        Read off this project's command history — commands only, never prompts. Build one in{" "}
+        <Link to="/workflows" className="text-accent hover:underline">
+          the library
+        </Link>{" "}
+        if it is a sequence you mean to keep.
+      </p>
     </div>
   );
 }

@@ -41,6 +41,13 @@ const DOT: Record<WorkflowRunStepStatus, string> = {
  * the WS and re-fetches, so the view is correct even if the tab was closed for
  * the whole run.
  */
+interface RunCheckpoint {
+  id: string;
+  commitSha: string;
+  subject: string;
+  confidence: "exact" | "inferred" | "orphan";
+}
+
 export function RunView({
   runId,
   projectId,
@@ -83,6 +90,20 @@ export function RunView({
     queryFn: () => api.get<{ seed: string }>(`/api/workflow-runs/${runId}/runbook`),
     enabled: untouched === true,
     staleTime: Infinity,
+  });
+
+  /**
+   * The commits this run produced.
+   *
+   * Only asked for once the run is over: mid-run the answer changes every time a
+   * step commits, and a list that grows under you while you read it is worse than
+   * one that appears when it is complete.
+   */
+  const { data: landed } = useQuery({
+    queryKey: ["workflow-run-checkpoints", runId],
+    queryFn: () =>
+      api.get<{ checkpoints: RunCheckpoint[] }>(`/api/workflow-runs/${runId}/checkpoints`),
+    enabled: run?.status === "done" || run?.status === "failed" || run?.status === "cancelled",
   });
 
   /**
@@ -397,6 +418,34 @@ export function RunView({
           );
         })}
       </div>
+
+      {finished && (
+        <Card className="mt-3">
+          <h3 className="m3-title-sm mb-2">What this run landed</h3>
+          {(landed?.checkpoints.length ?? 0) === 0 ? (
+            <p className="m3-body-sm text-ink-faint">
+              No commit is attributed to this run — either it changed nothing, or it left its work
+              uncommitted.
+            </p>
+          ) : (
+            <div className="space-y-1">
+              {landed?.checkpoints.map((cp) => (
+                <div key={cp.id} className="flex items-baseline gap-3 m3-body-sm">
+                  <span className="w-20 shrink-0 font-mono text-ink-faint">
+                    {cp.commitSha.slice(0, 8)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{cp.subject}</span>
+                  {/* An inferred link is a scored guess, and a run's own commits
+                      are usually exact — so when one is not, say so. */}
+                  <Badge tone={cp.confidence === "exact" ? "ok" : "warn"} className="shrink-0">
+                    {cp.confidence}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/*
         Every agent step runs in a real `claude` terminal, and a gate's command log

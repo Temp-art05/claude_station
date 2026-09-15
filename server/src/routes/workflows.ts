@@ -14,6 +14,8 @@ import { env } from "../lib/config";
 import { readSinglePart, readUploadParts } from "../lib/multipart";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import { contentDisposition } from "../lib/zip";
+import { checkpointsOfRun } from "../services/checkpoints";
+import { draftFrom, suggestFromHistory } from "../services/workflow-suggest";
 import {
   createWorkflow,
   deleteWorkflow,
@@ -256,6 +258,36 @@ export function workflowRoutes(app: FastifyInstance): void {
     const run = getRun(id);
     if (!run) return reply.code(404).send({ error: "Run not found" });
     return run;
+  });
+
+  /**
+   * The commits this run produced.
+   *
+   * C4: until now a finished run said what it did and not what it changed, so
+   * "did that run actually land anything" meant reading `git log` and guessing
+   * by timestamp.
+   */
+  app.get<{ Params: { id: string } }>("/api/workflow-runs/:id/checkpoints", async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    if (!getRun(id)) return reply.code(404).send({ error: "Run not found" });
+    return { checkpoints: checkpointsOfRun(id) };
+  });
+
+  /**
+   * Workflows this project's own command history suggests.
+   *
+   * C6. Returns drafts, never rows: a workflow that created itself is one nobody
+   * reviewed, and this is a pattern-match over command names, not a judgement
+   * about what the work was for.
+   */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/workflow-suggestions", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const query = z
+      .object({ days: z.coerce.number().int().min(7).max(365).default(60) })
+      .parse(req.query ?? {});
+    return {
+      suggestions: suggestFromHistory(id, query.days).map((s) => ({ ...s, draft: draftFrom(s) })),
+    };
   });
 
   /**
