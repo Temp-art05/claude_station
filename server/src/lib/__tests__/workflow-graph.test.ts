@@ -23,6 +23,7 @@ function step(key: string, extra: Partial<WorkflowStep> = {}): WorkflowStep {
     cwdLabel: null,
     isolate: false,
     readOnly: false,
+    model: null,
     ...extra,
   };
 }

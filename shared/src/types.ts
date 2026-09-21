@@ -699,6 +699,15 @@ export const workflowStepSchema = z.object({
    * waiting a whole turn for a directory it was never going to touch.
    */
   readOnly: z.boolean().default(false),
+  /**
+   * Model alias for this step's CLI (`--model`). NULL keeps the machine's
+   * default — which is what every workflow written before this field had.
+   *
+   * Per step rather than per run, because a workflow's cost is not spread
+   * evenly across it: the step that writes the code runs once, while a
+   * screenshot-against-the-design loop runs as many times as the design needs.
+   */
+  model: z.string().nullable().default(null),
 });
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 
@@ -777,6 +786,8 @@ export const workflowStepInputSchema = z.object({
   isolate: z.boolean().default(false),
   /** Declares the step writes nothing, so it needn't wait for the working tree. */
   readOnly: z.boolean().default(false),
+  /** Model alias for this step's CLI (`--model`). NULL = the machine's default. */
+  model: z.string().nullable().default(null),
 });
 export type WorkflowStepInput = z.infer<typeof workflowStepInputSchema>;
 

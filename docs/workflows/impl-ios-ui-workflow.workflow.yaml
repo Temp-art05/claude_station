@@ -1,0 +1,283 @@
+# Dựng UI iOS bám Figma, và nghiệm thu bằng chính cái màn đó trên simulator.
+#
+# Khác `impl-ios-workflow` ở đúng một chỗ, nhưng là chỗ quan trọng: người chấm không phải người
+# viết. Step `capture-compare` chụp màn thật rồi đặt cạnh ảnh Figma và chấm; step `fix` mới được
+# sửa. Con vừa dựng UI mà tự chấm ảnh của nó thì lần nào cũng "khớp rồi" — cùng lý do repo đã tách
+# `review` khỏi `impl`.
+#
+# Vòng chụp–so–chấm là phần lặp nhiều nhất và suy luận ít nhất, nên nó chạy `model: sonnet` thay vì
+# model mặc định của máy. Đó là lý do field `model` tồn tại ở cấp step.
+#
+# `ui-gate` là cái duy nhất cần khai thêm ở project: một command tên `ui-verdict` đọc verdict file,
+# ví dụ
+#     head -1 /tmp/ui-verdict.txt | grep -q '^MATCH' || { cat /tmp/ui-verdict.txt; exit 1; }
+# Không khai thì để input "Bật gate" = không, gate tự skip và `fix` mang sẵn phương án tự lặp.
+name: impl-ios-ui-workflow
+description: >-
+  Dựng UI iOS đúng Figma: đọc design thẳng từ Figma MCP → lập bảng Figma→token → impl → mở THẲNG màn
+  vừa làm trên simulator, chụp ảnh, đặt cạnh design và chấm → sửa, lặp tới khi khớp → commit dưới tên
+  bạn & PR tiếng Việt. Vòng chụp–so–chấm chạy model rẻ.
+folder: ios
+steps:
+  - key: recon
+    type: agent
+    title: Đọc Figma + đối chiếu DesignSystem của repo
+    agentName: ios-dev
+    permissionMode: bypassPermissions
+    requiresConfirm: true
+    readOnly: true
+    instruction: >-
+      Chuẩn bị đủ để dựng MỘT màn/thành phần UI. KHÔNG viết code ở step này.
+
+
+      1. ĐỌC DESIGN. `{{figmaUrl}}` là link Figma của thứ cần dựng. Tách `fileKey` (đoạn sau
+      `/design/`) và `node-id` (đổi `-` thành `:`, ví dụ `36-2572` → `36:2572`), rồi gọi
+      `mcp__figma__get_figma_data`. Link KHÔNG có `node-id` → `workflow_ask` hỏi tôi đúng node nào,
+      đừng tự chọn frame.
+
+
+      2. ĐỌC REPO. Trước khi kết luận thiếu gì: đọc `CLAUDE.md` + tài liệu kiến trúc ở root, toàn bộ
+      Foundation của DesignSystem (token màu / typography / spacing / radius / elevation), và danh
+      sách component dùng chung đã có. Tìm một màn ĐÃ DỰNG gần giống nhất để bắt chước cách tổ chức
+      — đừng phát minh lối riêng.
+
+
+      3. BẢNG FIGMA → TOKEN. Đây là sản phẩm chính của step. Với TỪNG giá trị thị giác trong node
+      (màu nền, màu chữ, cỡ + weight chữ, padding, gap, corner radius, shadow, kích thước icon):
+      ghi giá trị Figma, token tương ứng trong repo, và khớp hay không.
+         - Lệch ≤ 1pt hoặc màu lệch không thấy được bằng mắt → dùng token, ghi "làm tròn về token".
+         - Lệch thật (Figma dùng một hệ giá trị khác hẳn) → **KHÔNG tự hardcode, KHÔNG tự quyết đổi
+           token dùng chung**. Gom lại và `workflow_ask` hỏi tôi: sửa token dùng chung (ảnh hưởng cả
+           app), hay tạo TOKEN MỚI phạm vi hẹp (namespace/tên rõ ràng, chỉ (các) feature của run này
+           import, không đổi hành vi màn khác) để khớp Figma. Không tự chọn thay tôi giữa hai đường —
+           đây là quyết định kiến trúc design system.
+         - Nếu tôi đã chốt "tạo token mới phạm vi hẹp": giá trị của token PHẢI lấy từ dữ liệu Figma
+           thật (`get_figma_data` / style / variable), không áng chừng bằng mắt.
+
+      3b. KHÔNG BỊA DESIGN, KHÔNG BỊA ICON. Mọi màu, size, icon, chất liệu (glass/shadow) ghi vào
+      bảng phải truy được về một giá trị THẬT trong dữ liệu Figma (style, variable, hoặc node đã
+      export) — không đoán hex, không thay icon Figma bằng SF Symbol "trông giống giống" nếu Figma
+      dùng icon riêng. Icon/asset riêng của Figma (không phải SF Symbol hệ thống) thì
+      `mcp__figma__download_figma_images` node đó về, không tự vẽ lại bằng path khác.
+
+      4. ĐƯỜNG MỞ THẲNG MÀN. `{{screenLaunch}}` có giá trị thì dùng nguyên văn. Trống thì tự tìm:
+      grep launch argument trong repo (`ProcessInfo.processInfo.arguments`, `UserDefaults.standard`
+      với cờ `-Xxx`), đọc mục build/nghiệm thu trong tài liệu kiến trúc. Tìm được thì ghi rõ lệnh.
+      KHÔNG có đường mở thẳng → ghi rõ là sẽ phải điều hướng tay bằng `simctl`, và nói luôn dãy thao
+      tác dự kiến.
+
+
+      5. ĐƯỜNG BUILD. `{{buildScheme}}` có thì dùng. Trống thì `list_project_commands` xem project
+      đã khai command build chưa; chưa có thì đọc tài liệu repo để lấy đúng scheme.
+
+
+      6. PREFLIGHT — làm ở ĐÂY, đừng để phát hiện ở bước cuối. Hai thứ, cái nào thiếu cũng
+      `workflow_ask` hỏi tôi ngay trong step này rồi mới đi tiếp:
+         - `xcrun simctl list devices booted` rỗng ⇒ không có máy nào booted. Cả workflow này nghiệm thu bằng ảnh chụp màn thật, nên thiếu simulator là thiếu chỗ dựa duy nhất. TUYỆT ĐỐI không `simctl boot`, không `simctl create` — hỏi tôi mở Simulator.
+         - Run này bật gate (`{{uiGate}}` = có) mà `list_project_commands` không thấy command tên `ui-verdict` ⇒ bước gate sẽ chết ở cuối, sau khi đã impl xong. Hỏi tôi thêm command đó, hoặc tắt gate.
+
+
+      7. `workflow_emit_artifact` file `ui-spec-<ten-man>.md` gồm: bảng Figma→token ở mục 3, danh
+      sách component tái dùng được, lệnh build, lệnh mở thẳng màn, đường dẫn ảnh Figma tham chiếu,
+      và mục "Câu hỏi cần chốt". `workflow_note` tóm tắt + số câu hỏi còn treo.
+  - key: impl
+    type: agent
+    title: Dựng UI theo bảng Figma→token
+    agentName: ios-dev
+    permissionMode: bypassPermissions
+    requiresConfirm: true
+    dependsOn:
+      - recon
+    instruction: >-
+      Dựng UI theo artifact `ui-spec-<ten-man>.md` của step trước.
+
+
+      1. Cắt nhánh work theo convention của repo (xem `git log` + tài liệu) trước khi sửa file đầu
+      tiên.
+
+
+      2. Mọi giá trị thị giác đi qua token đã ghi trong bảng. **Màu / cỡ chữ / spacing / radius viết
+      thẳng số trong View là vi phạm** — quay lại bảng tìm token, không có token thì hỏi, đừng chế.
+      KHÔNG BỊA: nếu bảng ghi "tạo token mới phạm vi hẹp", giá trị token phải đúng số Figma trong
+      bảng — không làm tròn thêm, không đổi icon SF Symbol khác với cái bảng đã chốt.
+
+
+      3. Tái dùng component đã có trước khi viết component mới. Component mới chỉ khi màn này thật
+      sự cần một thứ chưa tồn tại, và khi đó đặt nó trong DesignSystem chứ không nhét trong feature.
+
+
+      4. Giữ đúng kiến trúc repo: View chỉ render state và forward intent, không nghiệp vụ trong
+      View; ViewModel không import SwiftUI; feature không import tầng dữ liệu. Chuỗi người dùng thấy
+      phải đi qua lớp localize của repo.
+
+
+      5. Chỉ dựng UI. Không tiện tay refactor, không đụng nghiệp vụ ngoài phạm vi màn này. Dữ liệu
+      chưa có thì dùng đúng cơ chế preview/mock mà repo đang dùng, và ghi rõ trong note.
+
+
+      6. KHÔNG commit, KHÔNG push ở step này. `workflow_note` liệt kê file đã chạm.
+  - key: capture-compare
+    type: agent
+    title: Chạy thẳng vào màn đó, chụp, đặt cạnh design và chấm
+    agentName: ui-design-checker
+    model: sonnet
+    permissionMode: bypassPermissions
+    dependsOn:
+      - impl
+    instruction: >-
+      Bạn là người CHẤM, không phải người sửa. Tuyệt đối không sửa file code nào trong step này.
+
+
+      0. XOÁ `{{verdictFile}}` trước khi làm gì khác. Verdict của lần chạy trước còn nằm đó là thứ
+      sẽ bị đọc nhầm thành kết quả của lần này.
+
+
+      1. BUILD. Dùng command build đã ghi trong `ui-spec` (ưu tiên `run_project_command`). Nếu tự
+      chạy `xcodebuild` thì **redirect ra file rồi đọc exit code riêng** — pipe qua `tail`/`grep` sẽ
+      đọc exit code của `tail` chứ không phải của build. Build đỏ → đọc lỗi, ghi vào verdict là
+      `DIFF` kèm nguyên nhân, và dừng step ở đó; việc sửa là của step sau.
+
+
+      2. MỞ THẲNG MÀN. Lấy UDID từ `xcrun simctl list devices booted`. **Rỗng ⇒ đây là CHẶN, không
+      phải lệch**: ghi `BLOCKED` vào dòng đầu `{{verdictFile}}` kèm lý do, rồi `workflow_ask` hỏi
+      tôi mở Simulator và dừng step ở đó. CẤM `simctl boot` / `simctl create`. `install` bản vừa build, rồi `launch` **kèm
+      launch argument mở thẳng màn** đã ghi trong `ui-spec`. Không có đường mở thẳng thì điều hướng
+      bằng `simctl` theo dãy thao tác đã ghi. Chụp `xcrun simctl io <UDID> screenshot`.
+
+
+      3. LẤY ẢNH DESIGN. `mcp__figma__download_figma_images` cho đúng node của `{{figmaUrl}}`, tỉ lệ
+      đủ lớn để đọc được chữ.
+
+
+      4. SO. `Read` cả hai ảnh và đối chiếu theo đúng thứ tự này, mỗi mục nói rõ **lệch bao nhiêu**
+      chứ không nói "hơi lệch":
+         - Có mặt & thứ tự: phần tử nào trong design mà bản dựng không có, và ngược lại.
+         - Bố cục: padding ngoài, khoảng cách giữa các khối, canh lề, chiều cao hàng.
+         - Chữ: cỡ, weight, số dòng, có bị cắt (truncate) không.
+         - Màu & chất liệu: nền, chữ, viền, bo góc, bóng đổ.
+         - Trạng thái: rỗng / đang tải / đã chọn — nếu design có mô tả.
+      Chỗ nào bản dựng khác design vì `ui-spec` đã chốt là "làm tròn về token" thì KHÔNG tính là lệch
+      — đọc lại bảng trước khi kết luận.
+
+
+      5. VERDICT. Ghi ra `{{verdictFile}}`, dòng đầu đúng MỘT trong ba chữ:
+         - `MATCH` — đã chụp được, đã so, khớp.
+         - `DIFF` — đã chụp được, đã so, còn lệch. Các dòng sau là danh sách lệch, mỗi dòng một mục, cụ thể đủ để người khác sửa mà không phải nhìn lại ảnh. Build đỏ cũng là `DIFF`: lỗi biên dịch là thứ bước sau sửa được.
+         - `BLOCKED` — **không so được** (không có simulator, không cài/mở được app, không tải được ảnh Figma). Kèm lý do và thứ cần ở người, rồi `workflow_ask`.
+      Ranh giới giữa `DIFF` và `BLOCKED` là ranh giới giữa "lặp lại sẽ sửa được" và "lặp lại bao
+      nhiêu lần cũng thế". Ghi `DIFF` cho một cái chặn là đẩy ba vòng lặp vào chỗ không có lối ra.
+      `workflow_emit_artifact` cả ảnh chụp, ảnh design và file verdict.
+
+
+      6. Đừng dễ dãi và cũng đừng bới. Lệch ≤ 1pt là khớp. "Trông ổn" không phải kết luận — không đo
+      được cái gì thì ghi vào mục "chưa kiểm được" kèm lý do.
+  - key: fix
+    type: agent
+    title: Sửa đúng những chỗ lệch
+    agentName: ios-dev
+    model: sonnet
+    permissionMode: bypassPermissions
+    dependsOn:
+      - capture-compare
+    instruction: >-
+      Đọc `{{verdictFile}}` và artifact của step trước.
+
+
+      1. Dòng đầu là `MATCH` → nói rõ "không có gì phải sửa" và kết thúc step. Không nhân tiện chỉnh
+      thêm.
+
+
+      1b. Dòng đầu là `BLOCKED` → **không sửa gì cả**. Không có ảnh chụp thì không ai biết nó lệch
+      chỗ nào, và sửa mò là làm hỏng thứ đang đúng. Nhắc lại thứ đang thiếu rồi `workflow_ask` hỏi
+      tôi, kết thúc step.
+
+
+      2. `DIFF` → sửa ĐÚNG những mục trong danh sách, không kèm refactor, không đụng màn khác. Vẫn
+      chỉ dùng token theo bảng Figma→token; vá bằng số cứng để cho khớp ảnh là làm hỏng chính thứ
+      workflow này đang bảo vệ.
+
+
+      3. Mục nào bạn cho là chấm sai thì ghi một dòng lý do trong note — im lặng bỏ qua thì vòng sau
+      nó quay lại y nguyên.
+
+
+      4. NẾU RUN NÀY KHÔNG BẬT GATE (step `ui-gate` bị skip): tự đóng vòng lặp — build lại, mở thẳng
+      màn, chụp lại, tự đối chiếu danh sách vừa sửa, **tối đa 3 vòng**. Mỗi vòng phải đính ảnh mới
+      bằng `workflow_emit_artifact`. Hết 3 vòng vẫn lệch → `workflow_ask` hỏi tôi, kèm ảnh và danh
+      sách còn lại. "Build xanh" không phải là xong; nhìn thấy màn mới là xong.
+  - key: ui-gate
+    type: gate
+    title: Khớp design chưa?
+    commandName: ui-verdict
+    condition: inputs.uiGate == "có"
+    onFail: capture-compare
+    maxLoops: 3
+    dependsOn:
+      - fix
+  - key: pr
+    type: agent
+    title: Commit dưới tên tôi & mở PR (tiếng Việt)
+    agentName: ios-dev
+    permissionMode: bypassPermissions
+    dependsOn:
+      - ui-gate
+    instruction: >-
+      Chốt và mở PR cho phần UI này.
+
+
+      1. DOUBLE-CHECK: `git diff` toàn bộ so với base branch. Soát lại một lượt: còn số cứng màu /
+      spacing / cỡ chữ nào lọt vào không, component mới có nằm đúng chỗ không, có file nào sửa ngoài
+      phạm vi màn này không. Có thì sửa rồi build lại trước khi đi tiếp.
+
+
+      2. COMMIT — code mang tên TÔI, không có dấu vết AI:
+         - Dùng đúng `git config user.name` / `user.email` sẵn có của repo. KHÔNG `--author` khác, KHÔNG sửa git config.
+         - TUYỆT ĐỐI KHÔNG thêm trailer `Co-Authored-By: Claude …`, KHÔNG dòng `Generated with Claude Code`, KHÔNG nhắc Claude / AI / agent ở commit message, PR title hay PR body.
+         - Commit message theo convention repo (xem `git log`).
+         - Tự kiểm chứng: `git log --format='%an <%ae>%n%B' <base>..HEAD` — thấy dấu vết nào thì `git commit --amend` gỡ sạch rồi mới push.
+      3. `workflow_ask` xác nhận với tôi trước khi push (nêu: branch, base, tóm tắt diff, author của
+      các commit).
+
+
+      4. Push và mở PR bằng `gh` về đúng base branch của repo. **PR body tiếng Việt**, gồm:
+         - `## Mục đích` — dựng màn nào, link Figma `{{figmaUrl}}`.
+         - `## Phạm vi thay đổi` — file/khối theo từng phần, thêm–sửa–xoá cái gì.
+         - `## Token đã dùng` — bảng Figma→token đã chốt, và những chỗ "làm tròn về token".
+         - `## Đã kiểm thử` — lệnh build, simulator/OS, lệnh mở thẳng màn, **ảnh chụp thật đặt cạnh ảnh design**, số vòng đã lặp tới khi khớp.
+         - `## Khuyết điểm / chưa verify` — BẮT BUỘC, không được bỏ trống: trạng thái nào chưa dựng, dark mode / cỡ chữ lớn / màn nhỏ đã kiểm chưa, chỗ nào còn tạm.
+         - `## Điểm cần reviewer chú ý`.
+      5. `workflow_note` trả link PR.
+inputs:
+  - key: figmaUrl
+    label: Link Figma của màn cần dựng
+    type: text
+    required: true
+    help: >-
+      Dán nguyên link có node-id, ví dụ
+      https://www.figma.com/design/<fileKey>/<ten>?node-id=36-2572 — nhiều màn thì dán nhiều link,
+      cách nhau bằng khoảng trắng.
+  - key: screenLaunch
+    label: "Cách mở thẳng màn (tuỳ chọn)"
+    type: text
+    help: 'Launch argument mở thẳng màn, ví dụ "-BMScreen plan". Bỏ trống thì step đầu tự đi tìm trong repo.'
+  - key: buildScheme
+    label: "Scheme build (tuỳ chọn)"
+    type: text
+    help: "Ví dụ BetterMe-DebugDev. Bỏ trống thì dùng command build đã khai của project."
+  - key: verdictFile
+    label: File verdict
+    type: text
+    defaultValue: /tmp/ui-verdict.txt
+    help: "Nơi người chấm ghi MATCH/DIFF. Để ngoài repo cho khỏi bẩn working tree."
+  - key: uiGate
+    label: Bật gate "khớp design chưa?"
+    type: choice
+    defaultValue: không
+    options:
+      - không
+      - có
+    help: >-
+      Bật thì scheduler tự đá run về bước chụp–so–chấm tới khi verdict là MATCH (tối đa 3 vòng). Cần
+      project có command tên `ui-verdict`, ví dụ:
+      head -1 /tmp/ui-verdict.txt | grep -q '^MATCH' || { cat /tmp/ui-verdict.txt; exit 1; }
+      Tắt thì bước sửa tự lặp lấy, cũng tối đa 3 vòng.

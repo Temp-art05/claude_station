@@ -21,6 +21,7 @@ describe("shipped workflow library", () => {
       "bulk-change-workflow.workflow.yaml",
       "fe-be-spec-to-pr.workflow.yaml",
       "impl-fe-workflow.workflow.yaml",
+      "impl-ios-ui-workflow.workflow.yaml",
       "impl-ios-workflow.workflow.yaml",
       "ios-be-spec-to-pr.workflow.yaml",
       "specs-to-jira.workflow.yaml",
@@ -122,6 +123,14 @@ describe("shipped workflow library", () => {
   it("moves each task through Jira as it goes, not once at the end", () => {
     for (const file of files) {
       const parsed = workflowInputSchema.parse(yaml.load(readFileSync(join(DIR, file), "utf8")));
+      // Only workflows that touch the board at all. One that never opens Jira —
+      // the UI loop, whose whole job is a screenshot against a design — has no
+      // task to move, and demanding it say "In Progress" would be asking it to
+      // lie about a board it doesn't use.
+      const usesJira =
+        parsed.steps.some((s) => s.agentName === "jira-pm") ||
+        parsed.inputs.some((i) => i.type.startsWith("jira"));
+      if (!usesJira) continue;
       const impl = parsed.steps.find((s) => ["impl", "impl-ios", "impl-fe", "fix"].includes(s.key));
       if (!impl) continue;
       // In Progress before the first line of code, Resolved the moment a task is

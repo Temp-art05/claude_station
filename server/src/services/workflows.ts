@@ -36,6 +36,7 @@ function toStep(row: StepRow): WorkflowStep {
     cwdLabel: row.cwdLabel,
     isolate: row.isolate,
     readOnly: row.readOnly,
+    model: row.model,
   };
 }
 
@@ -172,6 +173,7 @@ function writeSteps(workflowId: string, input: WorkflowInput): void {
         cwdLabel: step.cwdLabel,
         isolate: step.isolate,
         readOnly: step.readOnly,
+        model: step.model,
         createdAt: now,
       })
       .run();
@@ -398,11 +400,7 @@ export function exportWorkflowYaml(workflow: Workflow): string {
         ...(s.cwdLabel ? { cwdLabel: s.cwdLabel } : {}),
         ...(s.isolate ? { isolate: true } : {}),
         ...(s.readOnly ? { readOnly: true } : {}),
-        ...(s.dependsOn.length > 0 ? { dependsOn: s.dependsOn } : {}),
-        ...(s.onFail ? { onFail: s.onFail } : {}),
-        ...(s.maxLoops ? { maxLoops: s.maxLoops } : {}),
-        ...(s.cwdLabel ? { cwdLabel: s.cwdLabel } : {}),
-        ...(s.isolate ? { isolate: true } : {}),
+        ...(s.model ? { model: s.model } : {}),
       })),
     },
     { lineWidth: 100, noRefs: true },

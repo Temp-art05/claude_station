@@ -30,6 +30,12 @@ export interface ClaudeCliContext {
   mcpConfigFile?: string;
   /** Matches the step's own mode, so a long implement step isn't a click farm. */
   permissionMode?: string;
+  /**
+   * Model alias for this CLI (`--model`). Left out, the machine's own default
+   * applies — which is the right answer for a terminal somebody opened, and the
+   * wrong one for a loop that runs the same comparison a dozen times.
+   */
+  model?: string;
 }
 
 /**
@@ -43,10 +49,9 @@ export function buildClaudeCommand(restart: boolean, ctx: ClaudeCliContext = {})
     ...(ctx.extraDirs ?? []).map((d) => `--add-dir ${shq(d)}`),
     // --strict-mcp-config so the step gets exactly the station's tools and not
     // whatever this machine happens to have configured globally.
-    ...(ctx.mcpConfigFile
-      ? [`--mcp-config ${shq(ctx.mcpConfigFile)}`, "--strict-mcp-config"]
-      : []),
+    ...(ctx.mcpConfigFile ? [`--mcp-config ${shq(ctx.mcpConfigFile)}`, "--strict-mcp-config"] : []),
     ...(ctx.permissionMode ? [`--permission-mode ${shq(ctx.permissionMode)}`] : []),
+    ...(ctx.model ? [`--model ${shq(ctx.model)}`] : []),
   ];
   const flags = parts.length > 0 ? ` ${parts.join(" ")}` : "";
 

@@ -63,6 +63,8 @@ export function claudeCommand(
     /** Set for a workflow step: the station's tools, and the step's own mode. */
     mcpConfigFile?: string;
     permissionMode?: string;
+    /** Set for a workflow step that pins its own model. */
+    model?: string;
   },
 ): string {
   if (!opts) return buildClaudeCommand(restart);
@@ -80,6 +82,7 @@ export function claudeCommand(
     sessionId: opts.sessionId ?? undefined,
     mcpConfigFile: opts.mcpConfigFile,
     permissionMode: opts.permissionMode,
+    model: opts.model,
     // The conversation id doubles as the bus cursor key. A terminal is written
     // once, at spawn, so what it gets is the state — the deltas that arrive while
     // it runs are what the Memory tab's "new since" count is for: there is no way
@@ -124,9 +127,10 @@ export function createTerminal(
      * that ran outside the app becomes a session of the app.
      */
     resumeSessionId?: string;
-    /** Workflow steps only: the bridge config and the step's permission mode. */
+    /** Workflow steps only: the bridge config, the step's mode and its model. */
     mcpConfigFile?: string;
     permissionMode?: string;
+    model?: string;
     /**
      * Start an agent CLI that is not Claude Code (`codex`, `opencode`, …).
      *
@@ -171,6 +175,7 @@ export function createTerminal(
             sessionId: claudeSessionId,
             mcpConfigFile: input.mcpConfigFile,
             permissionMode: input.permissionMode,
+            model: input.model,
           })
         : undefined),
   });
@@ -194,6 +199,12 @@ export function createTerminal(
     kind,
     command: input.command ?? (preset ? presetCommand(preset) : null),
     claudeSessionId,
+    // Kept so reviving this tab rebuilds the same CLI. A `claude` row stores no
+    // command (it has to be rebuilt as a *resume*), so without these three the
+    // revived process quietly lost the station's tools and its pinned model.
+    model: input.model ?? null,
+    mcpConfigFile: input.mcpConfigFile ?? null,
+    permissionMode: input.permissionMode ?? null,
     status: "running" as const,
     createdAt: nowIso(),
     closedAt: null,
@@ -283,6 +294,9 @@ export function reviveTerminal(id: string): boolean {
               terminalId: id,
               cwd,
               sessionId: existing.claudeSessionId,
+              mcpConfigFile: existing.mcpConfigFile ?? undefined,
+              permissionMode: existing.permissionMode ?? undefined,
+              model: existing.model ?? undefined,
             })
           : undefined),
     });

@@ -60,8 +60,12 @@ describe("buildClaudeCommand", () => {
       extraDirs: ["/Users/me/BE"],
     });
     const [resume, fallback] = cmd.split(" || ");
-    expect(resume).toBe("claude --continue --append-system-prompt-file '/data/t1.md' --add-dir '/Users/me/BE'");
-    expect(fallback).toBe("claude --append-system-prompt-file '/data/t1.md' --add-dir '/Users/me/BE'");
+    expect(resume).toBe(
+      "claude --continue --append-system-prompt-file '/data/t1.md' --add-dir '/Users/me/BE'",
+    );
+    expect(fallback).toBe(
+      "claude --append-system-prompt-file '/data/t1.md' --add-dir '/Users/me/BE'",
+    );
   });
 
   it("quotes a directory containing a space", () => {
@@ -120,10 +124,19 @@ describe("buildClaudeCommand for a workflow step", () => {
     );
   });
 
-  it("leaves both flags off for an ordinary terminal", () => {
+  it("pins the step's model when it asked for one", () => {
+    expect(buildClaudeCommand(false, { sessionId: "s1", model: "sonnet" })).toContain(
+      "--model 'sonnet'",
+    );
+  });
+
+  it("leaves all three flags off for an ordinary terminal", () => {
     const cmd = buildClaudeCommand(false, { sessionId: "s1" });
     expect(cmd).not.toContain("--mcp-config");
     expect(cmd).not.toContain("--permission-mode");
+    // No --model means the machine's own default, which is what somebody who
+    // opened a terminal by hand expects to be talking to.
+    expect(cmd).not.toContain("--model");
   });
 
   it("repeats them on the restart fallback, or a failed resume loses its tools", () => {
@@ -131,12 +144,14 @@ describe("buildClaudeCommand for a workflow step", () => {
       sessionId: "s1",
       mcpConfigFile: "/tmp/mcp.json",
       permissionMode: "acceptEdits",
+      model: "sonnet",
     });
     const [resume, fallback] = cmd.split(" || ");
     for (const branch of [resume, fallback]) {
       expect(branch).toContain("--mcp-config '/tmp/mcp.json'");
       expect(branch).toContain("--strict-mcp-config");
       expect(branch).toContain("--permission-mode 'acceptEdits'");
+      expect(branch).toContain("--model 'sonnet'");
     }
   });
 });
