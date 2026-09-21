@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { WorkflowRun, WorkflowStep } from "@claude-station/shared";
@@ -43,6 +44,51 @@ const TURN_TIMEOUT_MS = 45 * 60_000;
 const READY_TIMEOUT_MS = 60_000;
 
 /**
+ * The MCP servers this machine has configured at user level.
+ *
+ * A step runs with `--strict-mcp-config`, which is deliberate: it should get the
+ * tools the workflow says it needs, not whatever happens to be installed. But
+ * that also cut off the servers a step genuinely cannot work without — a UI step
+ * told to build against a Figma file needs the Figma server, and there is no
+ * other way in. So they are copied into the run's own config instead of the flag
+ * being dropped: still an explicit list, just a longer one.
+ *
+ * Read defensively. A missing or half-written `~/.claude.json` is not a reason to
+ * fail a run that was never going to use those servers anyway.
+ */
+export function parseUserMcpServers(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const servers = (parsed as { mcpServers?: unknown }).mcpServers;
+    if (!servers || typeof servers !== "object" || Array.isArray(servers)) return {};
+    return servers as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function userMcpServers(): Record<string, unknown> {
+  try {
+    return parseUserMcpServers(readFileSync(join(homedir(), ".claude.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The machine's servers first, so `station` wins a name collision: a step's own
+ * tools are not something an installed server may shadow. Exported because that
+ * precedence is the whole point and a spread is easy to reorder by accident.
+ */
+export function mcpServersWithStation(
+  userServers: Record<string, unknown>,
+  station: unknown,
+): Record<string, unknown> {
+  return { ...userServers, station };
+}
+
+/**
  * The MCP config a step's CLI is started with.
  *
  * Written per run rather than per step: the bridge resolves which step is current
@@ -54,20 +100,24 @@ function writeMcpConfig(run: WorkflowRun): string {
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "mcp.json");
   const config = {
-    mcpServers: {
-      station: {
-        command: "node",
-        args: [join(REPO_ROOT, "scripts", "station-mcp-bridge.mjs")],
-        env: {
-          CLAUDE_STATION_URL: `http://127.0.0.1:${env.port}`,
-          CLAUDE_STATION_TOKEN: TOKEN,
-          CLAUDE_STATION_PROJECT: run.projectId,
-          CLAUDE_STATION_RUN: run.id,
-        },
+    mcpServers: mcpServersWithStation(userMcpServers(), {
+      command: "node",
+      args: [join(REPO_ROOT, "scripts", "station-mcp-bridge.mjs")],
+      env: {
+        CLAUDE_STATION_URL: `http://127.0.0.1:${env.port}`,
+        CLAUDE_STATION_TOKEN: TOKEN,
+        CLAUDE_STATION_PROJECT: run.projectId,
+        CLAUDE_STATION_RUN: run.id,
       },
-    },
+    }),
   };
   writeFileSync(file, JSON.stringify(config, null, 2));
+  // It carries whatever the copied servers keep in `env` — API keys, usually.
+  try {
+    chmodSync(file, 0o600);
+  } catch {
+    /* best effort, same as the token file */
+  }
   return file;
 }
 
@@ -112,6 +162,7 @@ export function terminalForStep(
     useWorktree: step.isolate || run.useWorktree,
     mcpConfigFile: writeMcpConfig(run),
     permissionMode: step.permissionMode ?? undefined,
+    model: step.model ?? undefined,
   });
   return { terminalId: terminal.id, claudeSessionId: terminal.claudeSessionId! };
 }

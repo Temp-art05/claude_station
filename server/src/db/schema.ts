@@ -155,6 +155,15 @@ export const terminals = sqliteTable(
      */
     claudeSessionId: text("claude_session_id"),
     status: text("status").notNull().default("running"), // running|exited|orphaned
+    /**
+     * The three flags a `claude` tab was spawned with. They are stored because
+     * reviving one rebuilds its command from scratch: without them a workflow
+     * step that came back after a restart lost the station's own tools and fell
+     * back to the default model, quietly and in the middle of a run.
+     */
+    model: text("model"),
+    mcpConfigFile: text("mcp_config_file"),
+    permissionMode: text("permission_mode"),
     createdAt: text("created_at").notNull(),
     closedAt: text("closed_at"),
   },
@@ -391,6 +400,14 @@ export const workflowSteps = sqliteTable(
     isolate: integer("isolate", { mode: "boolean" }).notNull().default(false),
     /** Writes nothing to the tree, so it needn't wait for one. */
     readOnly: integer("read_only", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Model alias for this step's CLI (`--model`). NULL keeps the machine's
+     * default, which is what every workflow written before this had. It is
+     * per-step because the cost is not spread evenly: a screenshot-versus-design
+     * loop runs many times and reasons about little, while the step that writes
+     * the code runs once.
+     */
+    model: text("model"),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("idx_workflow_steps_workflow").on(t.workflowId, t.sortOrder)],

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Select } from "@/components/ui/select";
 import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "@/components/ui/icons";
 import {
+  agentModelSchema,
   KNOWLEDGE_FOLDER_SUGGESTIONS,
   PERMISSION_MODE_CHOICES,
   workflowInputTypeSchema,
@@ -26,6 +27,8 @@ import { globalKey, useRestorableDraft } from "@/lib/uiStore";
 import { useSaveWorkflow } from "./hooks";
 
 const STEP_TYPES = workflowStepTypeSchema.options;
+/** "inherit" is the empty value here, so it is dropped from the list itself. */
+const STEP_MODELS = agentModelSchema.options.filter((m) => m !== "inherit");
 const INPUT_TYPES = workflowInputTypeSchema.options;
 
 const TYPE_HINT: Record<WorkflowStepType, string> = {
@@ -54,6 +57,7 @@ function blankStep(index: number): WorkflowStepInput {
     cwdLabel: null,
     isolate: false,
     readOnly: false,
+    model: null,
   };
 }
 
@@ -80,6 +84,7 @@ function toInput(workflow: Workflow): WorkflowInput {
       cwdLabel: s.cwdLabel,
       isolate: s.isolate,
       readOnly: s.readOnly,
+      model: s.model,
     })),
   };
 }
@@ -301,6 +306,7 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                   {step.permissionMode && step.permissionMode !== "default" && (
                     <Badge>{step.permissionMode}</Badge>
                   )}
+                  {step.model && <Badge>{step.model}</Badge>}
                   {step.condition && <Badge>conditional</Badge>}
                   <Button size="icon" variant="ghost" onClick={() => move(i, -1)} aria-label="Up">
                     <ChevronUp size={16} />
@@ -388,6 +394,22 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                           />
                           <p className="mt-1 m3-label-sm text-ink-faint">
                             Use acceptEdits for long implement steps so it runs unattended.
+                          </p>
+                        </div>
+                        <div>
+                          <Label>Model</Label>
+                          <Select
+                            className="w-full"
+                            value={step.model ?? ""}
+                            onChange={(v) => patchStep(i, { model: v || null })}
+                            options={[
+                              { value: "", label: "default (this machine's)" },
+                              ...STEP_MODELS.map((m) => ({ value: m, label: m })),
+                            ]}
+                          />
+                          <p className="mt-1 m3-label-sm text-ink-faint">
+                            A step that repeats a narrow check — build, screenshot, compare — is
+                            where a cheaper model pays for itself.
                           </p>
                         </div>
                       </div>
