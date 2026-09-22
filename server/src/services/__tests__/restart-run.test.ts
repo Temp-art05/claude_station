@@ -16,7 +16,7 @@ import { join } from "node:path";
 const RUNNER = readFileSync(join(import.meta.dirname, "../workflow-runner.ts"), "utf8");
 const RESTART = RUNNER.slice(
   RUNNER.indexOf("export function restartRun"),
-  RUNNER.indexOf("export function skipStep"),
+  RUNNER.indexOf("export async function skipStep"),
 );
 
 describe("restartRun", () => {
