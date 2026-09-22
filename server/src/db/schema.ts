@@ -513,6 +513,17 @@ export const workflowRunSteps = sqliteTable(
     stepKey: text("step_key").notNull(),
     status: text("status").notNull().default("pending"),
     attempt: integer("attempt").notNull().default(1),
+    /**
+     * Which dispatch of this step is the live one.
+     *
+     * A turn runs for many minutes inside an `await`, and Retry, Skip or Restart
+     * can change the step underneath it. When the old turn finally lands, its
+     * outcome is about a dispatch nobody is waiting for any more — and writing it
+     * marked a retried step `done`, so the engine walked straight past the retry.
+     * `attempt` cannot stand in for this: `restartRun` sets it back to 1, which
+     * collides with the attempt 1 that is still in flight. This only ever goes up.
+     */
+    generation: integer("generation").notNull().default(0),
     /** gate: times this check sent the run back. Separate from `attempt`, which
      * counts re-runs of the step itself — the two caps must not multiply. */
     loops: integer("loops").notNull().default(0),

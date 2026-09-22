@@ -39,6 +39,8 @@ const listeners = new Map<string, Set<Listener>>();
 const pendingAsks = new Map<string, (answers: Record<string, string>) => void>();
 /** Runs currently being advanced, so a double POST can't run a step twice. */
 const advancing = new Set<string>();
+/** Runs whose scheduler was asked to advance while it was already mid-pass. */
+const advanceAgain = new Set<string>();
 
 export function subscribeRun(runId: string, listener: Listener): () => void {
   const set = listeners.get(runId) ?? new Set<Listener>();
@@ -849,6 +851,32 @@ async function runCommandStep(
 
 // ── Scheduling ────────────────────────────────────────────────────────────────
 
+/**
+ * Claim a step for a new dispatch — or invalidate the dispatch running in it.
+ *
+ * A turn lives inside an `await` for many minutes, and Retry, Skip, Restart and
+ * Cancel all change the step underneath it. When the old turn finally lands, its
+ * outcome is about a dispatch nobody waits for any more; writing it anyway marked
+ * a retried step `done` and the engine walked straight past the retry — the step
+ * looked skipped. Everything that can race a live turn bumps this, and
+ * `settleStep` refuses to write when the number moved.
+ *
+ * `attempt` could not do this job: `restartRun` sets it back to 1, which is the
+ * same 1 that may still be in flight.
+ */
+function bumpGeneration(runId: string, stepKey: string): number {
+  const row = db
+    .select()
+    .from(schema.workflowRunSteps)
+    .where(
+      and(eq(schema.workflowRunSteps.runId, runId), eq(schema.workflowRunSteps.stepKey, stepKey)),
+    )
+    .get();
+  const next = (row?.generation ?? 0) + 1;
+  upsertRunStep(runId, stepKey, { generation: next });
+  return next;
+}
+
 function statusOf(run: WorkflowRun, key: string): WorkflowRunStepStatus {
   return run.runSteps.find((r) => r.stepKey === key)?.status ?? "pending";
 }
@@ -880,178 +908,200 @@ function isExpired(run: WorkflowRun): boolean {
 }
 
 /**
- * Advance the run until it finishes or needs the human. Safe to call twice: the
- * second call returns while the first is still working.
+ * Advance the run until it finishes or needs the human.
+ *
+ * Safe to call twice, and — this is the part that used to be missing — a call
+ * made while the loop is busy is not lost. The loop re-reads the run at the top
+ * of each iteration, but only once the `await` it is sitting in returns, and a
+ * turn sits there for minutes. So a retry pressed mid-turn used to call
+ * `advanceRun`, be told "already advancing", and do nothing at all. The request
+ * is remembered instead, and the loop runs one more pass for it.
  */
 export async function advanceRun(runId: string): Promise<WorkflowRun> {
-  if (advancing.has(runId)) return getRun(runId)!;
+  if (advancing.has(runId)) {
+    advanceAgain.add(runId);
+    return getRun(runId)!;
+  }
   advancing.add(runId);
   try {
     for (;;) {
-      const run = getRun(runId);
-      if (!run) throw badRequest("Run not found");
-      // Terminal-mode runs are driven by their claude PTY, never by the engine.
-      if (run.mode === "terminal") return run;
-      if (run.status === "cancelled" || run.status === "done" || run.status === "failed")
-        return run;
-
-      // An unattended run has nobody to notice it hanging, so it carries a clock.
-      if (isExpired(run)) {
-        for (const rs of run.runSteps) {
-          if (rs.status === "running") {
-            if (rs.sessionId && isRunning(rs.sessionId)) await interrupt(rs.sessionId);
-            upsertRunStep(runId, rs.stepKey, {
-              status: "interrupted",
-              note: "run out of time",
-              finishedAt: nowIso(),
-            });
-          }
-        }
-        setRunStatus(runId, "failed", run.currentStepKey);
-        notify("Workflow out of time", `${run.title} hit its budget and stopped`);
-        return getRun(runId)!;
-      }
-
-      // A step waiting on a person keeps the whole run waiting: a parallel branch
-      // may still be running, but nothing new is dispatched under an open question.
-      const parked = run.runSteps.find(
-        (r) => r.status === "awaiting_input" || r.status === "interrupted",
-      );
-      if (parked) {
-        setRunStatus(runId, "awaiting_input", parked.stepKey);
-        return getRun(runId)!;
-      }
-      if (run.questions.some((q) => q.answer === null)) {
-        setRunStatus(runId, "awaiting_input", run.currentStepKey);
-        return getRun(runId)!;
-      }
-
-      const ready = readySteps(run);
-      if (ready.length === 0) {
-        const stuck = run.steps.filter((s) => statusOf(run, s.key) === "pending");
-        if (stuck.length === 0) {
-          setRunStatus(runId, "done", null);
-          notify("Workflow finished", run.title);
-          db.insert(schema.workHistory)
-            .values({
-              id: newId(),
-              projectId: run.projectId,
-              kind: "workflow_finished",
-              refId: runId,
-              summary: `Workflow ${run.title} finished`,
-              createdAt: nowIso(),
-            })
-            .run();
-          return getRun(runId)!;
-        }
-        // Nothing can run and something is still pending: every remaining step is
-        // behind a dependency that failed. Say that, rather than sit there.
-        const blocked = stuck.map((s) => s.key).join(", ");
-        setRunStatus(runId, "failed", stuck[0]!.key);
-        emit(runId, { t: "error", message: `Blocked by a failed dependency: ${blocked}` });
-        notify("Workflow blocked", `${run.title}: ${blocked}`);
-        return getRun(runId)!;
-      }
-
-      // Conditions are evaluated before anything is dispatched, because a skip
-      // changes what else becomes ready.
-      let skipped = false;
-      for (const step of ready) {
-        let shouldRun: boolean;
-        try {
-          shouldRun = evaluateCondition(step.condition, conditionContext(run));
-        } catch (err) {
-          const message = err instanceof ConditionError ? err.message : String(err);
-          upsertRunStep(runId, step.key, {
-            status: "failed",
-            error: message,
-            finishedAt: nowIso(),
-          });
-          setRunStatus(runId, "failed", step.key);
-          emit(runId, { t: "error", message });
-          return getRun(runId)!;
-        }
-        if (!shouldRun) {
-          upsertRunStep(runId, step.key, {
-            status: "skipped",
-            note: `condition not met: ${step.condition}`,
-            finishedAt: nowIso(),
-          });
-          skipped = true;
-        }
-      }
-      if (skipped) continue;
-
-      // Steps that exist to make a human act. In an unattended run a `confirm`
-      // is the gate being removed — but `manual` still stops, because it is work
-      // only a person can do and walking past it would be a lie.
-      const human = ready.find((s) => s.type === "confirm" || s.type === "manual");
-      if (human) {
-        if (run.autoMode && human.type === "confirm") {
-          upsertRunStep(runId, human.key, {
-            status: "done",
-            note: "auto-approved (unattended run)",
-            startedAt: nowIso(),
-            finishedAt: nowIso(),
-          });
-          continue;
-        }
-        const stepRow = upsertRunStep(runId, human.key, {
-          status: "awaiting_input",
-          startedAt: nowIso(),
-        });
-        if (human.type === "confirm" && run.questions.length === 0) {
-          recordQuestions(runId, stepRow.id, [
-            {
-              key: `${human.key}-ok`,
-              question: human.instruction ?? "Reviewed and good to continue?",
-              kind: "bool",
-            },
-          ]);
-        }
-        setRunStatus(runId, "awaiting_input", human.key);
-        return getRun(runId)!;
-      }
-
-      // What can actually run now. Two steps never claim the same working tree:
-      // the repo lock would refuse the second one, and a refusal looks like a
-      // failed step rather than a scheduling decision.
-      const limit = Math.max(1, setting("workflows.maxParallel"));
-      const batch: WorkflowStep[] = [];
-      const claimed = new Set<string>();
-      for (const step of ready) {
-        if (batch.length >= limit) break;
-        const claim = claimOf(run, step);
-        if (claimed.has(claim)) continue;
-        claimed.add(claim);
-        batch.push(step);
-      }
-
-      setRunStatus(runId, "running", batch[0]!.key);
-      const outcomes = await Promise.all(
-        batch.map(async (step) => {
-          const rs = run.runSteps.find((r) => r.stepKey === step.key);
-          const attempt = rs?.attempt ?? 1;
-          const index = run.steps.findIndex((s) => s.key === step.key);
-          const result =
-            step.type === "agent"
-              ? await runAgentStep(run, step, index, attempt)
-              : await runCommandStep(run, step, attempt);
-          return { step, attempt, result };
-        }),
-      );
-
-      const after = getRun(runId)!;
-      if (after.status === "cancelled") return after;
-
-      let stop = false;
-      for (const { step, attempt, result } of outcomes) {
-        if (settleStep(after, step, attempt, result).stop) stop = true;
-      }
-      if (stop) return getRun(runId)!;
+      const settled = await advanceOnce(runId);
+      // Only a request that arrived *during* the pass counts; taking it here also
+      // clears it, so a quiet pass ends the loop.
+      if (!advanceAgain.delete(runId)) return settled;
     }
   } finally {
     advancing.delete(runId);
+    advanceAgain.delete(runId);
+  }
+}
+
+/** One pass of the scheduler: dispatch what is ready, stop when a person is needed. */
+async function advanceOnce(runId: string): Promise<WorkflowRun> {
+  for (;;) {
+    const run = getRun(runId);
+    if (!run) throw badRequest("Run not found");
+    // Terminal-mode runs are driven by their claude PTY, never by the engine.
+    if (run.mode === "terminal") return run;
+    if (run.status === "cancelled" || run.status === "done" || run.status === "failed") return run;
+
+    // An unattended run has nobody to notice it hanging, so it carries a clock.
+    if (isExpired(run)) {
+      for (const rs of run.runSteps) {
+        if (rs.status === "running") {
+          if (rs.sessionId && isRunning(rs.sessionId)) await interrupt(rs.sessionId);
+          upsertRunStep(runId, rs.stepKey, {
+            status: "interrupted",
+            note: "run out of time",
+            finishedAt: nowIso(),
+          });
+        }
+      }
+      setRunStatus(runId, "failed", run.currentStepKey);
+      notify("Workflow out of time", `${run.title} hit its budget and stopped`);
+      return getRun(runId)!;
+    }
+
+    // A step waiting on a person keeps the whole run waiting: a parallel branch
+    // may still be running, but nothing new is dispatched under an open question.
+    const parked = run.runSteps.find(
+      (r) => r.status === "awaiting_input" || r.status === "interrupted",
+    );
+    if (parked) {
+      setRunStatus(runId, "awaiting_input", parked.stepKey);
+      return getRun(runId)!;
+    }
+    if (run.questions.some((q) => q.answer === null)) {
+      setRunStatus(runId, "awaiting_input", run.currentStepKey);
+      return getRun(runId)!;
+    }
+
+    const ready = readySteps(run);
+    if (ready.length === 0) {
+      const stuck = run.steps.filter((s) => statusOf(run, s.key) === "pending");
+      if (stuck.length === 0) {
+        setRunStatus(runId, "done", null);
+        notify("Workflow finished", run.title);
+        db.insert(schema.workHistory)
+          .values({
+            id: newId(),
+            projectId: run.projectId,
+            kind: "workflow_finished",
+            refId: runId,
+            summary: `Workflow ${run.title} finished`,
+            createdAt: nowIso(),
+          })
+          .run();
+        return getRun(runId)!;
+      }
+      // Nothing can run and something is still pending: every remaining step is
+      // behind a dependency that failed. Say that, rather than sit there.
+      const blocked = stuck.map((s) => s.key).join(", ");
+      setRunStatus(runId, "failed", stuck[0]!.key);
+      emit(runId, { t: "error", message: `Blocked by a failed dependency: ${blocked}` });
+      notify("Workflow blocked", `${run.title}: ${blocked}`);
+      return getRun(runId)!;
+    }
+
+    // Conditions are evaluated before anything is dispatched, because a skip
+    // changes what else becomes ready.
+    let skipped = false;
+    for (const step of ready) {
+      let shouldRun: boolean;
+      try {
+        shouldRun = evaluateCondition(step.condition, conditionContext(run));
+      } catch (err) {
+        const message = err instanceof ConditionError ? err.message : String(err);
+        upsertRunStep(runId, step.key, {
+          status: "failed",
+          error: message,
+          finishedAt: nowIso(),
+        });
+        setRunStatus(runId, "failed", step.key);
+        emit(runId, { t: "error", message });
+        return getRun(runId)!;
+      }
+      if (!shouldRun) {
+        upsertRunStep(runId, step.key, {
+          status: "skipped",
+          note: `condition not met: ${step.condition}`,
+          finishedAt: nowIso(),
+        });
+        skipped = true;
+      }
+    }
+    if (skipped) continue;
+
+    // Steps that exist to make a human act. In an unattended run a `confirm`
+    // is the gate being removed — but `manual` still stops, because it is work
+    // only a person can do and walking past it would be a lie.
+    const human = ready.find((s) => s.type === "confirm" || s.type === "manual");
+    if (human) {
+      if (run.autoMode && human.type === "confirm") {
+        upsertRunStep(runId, human.key, {
+          status: "done",
+          note: "auto-approved (unattended run)",
+          startedAt: nowIso(),
+          finishedAt: nowIso(),
+        });
+        continue;
+      }
+      const stepRow = upsertRunStep(runId, human.key, {
+        status: "awaiting_input",
+        startedAt: nowIso(),
+      });
+      if (human.type === "confirm" && run.questions.length === 0) {
+        recordQuestions(runId, stepRow.id, [
+          {
+            key: `${human.key}-ok`,
+            question: human.instruction ?? "Reviewed and good to continue?",
+            kind: "bool",
+          },
+        ]);
+      }
+      setRunStatus(runId, "awaiting_input", human.key);
+      return getRun(runId)!;
+    }
+
+    // What can actually run now. Two steps never claim the same working tree:
+    // the repo lock would refuse the second one, and a refusal looks like a
+    // failed step rather than a scheduling decision.
+    const limit = Math.max(1, setting("workflows.maxParallel"));
+    const batch: WorkflowStep[] = [];
+    const claimed = new Set<string>();
+    for (const step of ready) {
+      if (batch.length >= limit) break;
+      const claim = claimOf(run, step);
+      if (claimed.has(claim)) continue;
+      claimed.add(claim);
+      batch.push(step);
+    }
+
+    setRunStatus(runId, "running", batch[0]!.key);
+    // Claimed before the turn starts, so anything that touches the step while it
+    // runs moves the number and this outcome is refused on the way out.
+    const claims = new Map(batch.map((step) => [step.key, bumpGeneration(runId, step.key)]));
+    const outcomes = await Promise.all(
+      batch.map(async (step) => {
+        const rs = run.runSteps.find((r) => r.stepKey === step.key);
+        const attempt = rs?.attempt ?? 1;
+        const index = run.steps.findIndex((s) => s.key === step.key);
+        const result =
+          step.type === "agent"
+            ? await runAgentStep(run, step, index, attempt)
+            : await runCommandStep(run, step, attempt);
+        return { step, attempt, generation: claims.get(step.key)!, result };
+      }),
+    );
+
+    const after = getRun(runId)!;
+    if (after.status === "cancelled") return after;
+
+    let stop = false;
+    for (const { step, attempt, generation, result } of outcomes) {
+      if (settleStep(after, step, attempt, generation, result).stop) stop = true;
+    }
+    if (stop) return getRun(runId)!;
   }
 }
 
@@ -1072,6 +1122,7 @@ function settleStep(
   run: WorkflowRun,
   step: WorkflowStep,
   attempt: number,
+  generation: number,
   result: { ok: boolean; error?: string; tail?: string; waiting?: boolean },
 ): Settled {
   const runId = run.id;
@@ -1082,6 +1133,18 @@ function settleStep(
       and(eq(schema.workflowRunSteps.runId, runId), eq(schema.workflowRunSteps.stepKey, step.key)),
     )
     .get()!;
+
+  // Somebody retried, skipped, restarted or cancelled this step while its turn
+  // was running. The turn is describing a dispatch that no longer exists, and
+  // booking it is how a retried step got marked `done` and the run walked past
+  // it. Drop the outcome and let the scheduler look at the step as it is now.
+  if (stepRow.generation !== generation) {
+    emit(runId, {
+      t: "error",
+      message: `Bỏ kết quả cũ của step "${step.title}" — step đã được retry/skip/restart trong lúc nó đang chạy.`,
+    });
+    return { stop: false };
+  }
 
   // The agent may have parked on a workflow_ask during its turn.
   const openQuestion = run.questions.some((q) => q.answer === null && q.runStepId === stepRow.id);
@@ -1297,6 +1360,10 @@ export function retryStep(runId: string, stepKey: string): WorkflowRun {
   // A restart-killed session can't be resumed, so the retry starts a fresh one.
   const startFresh = rs.status === "interrupted";
 
+  // The step may still have a turn in flight — retrying is the commonest way to
+  // say "that one is going nowhere". Moving the generation means its outcome is
+  // refused when it lands, instead of overwriting this retry.
+  bumpGeneration(runId, stepKey);
   upsertRunStep(runId, stepKey, {
     status: "pending",
     attempt: rs.attempt + 1,
@@ -1310,6 +1377,7 @@ export function retryStep(runId: string, stepKey: string): WorkflowRun {
   for (const later of dependentsOf(run, stepKey)) {
     const laterRs = run.runSteps.find((s) => s.stepKey === later);
     if (laterRs && laterRs.status !== "pending") {
+      bumpGeneration(runId, later);
       upsertRunStep(runId, later, { status: "pending", finishedAt: null, error: null });
     }
   }
@@ -1365,6 +1433,9 @@ export function restartRun(runId: string, mode: "resume" | "fresh" = "resume"): 
       pendingAsks.delete(rs.id);
     }
 
+    // `attempt` goes back to 1 here, which is exactly why it cannot be the guard:
+    // a turn dispatched as attempt 1 may still be running.
+    bumpGeneration(runId, step.key);
     upsertRunStep(runId, step.key, {
       status: "pending",
       attempt: 1,
@@ -1445,9 +1516,19 @@ export function continueStep(runId: string, stepKey: string): WorkflowRun {
   return getRun(runId)!;
 }
 
-export function skipStep(runId: string, stepKey: string): WorkflowRun {
+export async function skipStep(runId: string, stepKey: string): Promise<WorkflowRun> {
   const run = getRun(runId);
   if (!run) throw badRequest("Run not found");
+  const rs = run.runSteps.find((s) => s.stepKey === stepKey);
+  // A running step is a live agent with a repo open. Relabelling the row without
+  // stopping it left the turn editing files for minutes after the person had
+  // said "skip this" — the generation guard throws its outcome away, but the work
+  // it did in between is already on disk. Stop it the way `cancelRun` does.
+  if (rs?.status === "running" && rs.sessionId && isRunning(rs.sessionId)) {
+    await interrupt(rs.sessionId);
+  }
+  if (rs) pendingAsks.delete(rs.id);
+  bumpGeneration(runId, stepKey);
   upsertRunStep(runId, stepKey, {
     status: "skipped",
     note: "skipped by the user",
@@ -1464,6 +1545,7 @@ export async function cancelRun(runId: string): Promise<WorkflowRun> {
     if (rs.status === "running" || rs.status === "awaiting_input") {
       if (rs.sessionId && isRunning(rs.sessionId)) await interrupt(rs.sessionId);
       pendingAsks.delete(rs.id);
+      bumpGeneration(runId, rs.stepKey);
       upsertRunStep(runId, rs.stepKey, {
         status: "interrupted",
         note: "run cancelled",
@@ -1516,6 +1598,11 @@ export function reconcileRunsOnBoot(): number {
       .where(eq(schema.workflowRunSteps.runId, run.id))
       .all();
 
+    // Per run, deliberately. This used to be the running total across every run,
+    // so one run with a mid-flight step dragged every run after it in the list
+    // into `awaiting_input` — runs that had nothing wrong with them, parked by a
+    // restart they had no part in.
+    let interruptedHere = 0;
     for (const step of steps) {
       // A step with a session was executing (or parked inside a tool call).
       // Gates without a session — confirm/manual — are still legitimately waiting.
@@ -1530,10 +1617,11 @@ export function reconcileRunsOnBoot(): number {
         })
         .where(eq(schema.workflowRunSteps.id, step.id))
         .run();
+      interruptedHere += 1;
       touched += 1;
     }
 
-    if (touched > 0) {
+    if (interruptedHere > 0) {
       db.update(schema.workflowRuns)
         .set({ status: "awaiting_input" })
         .where(eq(schema.workflowRuns.id, run.id))

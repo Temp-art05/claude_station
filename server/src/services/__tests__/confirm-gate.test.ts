@@ -41,7 +41,7 @@ describe("the confirm gate", () => {
 describe("continueStep", () => {
   const FN = RUNNER.slice(
     RUNNER.indexOf("export function continueStep"),
-    RUNNER.indexOf("export function skipStep"),
+    RUNNER.indexOf("export async function skipStep"),
   );
 
   it("refuses to walk past a question the agent actually asked", () => {

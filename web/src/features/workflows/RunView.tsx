@@ -406,7 +406,16 @@ export function RunView({
                       size="icon"
                       variant="ghost"
                       title="Skip this step"
-                      onClick={() => skip.mutate(step.key)}
+                      onClick={() =>
+                        void confirm({
+                          title: `Bỏ qua step "${step.title}"?`,
+                          body:
+                            status === "running"
+                              ? "Step đang chạy — turn của nó sẽ bị dừng giữa chừng, và những gì nó đã sửa vẫn nằm trên đĩa. Các step sau sẽ chạy như thể step này đã xong."
+                              : "Các step sau sẽ chạy như thể step này đã xong.",
+                          confirmLabel: "Bỏ qua step",
+                        }).then((ok) => ok && skip.mutate(step.key))
+                      }
                       aria-label="Skip step"
                     >
                       <SkipForward size={16} />
