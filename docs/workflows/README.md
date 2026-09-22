@@ -118,6 +118,30 @@ Ngôn ngữ điều kiện vẫn cố tình nhỏ — bốn dạng và đúng m�
 `||` có vì nhu cầu thật: step Jira cần **hoặc** project **hoặc** ticket cha. Không có `&&` — cần
 "và" thì tách thành hai step, hoặc để chính agent quyết.
 
+## Retry / Skip / Restart trong lúc step đang chạy
+
+Một turn sống trong `await` hàng chục phút. Retry, Skip, Restart, Cancel đều viết lại hàng của step
+trong khoảng đó, nên engine phải biết **kết quả trả về là của lần chạy nào**.
+
+Mỗi lần dispatch nhận một số `generation` (cột `workflow_run_steps.generation`, migration `0024`).
+`settleStep` chỉ ghi kết quả khi số đó còn khớp; lệch thì kết quả bị **loại**, và run view hiện
+"Bỏ kết quả cũ của step ...". `attempt` không làm được việc này: `restartRun` đặt nó về 1, trùng
+đúng cái attempt 1 có thể đang chạy dở.
+
+Không có guard này thì: bấm Retry → turn cũ về đích → step bị đánh `done` → engine thấy dependency
+đã settle và chạy tiếp các step sau, còn lần retry thì không bao giờ chạy. Nhìn từ ngoài đúng như
+"workflow tự nhảy cóc qua step".
+
+Kèm theo đó:
+
+- **Skip một step đang chạy sẽ interrupt turn của nó**, giống `cancelRun`, chứ không chỉ đổi nhãn.
+  Đổi nhãn suông để agent tiếp tục sửa repo thêm vài phút sau khi bạn đã bảo bỏ qua. Nút Skip vì thế
+  có hộp xác nhận.
+- **Yêu cầu advance gửi tới lúc scheduler đang bận không bị mất.** Trước đây `advanceRun` trả về ngay
+  khi thấy run đang advance, nên mọi lần Retry/Skip/Continue bấm giữa turn đều rơi vào hư không.
+- **Khởi động lại server chỉ park đúng run có step đang chạy.** `reconcileRunsOnBoot` từng dùng biến
+  đếm cộng dồn làm cờ, nên một run dở dang kéo mọi run đứng sau nó sang `awaiting_input`.
+
 ## Input và `@`
 
 Workflow khai `inputs` thì màn Start hiện đúng ô đó, mọi step đọc bằng `{{key}}`. Hai kiểu được

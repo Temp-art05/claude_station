@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_run_steps` ADD `generation` integer DEFAULT 0 NOT NULL;
