@@ -684,9 +684,10 @@ export const workflowStepSchema = z.object({
   condition: z.string().nullable(),
   /** Keys this step waits for. Empty = wait for the step before it, as before. */
   dependsOn: z.array(z.string()).default([]),
-  /** gate only: which step to go back to when the check fails. */
+  /** gate and agent: which step to go back to when the check fails (an agent
+   * step fails by reporting it through workflow_step_result). */
   onFail: z.string().nullable().default(null),
-  /** gate only: how many times that loop may repeat before the run gives up. */
+  /** gate and agent: how many times that loop may repeat before the run gives up. */
   maxLoops: z.number().int().min(0).max(3).default(0),
   /** Project path label to run in — lets two branches work on two repos at once. */
   cwdLabel: z.string().nullable().default(null),
@@ -776,9 +777,9 @@ export const workflowStepInputSchema = z.object({
    * running exactly as they did.
    */
   dependsOn: z.array(z.string().min(1).max(40)).max(10).default([]),
-  /** gate only: the step to go back to when the check fails (default: itself). */
+  /** gate and agent: the step to go back to when the check fails (gate default: itself). */
   onFail: z.string().nullable().default(null),
-  /** gate only: cap on that loop. 3 is the ceiling, per the team's own rule. */
+  /** gate and agent: cap on that loop. 3 is the ceiling, per the team's own rule. */
   maxLoops: z.number().int().min(0).max(3).default(0),
   /** Run this step in the project path with this label, instead of the run's cwd. */
   cwdLabel: z.string().max(60).nullable().default(null),

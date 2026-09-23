@@ -24,6 +24,7 @@ import { normalizeMentions, resolveMentions } from "./mentions";
 import { evaluateCondition, ConditionError } from "./workflow-condition";
 import { getWorkflow } from "./workflows";
 import { notify } from "./notify";
+import { applyReport, type StepReport } from "../lib/step-report";
 
 export type RunEvent =
   | { t: "status"; status: WorkflowRun["status"]; currentStepKey: string | null }
@@ -37,6 +38,12 @@ type Listener = (event: RunEvent) => void;
 const listeners = new Map<string, Set<Listener>>();
 /** Ask calls parked mid-turn, keyed by run step. Resolved by the answer route. */
 const pendingAsks = new Map<string, (answers: Record<string, string>) => void>();
+/**
+ * What each step's agent said about its own outcome, by run-step id. In memory
+ * like `pendingAsks`: a report only means something to the turn being awaited,
+ * and that await does not survive a restart either.
+ */
+const stepReports = new Map<string, StepReport>();
 /** Runs currently being advanced, so a double POST can't run a step twice. */
 const advancing = new Set<string>();
 /** Runs whose scheduler was asked to advance while it was already mid-pass. */
@@ -581,7 +588,44 @@ async function stepContext(run: WorkflowRun, step: WorkflowStep, index: number):
       ...problems.map((p) => `- ${p}`),
     );
   }
+
+  // Ending the turn is all the engine can see, so it reads as "done". Both ways a
+  // step used to be booked done when it was not are spelled out here.
+  lines.push(
+    "",
+    "## How this step ends",
+    "- Do not end your turn while background agents you started are still running — wait for " +
+      "them, merge their work, then finish.",
+    "- If the step is not actually finished, or what you checked is wrong or incomplete, call " +
+      "`workflow_step_result` with status `failed` and the reason before ending the turn. Ending " +
+      "without it means the step is done.",
+    ...(step.onFail
+      ? [
+          `- Reporting \`failed\` sends the run back to step \`${step.onFail}\` with your reason, ` +
+            "and then through this step again.",
+        ]
+      : []),
+  );
   return lines.join("\n");
+}
+
+/**
+ * The agent's verdict on its own step, from `workflow_step_result`. Tagged with
+ * the dispatch it was made in, so a report from a turn that has since been
+ * retried is not read as this one's.
+ */
+export function reportStepResult(
+  runStepId: string,
+  status: StepReport["status"],
+  reason: string,
+): void {
+  const row = db
+    .select()
+    .from(schema.workflowRunSteps)
+    .where(eq(schema.workflowRunSteps.id, runStepId))
+    .get();
+  if (!row) return;
+  stepReports.set(runStepId, { generation: row.generation, status, reason: reason.slice(0, 2000) });
 }
 
 /** Parked by workflow_ask while the user answers. */
@@ -776,10 +820,12 @@ async function runAgentStep(
     note: null,
   });
 
+  const context = await stepContext(run, step, index);
+  const again = existing?.error ? `\n\n[Why this step is running again: ${existing.error}]` : "";
   const prompt =
     attempt > 1
-      ? `${await stepContext(run, step, index)}\n\n[Retry ${attempt}: the previous attempt failed. Fix the cause and finish the step.]`
-      : await stepContext(run, step, index);
+      ? `${context}${again}\n\n[Retry ${attempt}: the previous attempt failed. Fix the cause and finish the step.]`
+      : `${context}${again}`;
 
   const row = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, run.id)).get();
   return runTurnInTerminal({
@@ -1123,7 +1169,7 @@ function settleStep(
   step: WorkflowStep,
   attempt: number,
   generation: number,
-  result: { ok: boolean; error?: string; tail?: string; waiting?: boolean },
+  turn: { ok: boolean; error?: string; tail?: string; waiting?: boolean },
 ): Settled {
   const runId = run.id;
   const stepRow = db
@@ -1145,6 +1191,12 @@ function settleStep(
     });
     return { stop: false };
   }
+
+  // The screen says the turn ended; the agent may have said the step did not
+  // get done. Its word is the one that counts.
+  const report = stepReports.get(stepRow.id);
+  stepReports.delete(stepRow.id);
+  const result = applyReport(turn, report, generation);
 
   // The agent may have parked on a workflow_ask during its turn.
   const openQuestion = run.questions.some((q) => q.answer === null && q.runStepId === stepRow.id);
@@ -1168,7 +1220,12 @@ function settleStep(
     return { stop: true };
   }
 
-  if (step.type === "gate") return { stop: settleGate(run, step, stepRow, result) };
+  // A check that found the work unfinished sends the run back to redo it, under
+  // the same brakes as a gate. A step that merely broke (timeout, dead terminal)
+  // does not: that is a retry of this step, not a verdict on another one.
+  if (step.type === "gate" || (result.reported && step.onFail)) {
+    return { stop: settleGate(run, step, stepRow, result) };
+  }
 
   if (result.ok) {
     upsertRunStep(runId, step.key, { status: "done", finishedAt: nowIso(), error: null });
@@ -1273,7 +1330,16 @@ function settleGate(
   const chain = new Set([target, ...dependentsOf(run, target)]);
   for (const key of chain) {
     if (key === step.key) continue;
-    upsertRunStep(runId, key, { status: "pending", finishedAt: null, error: null });
+    // A sibling in the same batch may still be settling; its outcome is about
+    // work this loop is throwing away.
+    bumpGeneration(runId, key);
+    upsertRunStep(runId, key, {
+      status: "pending",
+      finishedAt: null,
+      // The step being sent back reads this in its next prompt: redoing work
+      // without being told what was wrong with it repeats the same work.
+      error: key === target ? `"${step.title}" gửi về: ${result.error ?? "check failed"}` : null,
+    });
   }
   upsertRunStep(runId, step.key, {
     status: "pending",

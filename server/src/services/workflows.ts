@@ -132,8 +132,10 @@ function assertUniqueKeys(input: WorkflowInput): void {
     if ((step.type === "command" || step.type === "gate") && !step.commandName) {
       throw badRequest(`Step "${step.key}" is a ${step.type} step but names no command`);
     }
-    if (step.type !== "gate" && step.onFail) {
-      throw badRequest(`Step "${step.key}" sets onFail, which only a gate step has`);
+    // A gate fails on its command's exit code, an agent step when it reports
+    // failed. The other kinds have no verdict to send anything back on.
+    if (step.type !== "gate" && step.type !== "agent" && step.onFail) {
+      throw badRequest(`Step "${step.key}" sets onFail, which only a gate or agent step has`);
     }
   }
   assertGraph(input);

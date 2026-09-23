@@ -39,6 +39,28 @@ const TRUST_DIALOG =
 const BUSY = /esc to interrupt|\(interrupt\)|Thinking…|Running…/i;
 
 /**
+ * The main agent has handed work to background agents and is sitting at an idle
+ * composer until they report back. Nothing on screen says "busy", and the
+ * composer is ready — exactly what a finished turn looks like. Reading it as one
+ * marked an impl step done after its foundation layer, with four UI slices still
+ * being written in the background, and every step after it checked a half-built
+ * branch.
+ *
+ * Only the status line counts, and only while it is the last thing the main
+ * agent said: it stays in the scrollback after the agents finish and the agent
+ * writes on. The footer's "N agents" is no use — a freshly opened CLI shows one.
+ */
+const BACKGROUND_WAIT = /Waiting for \d+ background agents? to finish/gi;
+/**
+ * A line the main agent wrote — the end of any wait above it. Column 0 only: the
+ * agents panel under the composer lists "  ⏺ main" indented, and that is a row in
+ * a list, not something said after the wait.
+ */
+const AGENT_LINE = /^[⏺●] (.*)$/gm;
+/** Written by the CLI when one background agent is done, not by the main agent. */
+const AGENT_FINISHED = /^Agent ".*" (finished|failed|stopped)/;
+
+/**
  * The CLI is asking the person to approve something — a command it may not run
  * on its own. Left undetected this looks exactly like a finished turn: output
  * stops, nothing more is written to the transcript, and a step waits or, worse,
@@ -94,6 +116,16 @@ export function looksLikeDialog(screen: string): boolean {
 
 export function isBusy(screen: string): boolean {
   return BUSY.test(screen);
+}
+
+export function hasBackgroundAgents(screen: string): boolean {
+  const waits = [...screen.matchAll(BACKGROUND_WAIT)];
+  if (waits.length === 0) return false;
+  const lastWait = waits[waits.length - 1]!.index!;
+  for (const line of screen.matchAll(AGENT_LINE)) {
+    if (line.index! > lastWait && !AGENT_FINISHED.test(line[1]!)) return false;
+  }
+  return true;
 }
 
 export function needsApproval(screen: string): boolean {
