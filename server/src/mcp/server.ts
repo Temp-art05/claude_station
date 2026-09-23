@@ -41,6 +41,7 @@ import {
   markAwaitingInput,
   recordQuestions,
   registerAsk,
+  reportStepResult,
   setStepNote,
 } from "../services/workflow-runner";
 
@@ -85,7 +86,8 @@ export function stationMcpServer(
       "over raw shell for builds — it streams to the user's UI and keeps a log." +
       (workflowRunStepId
         ? " You are running one step of a workflow: ask the user through workflow_ask instead of " +
-          "guessing, and save anything the next step needs with workflow_emit_artifact."
+          "guessing, save anything the next step needs with workflow_emit_artifact, and call " +
+          "workflow_step_result with failed when the step did not really get done."
         : ""),
     tools: [
       // ── Jira ──────────────────────────────────────────────────────────────
@@ -579,6 +581,29 @@ function buildWorkflowTools(projectId: string, runStepId: string) {
           path: assertPathAllowed(target, projectId),
         });
         return text(`Saved artifact "${artifact.title}" → ${artifact.path}`);
+      },
+    ),
+    tool(
+      "workflow_step_result",
+      "Say how this step actually went. Ending the turn without calling this means the step is " +
+        "done. Call it with failed when the work is unfinished, or when what you checked is wrong " +
+        "or incomplete — if the step declares where to send failures, the run goes back there " +
+        "with your reason. The last call in a turn wins.",
+      {
+        status: z.enum(["done", "failed"]),
+        reason: z
+          .string()
+          .min(1)
+          .max(2000)
+          .describe("what is missing or wrong — the step sent back reads this"),
+      },
+      async (args) => {
+        reportStepResult(runStepId, args.status, args.reason);
+        return text(
+          args.status === "failed"
+            ? "Recorded as failed. End your turn now; the run acts on it when the turn closes."
+            : "Recorded as done.",
+        );
       },
     ),
     tool(

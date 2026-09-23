@@ -5,7 +5,13 @@ import { eq } from "drizzle-orm";
 import type { WorkflowRun, WorkflowStep } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { TOKEN } from "../lib/auth";
-import { isBusy, isComposerReady, isTrustDialog, waitingForPerson } from "../lib/claude-screen";
+import {
+  hasBackgroundAgents,
+  isBusy,
+  isComposerReady,
+  isTrustDialog,
+  waitingForPerson,
+} from "../lib/claude-screen";
 import { env } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
@@ -297,7 +303,9 @@ export async function runTurnInTerminal(input: {
       };
     }
 
-    if (isBusy(screen)) {
+    // Waiting on background agents is still the turn: the main agent wakes when
+    // they report and carries on, and the step is not done until it has.
+    if (isBusy(screen) || hasBackgroundAgents(screen)) {
       sawWork = true;
       continue;
     }

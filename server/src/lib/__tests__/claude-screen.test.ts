@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasBackgroundAgents,
   isBusy,
   isComposerReady,
   isTrustDialog,
@@ -193,5 +194,72 @@ describe("a terminal that is not asking anything", () => {
   it("is reported as ready to be typed at", () => {
     expect(isComposerReady(FRESH_START_PANE)).toBe(true);
     expect(isBusy(FRESH_START_PANE)).toBe(false);
+  });
+});
+
+/**
+ * An impl step's terminal, captured while it was waiting on the UI slices it had
+ * fanned out. Composer ready, nothing "busy" — and the engine called the step
+ * done here, ten minutes before the code it was supposed to have written existed.
+ */
+const BACKGROUND_PANE = `
+⏺ Agent "v1.3.0 Home slice F31/F32/F38" finished · 10m 35s
+
+⏺ Lát cắt Home đã merge. Hai lát cắt này còn đang chạy.
+
+✻ Waiting for 2 background agents to finish
+
+────────────────────────────────────────
+❯ 
+────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 monitor · ← 2 agents · ↓ to manage
+
+  ⏺ main
+  ◯ fork  Fixing R8 missing class in proguard-rules.pro        15m 5s · ↓ 428.1k tokens
+  ◯ fork  Fixing launch scope in OnboardingFlowUseCaseTest     14m 49s · ↓ 495.3k tokens
+`;
+
+describe("hasBackgroundAgents", () => {
+  it("sees the wait that looked like a finished turn", () => {
+    expect(isBusy(BACKGROUND_PANE)).toBe(false);
+    expect(isComposerReady(BACKGROUND_PANE)).toBe(true);
+    expect(hasBackgroundAgents(BACKGROUND_PANE)).toBe(true);
+  });
+
+  it("still waits in the moment between an agent finishing and the main agent waking", () => {
+    const pane = `
+✻ Waiting for 1 background agent to finish
+
+⏺ Agent "v1.3.0 App slice" finished · 12m 2s
+
+❯ 
+  ⏵⏵ bypass permissions on
+`;
+    expect(hasBackgroundAgents(pane)).toBe(true);
+  });
+
+  it("lets go once the main agent has written on after the wait", () => {
+    const pane = `
+✻ Waiting for 2 background agents to finish
+
+⏺ Agent "v1.3.0 App slice" finished · 12m 2s
+
+⏺ Agent "v1.3.0 Onboarding slice" finished · 13m 40s
+
+⏺ Đã merge cả 4 lát cắt, build xanh.
+
+❯ 
+  ⏵⏵ bypass permissions on
+`;
+    expect(hasBackgroundAgents(pane)).toBe(false);
+  });
+
+  it("reads the ● glyph some terminals draw instead of ⏺", () => {
+    const pane = `✻ Waiting for 1 background agent to finish\n\n● Xong.\n\n❯ \n  ? for shortcuts\n`;
+    expect(hasBackgroundAgents(pane)).toBe(false);
+  });
+
+  it("does not take the footer's agent count for running work", () => {
+    expect(hasBackgroundAgents(READY_PANE)).toBe(false);
   });
 });
