@@ -39,6 +39,53 @@ const TYPE_HINT: Record<WorkflowStepType, string> = {
   gate: "Runs a command and lets the exit code decide: pass, or go back and fix it.",
 };
 
+/**
+ * Where a failing step sends the run back to. A gate fails on its command's exit
+ * code; an agent step fails when it says so through `workflow_step_result`.
+ */
+function LoopBackFields({
+  step,
+  others,
+  onChange,
+  hint,
+}: {
+  step: WorkflowStepInput;
+  others: string[];
+  onChange: (patch: Partial<WorkflowStepInput>) => void;
+  hint?: string;
+}) {
+  return (
+    <>
+      <div>
+        <Label>On fail, go back to</Label>
+        <Select
+          className="w-full"
+          value={step.onFail ?? ""}
+          onChange={(v) => onChange({ onFail: v || null })}
+          options={[
+            { value: "", label: "nothing — just fail" },
+            ...others.map((key) => ({ value: key, label: key })),
+          ]}
+        />
+        {hint && <p className="mt-1 m3-label-sm text-ink-faint">{hint}</p>}
+      </div>
+      <div>
+        <Label>Max loops</Label>
+        <Input
+          type="number"
+          value={step.maxLoops}
+          onChange={(e) =>
+            onChange({ maxLoops: Math.min(3, Math.max(0, Number(e.target.value) || 0)) })
+          }
+        />
+        <p className="mt-1 m3-label-sm text-ink-faint">
+          3 is the ceiling, and two identical rounds stop it sooner.
+        </p>
+      </div>
+    </>
+  );
+}
+
 function blankStep(index: number): WorkflowStepInput {
   return {
     key: `step-${index + 1}`,
@@ -415,6 +462,17 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                       </div>
                     )}
 
+                    {step.type === "agent" && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <LoopBackFields
+                          step={step}
+                          others={draft.steps.filter((s) => s.key !== step.key).map((s) => s.key)}
+                          onChange={(patch) => patchStep(i, patch)}
+                          hint="Used when this step reports failed through workflow_step_result — a check that finds the work unfinished sends the run back to redo it."
+                        />
+                      </div>
+                    )}
+
                     {(step.type === "command" || step.type === "gate") && (
                       <div className="grid grid-cols-3 gap-2">
                         <div>
@@ -430,37 +488,11 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                           </p>
                         </div>
                         {step.type === "gate" && (
-                          <>
-                            <div>
-                              <Label>On fail, go back to</Label>
-                              <Select
-                                className="w-full"
-                                value={step.onFail ?? ""}
-                                onChange={(v) => patchStep(i, { onFail: v || null })}
-                                options={[
-                                  { value: "", label: "nothing — just fail" },
-                                  ...draft.steps
-                                    .filter((s) => s.key !== step.key)
-                                    .map((s) => ({ value: s.key, label: s.key })),
-                                ]}
-                              />
-                            </div>
-                            <div>
-                              <Label>Max loops</Label>
-                              <Input
-                                type="number"
-                                value={step.maxLoops}
-                                onChange={(e) =>
-                                  patchStep(i, {
-                                    maxLoops: Math.min(3, Math.max(0, Number(e.target.value) || 0)),
-                                  })
-                                }
-                              />
-                              <p className="mt-1 m3-label-sm text-ink-faint">
-                                3 is the ceiling, and two identical rounds stop it sooner.
-                              </p>
-                            </div>
-                          </>
+                          <LoopBackFields
+                            step={step}
+                            others={draft.steps.filter((s) => s.key !== step.key).map((s) => s.key)}
+                            onChange={(patch) => patchStep(i, patch)}
+                          />
                         )}
                       </div>
                     )}

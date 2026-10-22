@@ -142,6 +142,38 @@ Kèm theo đó:
 - **Khởi động lại server chỉ park đúng run có step đang chạy.** `reconcileRunsOnBoot` từng dùng biến
   đếm cộng dồn làm cờ, nên một run dở dang kéo mọi run đứng sau nó sang `awaiting_input`.
 
+## Step tự báo kết quả, và đẩy run về
+
+Engine chỉ nhìn thấy **turn kết thúc**, không biết việc đã xong hay chưa. Hai cách một step từng bị
+đánh `done` khi chưa xong, và cách chặn từng cái:
+
+- **Agent chạy nền.** Agent chính giao việc cho subagent chạy nền rồi ngồi chờ: ô nhập rảnh, không
+  có chữ "busy" nào — trông y như đã xong. Giờ dòng `Waiting for N background agents to finish` được
+  tính là còn bận, chừng nào nó còn là dòng cuối agent chính viết (`hasBackgroundAgents` trong
+  `server/src/lib/claude-screen.ts`). Footer `← N agents` thì **không** tính: màn vừa mở của CLI
+  cũng hiện nó. Shell chạy nền (emulator, dev server) cũng không tính — chúng không bao giờ tự tắt.
+- **Step kiểm thấy sai nhưng chỉ ghi được note.** Giờ agent gọi `workflow_step_result` với
+  `failed` + lý do. Không gọi thì hết turn vẫn là `done`, như trước.
+
+`onFail` giờ khai được cho step **agent**, không chỉ `gate`:
+
+```yaml
+- key: parity-check
+  type: agent
+  onFail: impl
+```
+
+Step đó báo `failed` → `impl` và mọi step sau nó về `pending`, `impl` chạy lại **trong session cũ**
+và prompt kèm `Why this step is running again: "<step>" gửi về: <lý do>`. Vòng lặp dùng đúng phanh
+của gate: tối đa `maxLoops` (mặc định 3) vòng, và dừng nếu hai vòng liền ra cùng một lý do.
+
+Chỉ **lời báo của agent** mới đẩy run về. Turn hỏng (hết giờ, terminal chết) vẫn đi đường retry
+bình thường của chính step đó: đó là lỗi chạy step, không phải kết luận về step khác. Step agent
+không khai `onFail` mà báo `failed` thì đi đường fail thường (`maxRetries`, rồi dừng run).
+
+Báo cáo giữ trong bộ nhớ, gắn với `generation` của lần chạy: lời báo của một turn đã bị
+retry/skip thì không được đọc như của turn mới.
+
 ## Input và `@`
 
 Workflow khai `inputs` thì màn Start hiện đúng ô đó, mọi step đọc bằng `{{key}}`. Hai kiểu được

@@ -82,7 +82,7 @@ export function graphProblem(
       if (!keys.has(dep)) return `Step "${step.key}" depends on unknown step "${dep}"`;
     }
     if (step.onFail && !keys.has(step.onFail)) {
-      return `Gate "${step.key}" falls back to unknown step "${step.onFail}"`;
+      return `Step "${step.key}" falls back to unknown step "${step.onFail}"`;
     }
   }
 
