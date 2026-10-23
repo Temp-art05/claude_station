@@ -16,7 +16,7 @@ import { env } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
 import { createTerminal, reviveTerminal } from "./terminals";
-import { ensureUsableSize, recentOutput, write as ptyWrite, sessionAlive } from "./pty-manager";
+import { ensureUsableSize, recentOutput, write as ptyWrite, terminalAlive } from "./pty-manager";
 
 /**
  * Running a workflow step inside a real `claude` terminal.
@@ -153,7 +153,7 @@ export function terminalForStep(
     // that is true while this process has no PTY for it — nothing to read, nothing
     // to type into — so the step would wait out its minute on an empty screen.
     // Reattach first, and only reuse the terminal if that worked.
-    if (row?.claudeSessionId && sessionAlive(row.id) && reviveTerminal(row.id)) {
+    if (row?.claudeSessionId && terminalAlive(row.id) && reviveTerminal(row.id)) {
       return { terminalId: row.id, claudeSessionId: row.claudeSessionId };
     }
   }
@@ -183,7 +183,7 @@ export function terminalForStep(
 async function waitForComposer(terminalId: string): Promise<TurnOutcome> {
   const until = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
-    if (!sessionAlive(terminalId)) {
+    if (!terminalAlive(terminalId)) {
       return { ok: false, error: "The step's terminal exited before it was ready" };
     }
     // The visible screen is enough, and this runs twice a second: asking tmux for
@@ -284,7 +284,7 @@ export async function runTurnInTerminal(input: {
 
   for (;;) {
     await new Promise((r) => setTimeout(r, WATCH_INTERVAL_MS));
-    if (!sessionAlive(terminalId)) {
+    if (!terminalAlive(terminalId)) {
       return { ok: false, error: "The step's terminal exited while the turn was running" };
     }
 
