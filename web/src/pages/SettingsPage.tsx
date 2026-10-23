@@ -599,46 +599,51 @@ function LedgerSettings() {
   );
 }
 
-function BackupSettings() {
-  const confirm = useConfirm();
-  const fileRef = useRef<HTMLInputElement | null>(null);
-  const [result, setResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+interface AddResult {
+  added: { kind: string; name: string }[];
+  skipped: { kind: string; name: string; reason: string }[];
+  projectsLeftOut: number;
+}
 
-  const doImport = useMutation({
-    mutationFn: (file: File) =>
-      uploadFile<{ ok: boolean; backupDir: string; note: string }>("/api/import", file),
-    onSuccess: (r) =>
-      setResult({
-        tone: "ok",
-        text: `Imported. Previous data moved to ${r.backupDir}. ${r.note}`,
-      }),
-    onError: (err: unknown) =>
-      setResult({ tone: "err", text: err instanceof Error ? err.message : String(err) }),
+function BackupSettings() {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [result, setResult] = useState<AddResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const doAdd = useMutation({
+    mutationFn: (file: File) => uploadFile<AddResult>("/api/library/add", file),
+    onSuccess: (r) => {
+      setResult(r);
+      // Knowledge, agents, workflows, memories… all may have grown.
+      void qc.invalidateQueries();
+    },
+    onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
   });
 
   return (
     <Card className="mt-4 space-y-3">
-      <h2 className="m3-title-sm">Backup & migrate</h2>
+      <h2 className="m3-title-sm">Share library between stations</h2>
       <p className="text-xs text-ink-muted">
-        Export bundles the database, knowledge, skills, agent bundles and attachments into one
-        archive. Import it on another machine running this app — absolute paths inside the database
-        are rewritten to the new data dir, current data is moved aside (never deleted), and skills
-        are relinked. Worktrees, logs and the auth token stay machine-local; project repo paths are
-        kept as-is, fix them in each project if the new machine differs.
+        Export packs what works on any station: skills and global knowledge, agents with their
+        bundles, workflows, global memories, global env sets and integrations. Projects stay here —
+        their source code lives on this machine, so they would arrive broken. Add merges another
+        station&apos;s export into this one: nothing here is replaced, anything already present is
+        skipped. Older full exports are accepted too; only their library is taken.
       </p>
       <div className="flex items-center gap-2">
         <a href={fileUrl("/api/export")}>
           <Button size="sm" variant="primary">
-            <Download size={16} /> Export data
+            <Download size={16} /> Export library
           </Button>
         </a>
         <Button
           size="sm"
           variant="ghost"
-          disabled={doImport.isPending}
+          disabled={doAdd.isPending}
           onClick={() => fileRef.current?.click()}
         >
-          <Upload size={16} /> {doImport.isPending ? "Importing…" : "Import archive"}
+          <Upload size={16} /> {doAdd.isPending ? "Adding…" : "Add from another station"}
         </Button>
         <input
           ref={fileRef}
@@ -649,23 +654,40 @@ function BackupSettings() {
             const file = e.target.files?.[0];
             e.target.value = "";
             if (!file) return;
-            void confirm({
-              title: "Import this archive?",
-              body: "Current data will be moved aside and replaced — you must restart the server afterwards.",
-              confirmLabel: "Import",
-              tone: "danger",
-            }).then((ok) => {
-              if (!ok) return;
-              setResult(null);
-              doImport.mutate(file);
-            });
+            setResult(null);
+            setError(null);
+            doAdd.mutate(file);
           }}
         />
       </div>
+      {error && <p className="text-xs text-err">{error}</p>}
       {result && (
-        <p className={result.tone === "ok" ? "text-xs text-ok" : "text-xs text-err"}>
-          {result.text}
-        </p>
+        <div className="space-y-1 text-xs">
+          <p className="text-ok">
+            Added {result.added.length} item(s)
+            {result.added.length > 0 &&
+              `: ${result.added.map((a) => `${a.name} (${a.kind})`).join(", ")}`}
+            .
+          </p>
+          {result.skipped.length > 0 && (
+            <details className="text-ink-muted">
+              <summary>Skipped {result.skipped.length} already present or unusable</summary>
+              <ul className="mt-1 list-disc pl-5">
+                {result.skipped.map((s) => (
+                  <li key={`${s.kind}:${s.name}`}>
+                    {s.name} ({s.kind}) — {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {result.projectsLeftOut > 0 && (
+            <p className="text-ink-muted">
+              {result.projectsLeftOut} project(s) in this archive were left out — create them here
+              and point them at this machine&apos;s repos.
+            </p>
+          )}
+        </div>
       )}
     </Card>
   );

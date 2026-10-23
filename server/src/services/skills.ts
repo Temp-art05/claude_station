@@ -59,18 +59,27 @@ function writeSkillTree(
     writeFileSync(target, file.data);
   }
 
-  const linkPath = join(CLAUDE_SKILLS_LINK_DIR, safe);
+  return { dir, linked: linkSkillDir(safe), finalName: safe };
+}
+
+/**
+ * Link `SKILLS_DIR/<name>` into the user-level skills dir. Returns the link, or
+ * null when something the user owns already sits at that name.
+ */
+export function linkSkillDir(name: string): string | null {
+  const dir = join(SKILLS_DIR, name);
+  const linkPath = join(CLAUDE_SKILLS_LINK_DIR, name);
   try {
     mkdirSync(CLAUDE_SKILLS_LINK_DIR, { recursive: true });
     if (existsSync(linkPath) || isBrokenLink(linkPath)) {
       // Replace our own link; refuse to clobber a real directory the user owns.
       if (isOurLink(linkPath, dir) || isBrokenLink(linkPath)) rmSync(linkPath, { recursive: true });
-      else return { dir, linked: null, finalName: safe };
+      else return null;
     }
     symlinkSync(dir, linkPath, "dir");
-    return { dir, linked: linkPath, finalName: safe };
+    return linkPath;
   } catch {
-    return { dir, linked: null, finalName: safe };
+    return null;
   }
 }
 
@@ -84,7 +93,10 @@ function renameInFrontmatter(
     try {
       const parsed = matter(file.data.toString("utf8"));
       parsed.data.name = finalName;
-      return { relPath: file.relPath, data: Buffer.from(matter.stringify(parsed.content, parsed.data)) };
+      return {
+        relPath: file.relPath,
+        data: Buffer.from(matter.stringify(parsed.content, parsed.data)),
+      };
     } catch {
       return file;
     }
