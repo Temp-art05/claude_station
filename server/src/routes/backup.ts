@@ -1,9 +1,9 @@
 import { createReadStream, statSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { badRequest } from "../lib/path-safety";
-import { exportArchive, exportFilename, importArchive } from "../services/backup";
+import { addArchive, exportArchive, exportFilename } from "../services/backup";
 
-/** Whole-app export/import — migrate the station between machines. */
+/** Library export/add — carry skills, agents, workflows… to another station. */
 export function backupRoutes(app: FastifyInstance): void {
   app.get("/api/export", async (_req, reply) => {
     const { archivePath, cleanup } = await exportArchive();
@@ -16,16 +16,15 @@ export function backupRoutes(app: FastifyInstance): void {
     return reply.send(stream);
   });
 
-  app.post("/api/import", async (req) => {
+  app.post("/api/library/add", async (req) => {
     const part = await (
       req as unknown as {
-        file: (o?: { limits?: { fileSize?: number } }) => Promise<
-          { filename: string; toBuffer(): Promise<Buffer> } | undefined
-        >;
+        file: (o?: {
+          limits?: { fileSize?: number };
+        }) => Promise<{ filename: string; toBuffer(): Promise<Buffer> } | undefined>;
       }
     ).file({ limits: { fileSize: 4 * 1024 * 1024 * 1024 } });
     if (!part) throw badRequest("No file in request");
-    const result = importArchive(await part.toBuffer());
-    return { ok: true, ...result };
+    return addArchive(await part.toBuffer());
   });
 }

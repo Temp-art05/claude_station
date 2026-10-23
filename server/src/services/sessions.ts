@@ -5,47 +5,7 @@ import { setting } from "../lib/config";
 import { newId, nowIso } from "../lib/id";
 import { badRequest } from "../lib/path-safety";
 import { agentDefinition } from "./agents";
-import {
-  createWorktree,
-  isGitRepo,
-  listWorktrees,
-  pruneOrphanWorktrees,
-  removeWorktree,
-  worktreeHoldsWork,
-} from "./git";
-
-/**
- * Give up every worktree the sessions in the current database own. Called just
- * before an import replaces that database: afterwards no row remembers these
- * paths, so git would keep their branches checked out with nothing left to
- * release them. Worktrees holding work are left in place and reported.
- */
-export function releaseAllWorktrees(): { removed: string[]; kept: string[] } {
-  const removed: string[] = [];
-  const kept: string[] = [];
-  const owned = db
-    .select({ cwd: schema.chatSessions.cwd, worktreePath: schema.chatSessions.worktreePath })
-    .from(schema.chatSessions)
-    .all()
-    .filter((s): s is { cwd: string; worktreePath: string } => !!s.worktreePath);
-
-  for (const { cwd, worktreePath } of owned) {
-    try {
-      if (!isGitRepo(cwd)) continue;
-      const tree = listWorktrees(cwd).find((t) => t.path === worktreePath);
-      if (!tree) continue; // already gone from git's point of view
-      if (worktreeHoldsWork(cwd, tree)) {
-        kept.push(worktreePath);
-        continue;
-      }
-      removeWorktree(cwd, worktreePath);
-      removed.push(worktreePath);
-    } catch {
-      /* repo unreadable — leave it for the boot reconcile to retry */
-    }
-  }
-  return { removed, kept };
-}
+import { createWorktree, isGitRepo, pruneOrphanWorktrees } from "./git";
 
 /**
  * Clear out worktrees left behind by sessions that no longer exist. Runs at boot
