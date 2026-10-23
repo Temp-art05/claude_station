@@ -405,6 +405,21 @@ export function sessionAlive(id: string): boolean {
   return tmux.hasSession(id);
 }
 
+/**
+ * Whether the work in this terminal is still running, however it is held.
+ *
+ * `sessionAlive` only knows tmux, so with `terminal.tmux` off it calls every
+ * terminal dead — a workflow step then fails as "exited before it was ready"
+ * eleven milliseconds after a perfectly healthy CLI started. A PTY this process
+ * spawned without tmux is alive exactly as long as it has not exited (`onExit`
+ * drops it from `sessions`); anything else is tmux's to answer.
+ */
+export function terminalAlive(id: string): boolean {
+  const m = sessions.get(id);
+  if (m && !m.tmuxBacked) return !m.exited;
+  return tmux.hasSession(id);
+}
+
 /** One tmux call for a whole list of rows — `sessionAlive` per row would fork per row. */
 export function sessionAliveIds(): Set<string> {
   return new Set(tmux.liveTerminalIds());
