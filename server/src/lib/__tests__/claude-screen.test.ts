@@ -96,6 +96,50 @@ const BUSY_PANE = `
 · Working… (12s · esc to interrupt)
 `;
 
+/**
+ * Captured from a review step the engine called finished at 19:52:40 while it was
+ * still mid-turn. The CLI no longer prints "esc to interrupt" on the spinner line
+ * — only a made-up verb, the elapsed time and the token count — and the footer
+ * hint is always there, so "not busy + composer ready" read as a turn that ended.
+ */
+const BUSY_NO_HINT_PANE = `
+⏺ Running TOKEN=[REDACTED] CLAUDE_STATION_TOKEN /Users/temp/DAT… · 12s
+  ⎿  $ curl -s -X POST localhost:3789/api/workflow-runs/x/steps/fix-review/retry
+
+✢ Befuddling… (1m 14s · ↓ 6.6k tokens)
+  ⎿  Tip: For a fast, cheap code review, try /code-review low.
+
+────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell
+`;
+
+/** The same CLI once the turn is over: past tense, no ellipsis. */
+const ENDED_PANE = `
+⏺ Artifact và note đã lưu.
+
+✻ Cooked for 2m 41s
+
+────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+
+describe("the spinner without its interrupt hint", () => {
+  it("is still a running turn", () => {
+    expect(isBusy(BUSY_NO_HINT_PANE)).toBe(true);
+    expect(isBusy(`✻ Caramelizing… (1m 21s · ↓ 7.2k tokens · thought for 16s)`)).toBe(true);
+    expect(isBusy(`· Pondering… (8s)`)).toBe(true);
+  });
+
+  it("does not outlive the turn", () => {
+    expect(isBusy(ENDED_PANE)).toBe(false);
+    expect(isComposerReady(ENDED_PANE)).toBe(true);
+  });
+});
+
 describe("telling a turn that ended from one that is waiting", () => {
   it("does not call an approval dialog idle", () => {
     expect(needsApproval(APPROVAL_PANE)).toBe(true);

@@ -17,3 +17,6 @@ data-backup-*/
 
 # Accidental tsc emit (shared is consumed as .ts source)
 shared/src/*.js
+
+# Working plans (not committed)
+docs/plans/
