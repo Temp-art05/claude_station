@@ -35,8 +35,15 @@ const TRUST_DIALOG =
  * from the outside: the transcript's totals are refreshed on every append, so
  * "the ledger closed the turn" means "we know more about it now", not "it is
  * over".
+ *
+ * The CLI has since dropped "esc to interrupt" from that line: it now reads
+ * `✢ Befuddling… (1m 14s · ↓ 6.6k tokens)` — a made-up verb, an ellipsis, then
+ * the elapsed time. Missing it marked a review step done mid-turn. The ellipsis
+ * plus "(<time>" is the part that holds; a finished turn reads `✻ Cooked for 2m
+ * 41s`, without either.
  */
-const BUSY = /esc to interrupt|\(interrupt\)|Thinking…|Running…/i;
+const BUSY =
+  /esc to interrupt|\(interrupt\)|Thinking…|Running…|…\s*\((?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/i;
 
 /**
  * The main agent has handed work to background agents and is sitting at an idle
