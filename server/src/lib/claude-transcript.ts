@@ -54,6 +54,63 @@ export function removeTranscript(sessionId: string | null): boolean {
   }
 }
 
+/** Current size of a session's transcript, 0 when it does not exist yet. */
+export function transcriptSize(sessionId: string | null): number {
+  const file = transcriptPath(sessionId);
+  if (!file) return 0;
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Whether these JSONL lines hold a reply from the model. A trailing half-written
+ * line, or anything that is not JSON, is ignored rather than guessed at.
+ */
+export function hasAssistantRecord(text: string): boolean {
+  for (const line of text.split("\n")) {
+    if (!line.includes('"assistant"')) continue;
+    try {
+      const rec = JSON.parse(line) as { type?: unknown };
+      if (rec.type === "assistant") return true;
+    } catch {
+      /* partial line */
+    }
+  }
+  return false;
+}
+
+/**
+ * Has the model answered since the transcript was `fromOffset` bytes long?
+ *
+ * The screen is the only honest "the turn is over" signal, but it is a poor
+ * "the turn happened" one: a turn that takes under a second ("nothing to fix")
+ * starts and ends between two looks, the spinner is never seen, and the step was
+ * failed as a prompt that never landed. The transcript keeps the reply.
+ */
+export function assistantRepliedSince(sessionId: string | null, fromOffset: number): boolean {
+  const file = transcriptPath(sessionId);
+  if (!file) return false;
+  let fd: number | null = null;
+  try {
+    const size = statSync(file).size;
+    if (size <= fromOffset) return false;
+    // The reply lands at the end; the tail is plenty and keeps this cheap on a
+    // transcript that has grown to megabytes.
+    const start = Math.max(fromOffset, size - 512 * 1024);
+    const buf = Buffer.alloc(size - start);
+    fd = openSync(file, "r");
+    readSync(fd, buf, 0, buf.length, start);
+    return hasAssistantRecord(buf.toString("utf8"));
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
 /** One `claude` conversation on disk, as the History panel lists it. */
 export interface CliTranscript {
   sessionId: string;
@@ -159,7 +216,11 @@ function parseTranscript(file: string, sessionId: string): CliTranscript | null 
     cwd,
     // Both change mid-conversation; the last value is the current one.
     gitBranch: pick(tail, "gitBranch", true) ?? pick(head, "gitBranch", true),
-    title: pick(tail, "aiTitle", true) ?? pick(head, "aiTitle", true) ?? firstUserText(head) ?? "(untitled)",
+    title:
+      pick(tail, "aiTitle", true) ??
+      pick(head, "aiTitle", true) ??
+      firstUserText(head) ??
+      "(untitled)",
     sizeBytes: stat.size,
     modifiedAt: new Date(stat.mtimeMs).toISOString(),
   };
