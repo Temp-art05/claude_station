@@ -11,6 +11,7 @@ import {
 } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { newId, nowIso } from "../lib/id";
+import { remoteToWebUrl } from "../lib/git-remote";
 import { parsePatch } from "../lib/patch";
 import { prettyPath, resolveDirectory } from "../lib/path-safety";
 import { deleteProject } from "../services/projects";
@@ -60,15 +61,6 @@ function insertPath(
 }
 
 const execFileAsync = promisify(execFile);
-
-/** "git@github.com:o/r.git" / "https://github.com/o/r.git" → "https://github.com/o/r". */
-function remoteToWebUrl(remote: string): string | null {
-  const ssh = /^git@([^:]+):(.+?)(?:\.git)?$/.exec(remote);
-  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
-  const http = /^https?:\/\/.+$/.exec(remote);
-  if (http) return remote.replace(/\.git$/, "");
-  return null;
-}
 
 /** Manual order first; equal ranks (never dragged) keep the newest on top. */
 const boardOrder = [asc(schema.projects.sortOrder), desc(schema.projects.updatedAt)] as const;
@@ -205,7 +197,7 @@ export function projectRoutes(app: FastifyInstance): void {
             ["-C", p.path, "remote", "get-url", "origin"],
             { timeout: 5_000 },
           );
-          return { pathId: p.id, label: p.label, url: remoteToWebUrl(stdout.trim()) };
+          return { pathId: p.id, label: p.label, url: await remoteToWebUrl(stdout.trim()) };
         } catch {
           return { pathId: p.id, label: p.label, url: null };
         }
