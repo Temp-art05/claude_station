@@ -12,6 +12,7 @@ import {
   isTrustDialog,
   waitingForPerson,
 } from "../lib/claude-screen";
+import { assistantRepliedSince, transcriptSize } from "../lib/claude-transcript";
 import { env } from "../lib/config";
 import { DATA_DIR } from "../lib/data-dir";
 import { REPO_ROOT } from "../lib/repo-root";
@@ -270,6 +271,9 @@ export async function runTurnInTerminal(input: {
   const ready = await waitForComposer(terminalId);
   if (!ready.ok) return ready;
 
+  // Taken before typing, so only a reply to *this* prompt counts as the turn
+  // having run (see the loop below).
+  const transcriptMark = transcriptSize(input.claudeSessionId);
   const paste = `\x1b[200~${prompt.replace(/\r\n?/g, "\n")}\x1b[201~\r`;
   if (!ptyWrite(terminalId, paste)) {
     return { ok: false, error: "Could not write the prompt into the step's terminal" };
@@ -309,6 +313,11 @@ export async function runTurnInTerminal(input: {
       sawWork = true;
       continue;
     }
+
+    // A turn short enough to start and finish between two looks never shows the
+    // spinner. The model's reply in the transcript says it ran all the same —
+    // which is how "nothing to fix" steps were failed as prompts that never landed.
+    if (!sawWork && assistantRepliedSince(input.claudeSessionId, transcriptMark)) sawWork = true;
 
     // Back at an idle composer after having worked: the turn is over.
     if (sawWork && isComposerReady(screen)) return { ok: true };

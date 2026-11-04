@@ -1,6 +1,7 @@
 import { spawn, type IPty } from "node-pty";
 import { childBaseEnv } from "../lib/child-env";
 import { setting } from "../lib/config";
+import { ScreenMirror } from "../lib/screen-mirror";
 import * as tmux from "../lib/tmux";
 
 export interface PtyListener {
@@ -22,6 +23,17 @@ interface Managed {
   exitCode: number | null;
   /** The PTY is a `tmux attach` client, so killing it only detaches. */
   tmuxBacked: boolean;
+  /**
+   * What the screen actually shows, for PTYs tmux does not hold. The byte log
+   * cannot answer that (see `ScreenMirror`), and `recentOutput` must.
+   */
+  screen: ScreenMirror | null;
+}
+
+/** Every geometry change goes through here so the mirror never draws at a stale size. */
+function resizePty(m: Managed, cols: number, rows: number): void {
+  m.pty.resize(cols, rows);
+  m.screen?.resize(cols, rows);
 }
 
 const sessions = new Map<string, Managed>();
@@ -122,6 +134,7 @@ export function start(opts: StartOptions): { pid: number } {
     exited: false,
     exitCode: null,
     tmuxBacked: useTmux,
+    screen: useTmux ? null : new ScreenMirror(cols, rows),
   };
   sessions.set(opts.id, managed);
 
@@ -132,6 +145,7 @@ export function start(opts: StartOptions): { pid: number } {
       managed.scrollback.push(chunk);
       managed.scrollbackBytes += chunk.byteLength;
       trimScrollback(managed);
+      managed.screen?.write(data);
     }
     for (const l of managed.listeners) l.onData(chunk);
   });
@@ -144,6 +158,8 @@ export function start(opts: StartOptions): { pid: number } {
     settling.delete(opts.id);
     managed.exitCode = exitCode;
     for (const l of managed.listeners) l.onExit(exitCode);
+    managed.screen?.dispose();
+    managed.screen = null;
     sessions.delete(opts.id);
   });
 
@@ -212,14 +228,14 @@ export function resizeAndPaint(id: string, cols: number, rows: number): void {
 function nudgeSize(m: Managed, cols: number, rows: number): void {
   if (rows < 3) return;
   try {
-    m.pty.resize(cols, rows - 1);
+    resizePty(m, cols, rows - 1);
   } catch {
     return; // died between the check and here
   }
   const t = setTimeout(() => {
     if (m.exited) return;
     try {
-      m.pty.resize(cols, rows);
+      resizePty(m, cols, rows);
     } catch {
       /* died in between — nothing to redraw for */
     }
@@ -358,6 +374,9 @@ export function recentOutput(id: string, bytes = 4000): string {
   // sitting at its prompt.
   if (!m) return tmux.hasSession(id) ? tmux.capturePane(id, 80).slice(-bytes) : "";
   if (m.tmuxBacked) return tmux.capturePane(id, 80).slice(-bytes);
+  // The emulated screen, not the byte log: the log still holds frames the
+  // program has drawn over, and that is how a finished turn read as busy.
+  if (m.screen) return m.screen.text(80).slice(-bytes);
   const joined = Buffer.concat(m.scrollback);
   return joined.subarray(Math.max(0, joined.length - bytes)).toString("utf8");
 }
@@ -373,7 +392,7 @@ export function resize(id: string, cols: number, rows: number): void {
   const m = sessions.get(id);
   if (!m || m.exited) return;
   try {
-    m.pty.resize(cols, rows);
+    resizePty(m, cols, rows);
   } catch {
     /* pty may have died between checks */
   }

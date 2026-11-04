@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { listTranscripts, transcriptsUnder } from "../claude-transcript";
+import { hasAssistantRecord, listTranscripts, transcriptsUnder } from "../claude-transcript";
 
 const uuid = (n: number) => `0000000${n}-1111-2222-3333-444444444444`;
 
@@ -34,7 +34,11 @@ beforeAll(() => {
 
   // No title yet — the picker falls back to what the user said first.
   write("-repo-b", `${uuid(3)}.jsonl`, [
-    { type: "user", cwd: "/repo/b", message: { content: [{ type: "text", text: "fix the  build" }] } },
+    {
+      type: "user",
+      cwd: "/repo/b",
+      message: { content: [{ type: "text", text: "fix the  build" }] },
+    },
   ]);
 
   // Subagent transcripts are part of a conversation, not one of their own.
@@ -98,5 +102,23 @@ describe("transcriptsUnder", () => {
 
   it("returns nothing for a project with no paths", () => {
     expect(transcriptsUnder([], root)).toHaveLength(0);
+  });
+});
+
+describe("hasAssistantRecord", () => {
+  const user = JSON.stringify({ type: "user", message: { content: "say assistant" } });
+  const reply = JSON.stringify({ type: "assistant", message: { content: [] } });
+
+  it("is false for a prompt with no reply yet", () => {
+    expect(hasAssistantRecord(`${user}\n`)).toBe(false);
+  });
+
+  it("finds the model's reply", () => {
+    expect(hasAssistantRecord(`${user}\n${reply}\n`)).toBe(true);
+  });
+
+  it("ignores a half-written line instead of throwing", () => {
+    expect(hasAssistantRecord(`${user}\n${reply.slice(0, 20)}`)).toBe(false);
+    expect(hasAssistantRecord(`garbage "assistant" {\n`)).toBe(false);
   });
 });
