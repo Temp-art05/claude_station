@@ -78,6 +78,29 @@ describe("projectForCwd", () => {
     // which is worse than answering none.
     expect(reach.projectForCwd("/tmp/somewhere-else")).toBeNull();
   });
+
+  it("falls back to a running terminal's own project when its cwd went stale", () => {
+    // The folder was renamed after the terminal opened: its cwd no longer sits
+    // under any project path, but the terminal row still says whose it is.
+    const stale = "/tmp/cs-reach/renamed-away";
+    const row = (id: string, status: string) => ({
+      id,
+      projectId: "p-inner",
+      title: id,
+      cwd: stale,
+      kind: "claude",
+      status,
+      createdAt: nowIso(),
+    });
+    db.insert(schema.terminals).values(row("t-exited", "exited")).run();
+    expect(reach.projectForCwd(stale)).toBeNull();
+
+    db.insert(schema.terminals).values(row("t-live", "running")).run();
+    const repo = reach.projectForCwd(`${stale}/src`);
+    expect(repo?.projectId).toBe("p-inner");
+    expect(repo?.path).toBe(INNER);
+    expect(repo).not.toHaveProperty("isDefault");
+  });
 });
 
 describe("resolve", () => {
