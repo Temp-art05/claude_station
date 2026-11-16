@@ -6,9 +6,20 @@
  * rule is the CLI's business and undocumented, so we never derive it — the uuid
  * is unique, so the file is found by name across the project directories.
  */
-import { existsSync, openSync, readSync, closeSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 
 export const PROJECTS_DIR = join(homedir(), ".claude", "projects");
 
@@ -36,6 +47,49 @@ export function transcriptPath(sessionId: string | null): string | null {
     if (existsSync(file)) return file;
   }
   return null;
+}
+
+/**
+ * Make `claude --resume <id>` started in `cwd` find the newest copy of a
+ * transcript. Returns where it now is, or null when there is none anywhere.
+ *
+ * The one place the slug rule is derived (every non-alphanumeric becomes `-`):
+ * `--resume` only looks in the slug of the directory it runs in, so a session
+ * whose folder was renamed cannot be resumed until its file sits under the new
+ * slug. Which copy is newest goes by mtime, not by which directory it is in — a
+ * rename mid-session leaves an early snapshot in one slug and the rest in the
+ * other. A stale copy that gets overwritten is moved to `backupDir` first.
+ */
+export function relocateTranscript(
+  sessionId: string | null,
+  cwd: string,
+  backupDir: string,
+  root: string = PROJECTS_DIR,
+): string | null {
+  if (!sessionId || !UUID.test(sessionId)) return null;
+  const name = `${sessionId}.jsonl`;
+  let copies: { file: string; mtime: number }[];
+  try {
+    copies = readdirSync(root)
+      .map((dir) => join(root, dir, name))
+      .filter((file) => existsSync(file))
+      .map((file) => ({ file, mtime: statSync(file).mtimeMs }));
+  } catch {
+    return null;
+  }
+  if (copies.length === 0) return null;
+
+  const newest = copies.reduce((a, b) => (b.mtime > a.mtime ? b : a));
+  const target = join(root, cwd.replace(/[^a-zA-Z0-9]/g, "-"), name);
+  if (newest.file === target) return target;
+
+  if (existsSync(target)) {
+    mkdirSync(backupDir, { recursive: true });
+    renameSync(target, join(backupDir, `${sessionId}-${Date.now()}.jsonl`));
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(newest.file, target);
+  return target;
 }
 
 export function hasTranscript(sessionId: string | null): boolean {

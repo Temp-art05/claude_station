@@ -1,11 +1,12 @@
 import { asc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TerminalInput, TerminalKind } from "@claude-station/shared";
 import { db, schema } from "../db";
 import { buildClaudeCommand } from "../lib/claude-cli";
-import { TERMINAL_CONTEXT_DIR, projectKnowledgeDir } from "../lib/data-dir";
+import { DATA_DIR, TERMINAL_CONTEXT_DIR, projectKnowledgeDir } from "../lib/data-dir";
+import { relocateTranscript } from "../lib/claude-transcript";
 import { newId, nowIso } from "../lib/id";
 import { assertPathAllowed, badRequest } from "../lib/path-safety";
 import { TOKEN } from "../lib/auth";
@@ -259,6 +260,25 @@ export function createTerminal(
  * by the workflow runner, which otherwise hands a step a terminal it cannot type
  * into — the step then waits out its timeout looking at an empty string.
  */
+/**
+ * Where a terminal comes back to life.
+ *
+ * Its stored cwd, unless that directory is gone — the project folder was renamed
+ * or moved after the terminal opened. Then the project's default path, written
+ * back to the row so the tab, the picker and Reach all agree from here on; and
+ * for a claude tab, the transcript copied under the new directory, since
+ * `--resume` only looks there and would otherwise start a blank conversation.
+ */
+function reviveCwd(existing: typeof schema.terminals.$inferSelect): string {
+  if (existsSync(existing.cwd)) return assertPathAllowed(existing.cwd, existing.projectId);
+  const cwd = resolveCwd(existing.projectId, {});
+  db.update(schema.terminals).set({ cwd }).where(eq(schema.terminals.id, existing.id)).run();
+  if (existing.kind === "claude") {
+    relocateTranscript(existing.claudeSessionId, cwd, join(DATA_DIR, "backups", "transcripts"));
+  }
+  return cwd;
+}
+
 export function reviveTerminal(id: string): boolean {
   if (pty.isRunning(id)) return true;
   const existing = db.select().from(schema.terminals).where(eq(schema.terminals.id, id)).get();
@@ -278,7 +298,7 @@ export function reviveTerminal(id: string): boolean {
     env.CLAUDE_STATION_TOKEN = TOKEN;
   }
 
-  const cwd = assertPathAllowed(existing.cwd, existing.projectId);
+  const cwd = reviveCwd(existing);
   try {
     const { pid } = pty.start({
       id,

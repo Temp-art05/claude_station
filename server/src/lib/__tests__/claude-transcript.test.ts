@@ -1,8 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { hasAssistantRecord, listTranscripts, transcriptsUnder } from "../claude-transcript";
+import {
+  hasAssistantRecord,
+  listTranscripts,
+  relocateTranscript,
+  transcriptsUnder,
+} from "../claude-transcript";
 
 const uuid = (n: number) => `0000000${n}-1111-2222-3333-444444444444`;
 
@@ -120,5 +125,33 @@ describe("hasAssistantRecord", () => {
   it("ignores a half-written line instead of throwing", () => {
     expect(hasAssistantRecord(`${user}\n${reply.slice(0, 20)}`)).toBe(false);
     expect(hasAssistantRecord(`garbage "assistant" {\n`)).toBe(false);
+  });
+});
+
+describe("relocateTranscript", () => {
+  it("puts the newest copy under the new directory's slug, backing up the stale one", () => {
+    // A folder renamed mid-session: an early snapshot sits under the new slug,
+    // the full conversation under the old one.
+    const base = mkdtempSync(join(tmpdir(), "cs-relocate-"));
+    const projects = join(base, "projects");
+    const backups = join(base, "backups");
+    const id = uuid(7);
+    mkdirSync(join(projects, "-w-App-090"), { recursive: true });
+    mkdirSync(join(projects, "-w-App-009"), { recursive: true });
+    writeFileSync(join(projects, "-w-App-009", `${id}.jsonl`), "early\n");
+    utimesSync(join(projects, "-w-App-009", `${id}.jsonl`), 1, 1);
+    writeFileSync(join(projects, "-w-App-090", `${id}.jsonl`), "early\nlater\n");
+
+    const out = relocateTranscript(id, "/w/App-009", backups, projects);
+    expect(out).toBe(join(projects, "-w-App-009", `${id}.jsonl`));
+    expect(readFileSync(out!, "utf8")).toBe("early\nlater\n");
+    expect(readdirSync(backups)).toHaveLength(1);
+
+    // Already newest where it belongs: nothing moves.
+    expect(relocateTranscript(id, "/w/App-009", backups, projects)).toBe(out);
+    expect(readdirSync(backups)).toHaveLength(1);
+
+    expect(relocateTranscript(uuid(8), "/w/App-009", backups, projects)).toBeNull();
+    rmSync(base, { recursive: true, force: true });
   });
 });
