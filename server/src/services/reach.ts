@@ -107,6 +107,12 @@ export interface ProjectRepo {
  * Returns null rather than guessing. A terminal opened somewhere unconfigured
  * should be told so — picking the nearest project would answer questions about
  * the wrong repo, which is worse than answering none.
+ *
+ * One exception that is not a guess: a running terminal the station itself
+ * opened in this directory. Its row says which project it belongs to, so when
+ * the folder was renamed or a project path edited after the terminal started
+ * (its `cwd` and `$PWD` keep the old string), the terminal's own project is the
+ * answer — otherwise every Reach call from it comes back empty.
  */
 export function projectForCwd(cwd: string): ProjectRepo | null {
   const rows = db
@@ -116,17 +122,37 @@ export function projectForCwd(cwd: string): ProjectRepo | null {
       path: schema.projectPaths.path,
       label: schema.projectPaths.label,
       projectName: schema.projects.name,
+      isDefault: schema.projectPaths.isDefault,
+      sortOrder: schema.projectPaths.sortOrder,
     })
     .from(schema.projectPaths)
     .innerJoin(schema.projects, eq(schema.projects.id, schema.projectPaths.projectId))
     .all();
 
-  let best: ProjectRepo | null = null;
+  const strip = ({ isDefault: _d, sortOrder: _s, ...repo }: (typeof rows)[number]): ProjectRepo =>
+    repo;
+
+  let best: (typeof rows)[number] | null = null;
   for (const row of rows) {
     if (!pathUnder(cwd, row.path)) continue;
     if (!best || row.path.length > best.path.length) best = row;
   }
-  return best;
+  if (best) return strip(best);
+
+  // Innermost terminal cwd wins, the same rule as above.
+  const terminal = db
+    .select({ projectId: schema.terminals.projectId, cwd: schema.terminals.cwd })
+    .from(schema.terminals)
+    .where(eq(schema.terminals.status, "running"))
+    .all()
+    .filter((t) => pathUnder(cwd, t.cwd))
+    .sort((a, b) => b.cwd.length - a.cwd.length)[0];
+  if (!terminal) return null;
+
+  const own = rows
+    .filter((r) => r.projectId === terminal.projectId)
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.sortOrder - b.sortOrder)[0];
+  return own ? strip(own) : null;
 }
 
 /** Cut to the cap on a line boundary, and say so — a silent cut reads as the whole answer. */

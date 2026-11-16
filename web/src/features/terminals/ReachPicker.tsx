@@ -114,7 +114,9 @@ export function ReachPicker({
   const { data: local } = useQuery({
     queryKey: ["reach-assets", cwd],
     queryFn: () =>
-      api.get<{ assets: ReachAsset[] }>(`/api/reach/assets?cwd=${encodeURIComponent(cwd ?? "")}`),
+      api.get<{ assets: ReachAsset[]; project: string | null }>(
+        `/api/reach/assets?cwd=${encodeURIComponent(cwd ?? "")}`,
+      ),
     enabled: !!cwd,
     staleTime: 30_000,
   });
@@ -270,6 +272,14 @@ export function ReachPicker({
             />
           ))}
         </div>
+
+        {local && local.project === null && (
+          <p className="m3-label-sm shrink-0 border-b border-hairline px-4 py-2 text-warn">
+            Thư mục <code className="font-mono">{cwd}</code> không thuộc project nào (có thể đã bị
+            đổi tên hoặc xoá), nên chỉ có lệnh. Mở một Claude mới trong project để thấy đủ file,
+            agent, workflow…
+          </p>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto py-1">
           {matches.length === 0 ? (
