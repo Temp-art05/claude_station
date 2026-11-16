@@ -29,7 +29,7 @@
  * rules are the ones the ledger already lives by: redact before returning, cap
  * the size, and never return the value of an env var — only its name.
  */
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { db, schema } from "../db";
@@ -108,7 +108,7 @@ export interface ProjectRepo {
  * should be told so — picking the nearest project would answer questions about
  * the wrong repo, which is worse than answering none.
  *
- * One exception that is not a guess: a running terminal the station itself
+ * One exception that is not a guess: a live terminal the station itself
  * opened in this directory. Its row says which project it belongs to, so when
  * the folder was renamed or a project path edited after the terminal started
  * (its `cwd` and `$PWD` keep the old string), the terminal's own project is the
@@ -139,11 +139,13 @@ export function projectForCwd(cwd: string): ProjectRepo | null {
   }
   if (best) return strip(best);
 
-  // Innermost terminal cwd wins, the same rule as above.
+  // Innermost terminal cwd wins, the same rule as above. `orphaned` counts as
+  // live: a server restart marks every terminal so, while its tmux session — and
+  // the Claude inside it — keeps running and is one Reattach away.
   const terminal = db
     .select({ projectId: schema.terminals.projectId, cwd: schema.terminals.cwd })
     .from(schema.terminals)
-    .where(eq(schema.terminals.status, "running"))
+    .where(inArray(schema.terminals.status, ["running", "orphaned"]))
     .all()
     .filter((t) => pathUnder(cwd, t.cwd))
     .sort((a, b) => b.cwd.length - a.cwd.length)[0];

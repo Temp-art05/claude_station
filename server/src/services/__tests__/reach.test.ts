@@ -95,7 +95,8 @@ describe("projectForCwd", () => {
     db.insert(schema.terminals).values(row("t-exited", "exited")).run();
     expect(reach.projectForCwd(stale)).toBeNull();
 
-    db.insert(schema.terminals).values(row("t-live", "running")).run();
+    // A server restart marks live terminals orphaned; their tmux session lives on.
+    db.insert(schema.terminals).values(row("t-live", "orphaned")).run();
     const repo = reach.projectForCwd(`${stale}/src`);
     expect(repo?.projectId).toBe("p-inner");
     expect(repo?.path).toBe(INNER);
