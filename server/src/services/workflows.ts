@@ -37,6 +37,7 @@ function toStep(row: StepRow): WorkflowStep {
     isolate: row.isolate,
     readOnly: row.readOnly,
     model: row.model,
+    effort: (row.effort as WorkflowStep["effort"]) ?? null,
   };
 }
 
@@ -176,6 +177,7 @@ function writeSteps(workflowId: string, input: WorkflowInput): void {
         isolate: step.isolate,
         readOnly: step.readOnly,
         model: step.model,
+        effort: step.effort,
         createdAt: now,
       })
       .run();
@@ -403,6 +405,7 @@ export function exportWorkflowYaml(workflow: Workflow): string {
         ...(s.isolate ? { isolate: true } : {}),
         ...(s.readOnly ? { readOnly: true } : {}),
         ...(s.model ? { model: s.model } : {}),
+        ...(s.effort ? { effort: s.effort } : {}),
       })),
     },
     { lineWidth: 100, noRefs: true },

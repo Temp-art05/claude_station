@@ -668,6 +668,10 @@ export const knowledgeFolderSchema = z
 export const workflowStepTypeSchema = z.enum(["agent", "command", "confirm", "manual", "gate"]);
 export type WorkflowStepType = z.infer<typeof workflowStepTypeSchema>;
 
+/** `claude --effort` levels a workflow step may pin. */
+export const stepEffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+export type StepEffort = z.infer<typeof stepEffortSchema>;
+
 export const workflowStepSchema = z.object({
   id: z.string(),
   workflowId: z.string(),
@@ -709,6 +713,12 @@ export const workflowStepSchema = z.object({
    * screenshot-against-the-design loop runs as many times as the design needs.
    */
   model: z.string().nullable().default(null),
+  /**
+   * Reasoning effort for this step's CLI (`--effort`). NULL keeps the CLI default.
+   * Most of a step's wall time is hidden reasoning, so a review or a PR write-up
+   * at "medium" finishes markedly sooner than at the default.
+   */
+  effort: stepEffortSchema.nullable().default(null),
 });
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 
@@ -789,6 +799,8 @@ export const workflowStepInputSchema = z.object({
   readOnly: z.boolean().default(false),
   /** Model alias for this step's CLI (`--model`). NULL = the machine's default. */
   model: z.string().nullable().default(null),
+  /** Reasoning effort for this step's CLI (`--effort`). NULL = the CLI's default. */
+  effort: stepEffortSchema.nullable().default(null),
 });
 export type WorkflowStepInput = z.infer<typeof workflowStepInputSchema>;
 

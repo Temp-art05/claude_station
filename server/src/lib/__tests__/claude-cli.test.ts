@@ -137,6 +137,15 @@ describe("buildClaudeCommand for a workflow step", () => {
     // No --model means the machine's own default, which is what somebody who
     // opened a terminal by hand expects to be talking to.
     expect(cmd).not.toContain("--model");
+    expect(cmd).not.toContain("--effort");
+  });
+
+  it("pins the step's reasoning effort, and keeps it on the restart fallback", () => {
+    const cmd = buildClaudeCommand(true, { sessionId: "s1", model: "sonnet", effort: "medium" });
+    for (const branch of cmd.split(" || ")) {
+      expect(branch).toContain("--effort 'medium'");
+      expect(branch).toContain("--model 'sonnet'");
+    }
   });
 
   it("repeats them on the restart fallback, or a failed resume loses its tools", () => {

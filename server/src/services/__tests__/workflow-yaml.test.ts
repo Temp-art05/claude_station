@@ -77,6 +77,7 @@ describe("exportWorkflowYaml", () => {
             isolate: false,
             readOnly: false,
             model: null,
+            effort: null,
           },
         ],
       }),
