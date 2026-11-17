@@ -162,6 +162,8 @@ export const terminals = sqliteTable(
      * back to the default model, quietly and in the middle of a run.
      */
     model: text("model"),
+    /** `--effort` the tab was spawned with (workflow steps only), kept for the same revive reason. */
+    effort: text("effort"),
     mcpConfigFile: text("mcp_config_file"),
     permissionMode: text("permission_mode"),
     createdAt: text("created_at").notNull(),
@@ -408,6 +410,13 @@ export const workflowSteps = sqliteTable(
      * the code runs once.
      */
     model: text("model"),
+    /**
+     * Reasoning effort for this step's CLI (`--effort`: low|medium|high|xhigh|max).
+     * NULL keeps the CLI default. Per-step for the same reason as `model`: most of a
+     * step's wall time is hidden reasoning, and a review or a PR write-up needs far
+     * less of it than the step that writes the code.
+     */
+    effort: text("effort"),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("idx_workflow_steps_workflow").on(t.workflowId, t.sortOrder)],

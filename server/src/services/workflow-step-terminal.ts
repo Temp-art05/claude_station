@@ -170,6 +170,7 @@ export function terminalForStep(
     mcpConfigFile: writeMcpConfig(run),
     permissionMode: step.permissionMode ?? undefined,
     model: step.model ?? undefined,
+    effort: step.effort ?? undefined,
   });
   return { terminalId: terminal.id, claudeSessionId: terminal.claudeSessionId! };
 }

@@ -3,6 +3,7 @@ import { Select } from "@/components/ui/select";
 import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "@/components/ui/icons";
 import {
   agentModelSchema,
+  stepEffortSchema,
   KNOWLEDGE_FOLDER_SUGGESTIONS,
   PERMISSION_MODE_CHOICES,
   workflowInputTypeSchema,
@@ -105,6 +106,7 @@ function blankStep(index: number): WorkflowStepInput {
     isolate: false,
     readOnly: false,
     model: null,
+    effort: null,
   };
 }
 
@@ -132,6 +134,7 @@ function toInput(workflow: Workflow): WorkflowInput {
       isolate: s.isolate,
       readOnly: s.readOnly,
       model: s.model,
+      effort: s.effort,
     })),
   };
 }
@@ -354,6 +357,7 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                     <Badge>{step.permissionMode}</Badge>
                   )}
                   {step.model && <Badge>{step.model}</Badge>}
+                  {step.effort && <Badge>effort {step.effort}</Badge>}
                   {step.condition && <Badge>conditional</Badge>}
                   <Button size="icon" variant="ghost" onClick={() => move(i, -1)} aria-label="Up">
                     <ChevronUp size={16} />
@@ -457,6 +461,24 @@ export function WorkflowEditor({ onClose, workflow, preset }: Props) {
                           <p className="mt-1 m3-label-sm text-ink-faint">
                             A step that repeats a narrow check — build, screenshot, compare — is
                             where a cheaper model pays for itself.
+                          </p>
+                        </div>
+                        <div>
+                          <Label>Effort</Label>
+                          <Select
+                            className="w-full"
+                            value={step.effort ?? ""}
+                            onChange={(v) =>
+                              patchStep(i, { effort: (v || null) as WorkflowStepInput["effort"] })
+                            }
+                            options={[
+                              { value: "", label: "default (CLI's)" },
+                              ...stepEffortSchema.options.map((e) => ({ value: e, label: e })),
+                            ]}
+                          />
+                          <p className="mt-1 m3-label-sm text-ink-faint">
+                            Most of a step's time is hidden reasoning: review or PR write-up at
+                            medium finishes sooner; keep the code-writing step high.
                           </p>
                         </div>
                       </div>

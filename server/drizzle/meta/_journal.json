@@ -176,6 +176,13 @@
       "when": 1790065031183,
       "tag": "0024_step-generation",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1794879996002,
+      "tag": "0025_step-effort",
+      "breakpoints": true
     }
   ]
 }

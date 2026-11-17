@@ -36,6 +36,8 @@ export interface ClaudeCliContext {
    * wrong one for a loop that runs the same comparison a dozen times.
    */
   model?: string;
+  /** Reasoning effort for this CLI (`--effort`). Left out, the CLI's own default applies. */
+  effort?: string;
 }
 
 /**
@@ -52,6 +54,7 @@ export function buildClaudeCommand(restart: boolean, ctx: ClaudeCliContext = {})
     ...(ctx.mcpConfigFile ? [`--mcp-config ${shq(ctx.mcpConfigFile)}`, "--strict-mcp-config"] : []),
     ...(ctx.permissionMode ? [`--permission-mode ${shq(ctx.permissionMode)}`] : []),
     ...(ctx.model ? [`--model ${shq(ctx.model)}`] : []),
+    ...(ctx.effort ? [`--effort ${shq(ctx.effort)}`] : []),
   ];
   const flags = parts.length > 0 ? ` ${parts.join(" ")}` : "";
 

@@ -64,8 +64,9 @@ export function claudeCommand(
     /** Set for a workflow step: the station's tools, and the step's own mode. */
     mcpConfigFile?: string;
     permissionMode?: string;
-    /** Set for a workflow step that pins its own model. */
+    /** Set for a workflow step that pins its own model / reasoning effort. */
     model?: string;
+    effort?: string;
   },
 ): string {
   if (!opts) return buildClaudeCommand(restart);
@@ -84,6 +85,7 @@ export function claudeCommand(
     mcpConfigFile: opts.mcpConfigFile,
     permissionMode: opts.permissionMode,
     model: opts.model,
+    effort: opts.effort,
     // The conversation id doubles as the bus cursor key. A terminal is written
     // once, at spawn, so what it gets is the state — the deltas that arrive while
     // it runs are what the Memory tab's "new since" count is for: there is no way
@@ -132,6 +134,7 @@ export function createTerminal(
     mcpConfigFile?: string;
     permissionMode?: string;
     model?: string;
+    effort?: string;
     /**
      * Start an agent CLI that is not Claude Code (`codex`, `opencode`, …).
      *
@@ -177,6 +180,7 @@ export function createTerminal(
             mcpConfigFile: input.mcpConfigFile,
             permissionMode: input.permissionMode,
             model: input.model,
+            effort: input.effort,
           })
         : undefined),
   });
@@ -204,6 +208,7 @@ export function createTerminal(
     // command (it has to be rebuilt as a *resume*), so without these three the
     // revived process quietly lost the station's tools and its pinned model.
     model: input.model ?? null,
+    effort: input.effort ?? null,
     mcpConfigFile: input.mcpConfigFile ?? null,
     permissionMode: input.permissionMode ?? null,
     status: "running" as const,
@@ -317,6 +322,7 @@ export function reviveTerminal(id: string): boolean {
               mcpConfigFile: existing.mcpConfigFile ?? undefined,
               permissionMode: existing.permissionMode ?? undefined,
               model: existing.model ?? undefined,
+              effort: existing.effort ?? undefined,
             })
           : undefined),
     });

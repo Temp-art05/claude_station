@@ -24,6 +24,7 @@ function step(key: string, extra: Partial<WorkflowStep> = {}): WorkflowStep {
     isolate: false,
     readOnly: false,
     model: null,
+    effort: null,
     ...extra,
   };
 }
